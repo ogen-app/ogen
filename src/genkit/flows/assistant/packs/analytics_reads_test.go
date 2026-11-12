@@ -132,7 +132,7 @@ func TestListPostAnalytics(t *testing.T) {
 	if repo.got.Platform != "LinkedIn" || repo.got.Limit != 25 || repo.got.SortBy != "saves" || repo.got.Order != "desc" || repo.got.Publisher != models.PublisherZernio {
 		t.Fatalf("list = %+v", repo.got)
 	}
-	if p, ok := out.Data.(*analytics.PostsPage); !ok || p.Pages != 1 || p.Total != 21 || out.Applied.Platforms[0] != "linkedin" {
+	if p, ok := out.Data.(*analytics.PostsPage); !ok || p.Pages != 1 || p.Total != 21 || p.SortBy != "saves" || p.Order != "desc" || out.Applied.Platforms[0] != "linkedin" {
 		t.Fatalf("out = %+v", out)
 	}
 	_, err = listPostAnalytics(ctx, d, ListPostAnalyticsInput{SortBy: "vibes"})

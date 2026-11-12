@@ -106,6 +106,9 @@ type FollowerHistory struct {
 	Accounts    []repository.FollowerAccountSummary         `json:"accounts"`
 	Series      map[string][]repository.FollowerSeriesPoint `json:"series"`
 	Granularity string                                      `json:"granularity"`
+	// BiggestDay is the window's day of largest follower gain, nil when
+	// none gained.
+	BiggestDay *FollowerDay `json:"biggest_day,omitempty"`
 }
 
 // FollowerHistoryOptions narrows the history: one account, a date range
@@ -141,7 +144,11 @@ func (s *Service) FollowerHistory(ctx context.Context, opt FollowerHistoryOption
 	if summary == nil {
 		summary = []repository.FollowerAccountSummary{}
 	}
-	return &FollowerHistory{Accounts: summary, Series: series, Granularity: opt.Granularity}, "", nil
+	day := biggestDay(points)
+	if err := s.postOfDay(ctx, day); err != nil {
+		return nil, "", err
+	}
+	return &FollowerHistory{Accounts: summary, Series: series, Granularity: opt.Granularity, BiggestDay: day}, "", nil
 }
 
 // DownsampleSeries reduces daily points to one point per ISO week or
@@ -183,6 +190,9 @@ type PostsPage struct {
 	Total    int                                `json:"total"`
 	Pages    int                                `json:"pages"`
 	Overview repository.PostAnalyticsOverview   `json:"overview"`
+	// SortBy and Order are what the page is sorted on.
+	SortBy string `json:"sort_by"`
+	Order  string `json:"order"`
 }
 
 // ListPosts pages the analytics of the posts published through the
@@ -196,7 +206,8 @@ func (s *Service) ListPosts(ctx context.Context, opt repository.PostAnalyticsLis
 	if err != nil {
 		return nil, "", err
 	}
-	page := &PostsPage{Items: items, Page: opt.Page, Limit: opt.Limit, Total: overview.PostCount, Overview: overview}
+	page := &PostsPage{Items: items, Page: opt.Page, Limit: opt.Limit, Total: overview.PostCount, Overview: overview,
+		SortBy: opt.SortBy, Order: opt.Order}
 	if page.Total > 0 && opt.Limit > 0 {
 		page.Pages = (page.Total + opt.Limit - 1) / opt.Limit
 	}
