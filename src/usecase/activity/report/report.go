@@ -125,7 +125,10 @@ type AuthorCount struct {
 
 // FailedPost links a failed post to its live feed entry.
 type FailedPost struct {
-	PostID        string `json:"post_id"`
+	PostID string `json:"post_id"`
+	// Title is the post's, when the caller looked it up; the report leaves
+	// it empty.
+	Title         string `json:"title,omitempty"`
 	PlatformID    string `json:"platform_id"`
 	Status        string `json:"status"`
 	FailureReason string `json:"failure_reason"`

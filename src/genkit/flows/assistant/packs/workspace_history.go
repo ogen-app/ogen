@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -29,28 +30,62 @@ func historySpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			return postHistory(ctx, d, in)
 		})), ai.WithStrictSchema(false))
 	return []assistantkit.Spec{spec(workspacePackName, tool, assistantkit.TierRead,
-		`Call this when the user asks who changed, edited, scheduled or moved a post, or what happened to it — "who changed this post?", "when was this scheduled?", "why is it back in draft?". postId defaults to the post on screen, the one selected, or the thread's.`)}
+		`Call this when the user asks who changed, edited, scheduled or moved a post, or what happened to it — "who changed this post?", "when was this scheduled?", "why is it back in draft?". postId defaults to the post on screen, the one selected, or the thread's. since and changes narrow it when the user asks for part of it ("schedule changes since Monday"). When source is assistant, the assistant made the change and by is who asked for it.`)}
 }
 
-// PostHistoryInput is the post whose history to read.
+// PostHistoryInput is the post whose history to read, and how much of it.
 type PostHistoryInput struct {
 	PostID string `json:"postId,omitempty" jsonschema:"description=Defaults to the post on screen, the one selected, or the thread's"`
 	Limit  int    `json:"limit,omitempty"  jsonschema:"description=How many entries, newest first; default 20, at most 50"`
+	// Since and Changes narrow the history; the output's scope says so.
+	Since   string   `json:"since,omitempty"   jsonschema:"description=Only changes on or after this day, YYYY-MM-DD in the workspace's timezone"`
+	Changes []string `json:"changes,omitempty" jsonschema:"description=Only these kinds of change: version, scheduled, rescheduled, unscheduled, status, failed, retried, copied, compiled, restored"`
 }
+
+// The kinds of change an entry is.
+const (
+	changeVersion     = "version"
+	changeScheduled   = "scheduled"
+	changeRescheduled = "rescheduled"
+	changeUnscheduled = "unscheduled"
+	changeStatus      = "status"
+	changeFailed      = "failed"
+	changeRetried     = "retried"
+	changeCopied      = "copied"
+	changeCompiled    = "compiled"
+	changeRestored    = "restored"
+)
+
+var historyChanges = []string{changeVersion, changeScheduled, changeRescheduled, changeUnscheduled, changeStatus,
+	changeFailed, changeRetried, changeCopied, changeCompiled, changeRestored}
 
 // HistoryEntry is one change to a post.
 type HistoryEntry struct {
 	At time.Time `json:"at"`
 	// Kind is version for a saved version of the text, event for anything
-	// else done to the post.
+	// else done to the post; Change is which change it was.
 	Kind    string `json:"kind"`
+	Change  string `json:"change"`
 	What    string `json:"what"`
 	Version int    `json:"version,omitempty"`
 	// By is who did it, by name; ByID their user id when known.
 	By   string `json:"by"`
 	ByID string `json:"byId,omitempty"`
-	// Source is a version's saver: user, assistant or system.
+	// Source is who made the change: user, assistant or system. For the
+	// assistant, By is who asked it.
 	Source string `json:"source,omitempty"`
+	// From and To are a schedule's times: the one it had and the one it
+	// got.
+	From *time.Time `json:"from,omitempty"`
+	To   *time.Time `json:"to,omitempty"`
+	// Reason is why a post failed to go out, on its latest failure.
+	Reason string `json:"reason,omitempty"`
+}
+
+// HistoryScope is how a history was narrowed; empty fields weren't.
+type HistoryScope struct {
+	Since   string   `json:"since,omitempty"`
+	Changes []string `json:"changes,omitempty"`
 }
 
 // PostHistoryOutput is a post's history.
@@ -58,29 +93,49 @@ type PostHistoryOutput struct {
 	PostID  string         `json:"postId"`
 	Title   string         `json:"title"`
 	Entries []HistoryEntry `json:"entries"`
+	// Timezone is the workspace's, for showing the times.
+	Timezone string        `json:"timezone"`
+	Scope    *HistoryScope `json:"scope,omitempty"`
 	// More is set when older entries were left out.
-	More bool   `json:"more,omitempty"`
-	Note string `json:"note,omitempty"`
+	More bool `json:"more,omitempty"`
+	// UnrecordedBefore is when versions started saying who saved them:
+	// earlier ones say only whether a person, the assistant or the system
+	// did.
+	UnrecordedBefore *time.Time         `json:"unrecordedBefore,omitempty"`
+	Note             string             `json:"note,omitempty"`
+	Step             *assistantkit.Step `json:"step,omitempty"`
 }
 
-// historyEvents are the log events a person would call a change, with how
-// to say each; the rest (polls, task runs) are machinery.
-var historyEvents = map[models.PostLogEventType]string{
-	models.PostLogEventStateTransition: "status changed",
-	models.PostLogEventUserSchedule:    "scheduled",
-	models.PostLogEventUserCancel:      "unscheduled",
-	models.PostLogEventUserRetry:       "retried publishing",
-	models.PostLogEventPostCloned:      "created as a copy of another post",
-	models.PostLogEventPostCompiled:    "made from ideas",
-	models.PostLogEventPostRestored:    "restored an earlier version",
+// historyEvents are the log events a person would call a change, with the
+// change each is and how to say it; the rest (polls, task runs) are
+// machinery.
+var historyEvents = map[models.PostLogEventType]struct{ change, what string }{
+	models.PostLogEventStateTransition: {changeStatus, "status changed"},
+	models.PostLogEventUserSchedule:    {changeScheduled, "scheduled"},
+	models.PostLogEventUserCancel:      {changeUnscheduled, "unscheduled"},
+	models.PostLogEventUserRetry:       {changeRetried, "retried publishing"},
+	models.PostLogEventPostCloned:      {changeCopied, "created as a copy of another post"},
+	models.PostLogEventPostCompiled:    {changeCompiled, "made from ideas"},
+	models.PostLogEventPostRestored:    {changeRestored, "restored an earlier version"},
 }
 
 const unrecordedNote = "Versions saved before people were recorded on them only say whether a person, the assistant or the system saved them."
+
+// logPayload is what a log entry's payload says that the history reads.
+type logPayload struct {
+	ScheduledAt string `json:"scheduled_at"`
+	Trigger     string `json:"trigger"`
+}
 
 func postHistory(ctx context.Context, d Deps, in PostHistoryInput) (*PostHistoryOutput, error) {
 	id := historyPost(ctx, in.PostID)
 	if id == "" {
 		return nil, assistantkit.Refused("which post? open it or name it")
+	}
+	tz, loc := workspaceZone(ctx, d)
+	scope, since, err := historyScope(in, loc)
+	if err != nil {
+		return nil, err
 	}
 	post, err := d.Posts.GetByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -98,34 +153,101 @@ func postHistory(ctx context.Context, d Deps, in PostHistoryInput) (*PostHistory
 		return nil, fmt.Errorf("read post log: %w", err)
 	}
 	names := memberNames(ctx, d)
-	out := &PostHistoryOutput{PostID: id, Title: post.Title, Entries: []HistoryEntry{}}
+	out := &PostHistoryOutput{PostID: id, Title: post.Title, Entries: []HistoryEntry{}, Timezone: tz, Scope: scope}
 	for _, v := range versions {
-		e := HistoryEntry{At: v.CreatedAt, Kind: "version", Version: v.VersionNumber, What: cmp.Or(v.Note, "saved a version"), Source: v.Creator, ByID: v.CreatedBy}
+		e := HistoryEntry{At: v.CreatedAt, Kind: "version", Change: changeVersion, Version: v.VersionNumber, What: cmp.Or(v.Note, "saved a version"), Source: v.Creator, ByID: v.CreatedBy}
 		e.By = versionBy(v, names)
 		if v.CreatedBy == "" && v.Creator != models.PostVersionCreatorSystem {
 			out.Note = unrecordedNote
+			if out.UnrecordedBefore == nil || v.CreatedAt.After(*out.UnrecordedBefore) {
+				out.UnrecordedBefore = new(v.CreatedAt)
+			}
 		}
 		out.Entries = append(out.Entries, e)
 	}
-	for _, l := range logs {
-		what, ok := historyEvents[l.EventType]
-		if !ok {
-			continue
-		}
-		if l.EventType == models.PostLogEventStateTransition && l.FromStatus != nil && l.ToStatus != nil {
-			what = fmt.Sprintf("status %s → %s", *l.FromStatus, *l.ToStatus)
-		}
-		e := HistoryEntry{At: l.EventTimestamp, Kind: "event", What: what, By: actorName(l.Actor, names)}
-		if l.Actor != models.ActorSystem {
-			e.ByID = l.Actor
-		}
-		out.Entries = append(out.Entries, e)
-	}
+	out.Entries = append(out.Entries, logEntries(logs, names, post.FailureReason)...)
 	slices.SortStableFunc(out.Entries, func(a, b HistoryEntry) int { return b.At.Compare(a.At) })
+	out.Entries = slices.DeleteFunc(out.Entries, func(e HistoryEntry) bool {
+		return (since != nil && e.At.Before(*since)) || (len(in.Changes) > 0 && !slices.Contains(in.Changes, e.Change))
+	})
 	if n := historyLimit(in.Limit); len(out.Entries) > n {
 		out.Entries, out.More = out.Entries[:n], true
 	}
+	out.Step = &assistantkit.Step{Subject: post.Title}
 	return out, nil
+}
+
+// historyScope checks how in narrows the history: since as the start of
+// that day in loc.
+func historyScope(in PostHistoryInput, loc *time.Location) (*HistoryScope, *time.Time, error) {
+	for _, c := range in.Changes {
+		if !slices.Contains(historyChanges, c) {
+			return nil, nil, assistantkit.Refused(fmt.Sprintf("%q isn't a kind of change", c), historyChanges...)
+		}
+	}
+	var since *time.Time
+	if in.Since != "" {
+		day, err := time.ParseInLocation(time.DateOnly, in.Since, loc)
+		if err != nil {
+			return nil, nil, assistantkit.Refused("since is a YYYY-MM-DD")
+		}
+		since = &day
+	}
+	if since == nil && len(in.Changes) == 0 {
+		return nil, nil, nil
+	}
+	return &HistoryScope{Since: in.Since, Changes: in.Changes}, since, nil
+}
+
+// logEntries are the log's changes: who asked, a schedule's from and to,
+// and why the latest failure failed.
+func logEntries(logs []models.PostLog, names map[string]string, failureReason string) []HistoryEntry {
+	logs = slices.Clone(logs)
+	slices.SortStableFunc(logs, func(a, b models.PostLog) int { return a.EventTimestamp.Compare(b.EventTimestamp) })
+	var entries []HistoryEntry
+	var scheduled *time.Time
+	lastFailed := -1
+	for _, l := range logs {
+		ev, ok := historyEvents[l.EventType]
+		if !ok {
+			continue
+		}
+		var p logPayload
+		_ = json.Unmarshal([]byte(l.Payload), &p)
+		e := HistoryEntry{At: l.EventTimestamp, Kind: "event", Change: ev.change, What: ev.what, By: actorName(l.Actor, names)}
+		if l.Actor != models.ActorSystem {
+			e.ByID = l.Actor
+		}
+		if p.Trigger == "assistant" {
+			e.Source = string(models.PostVersionCreatorAssistant)
+		}
+		switch l.EventType {
+		case models.PostLogEventStateTransition:
+			if l.FromStatus != nil && l.ToStatus != nil {
+				e.What = fmt.Sprintf("status %s → %s", *l.FromStatus, *l.ToStatus)
+			}
+			if l.ToStatus != nil && *l.ToStatus == models.PostStatusFailed {
+				e.Change, e.What = changeFailed, "didn't go out"
+				lastFailed = len(entries)
+			}
+		case models.PostLogEventUserSchedule:
+			at, err := time.Parse(time.RFC3339, p.ScheduledAt)
+			if err == nil {
+				e.To = &at
+				if scheduled != nil {
+					e.Change, e.What, e.From = changeRescheduled, "rescheduled", scheduled
+				}
+				scheduled = &at
+			}
+		case models.PostLogEventUserCancel:
+			scheduled = nil
+		}
+		entries = append(entries, e)
+	}
+	if lastFailed >= 0 {
+		entries[lastFailed].Reason = failureReason
+	}
+	return entries
 }
 
 // historyPost is the post asked about: named, on screen, the one selected,

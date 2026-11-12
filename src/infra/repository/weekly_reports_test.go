@@ -47,11 +47,20 @@ func TestWeeklyReportFacts(t *testing.T) {
 	seedPostLog(t, db, "l4", "p-retried", models.PostLogEventStateTransition, "system", &sched, &failed, w.Start.Add(5*time.Hour), "")
 	seedPostLog(t, db, "l5", "p-retried", models.PostLogEventUserRetry, "user-1", &failed, &draft, w.Start.Add(6*time.Hour), "")
 
+	// Ideas decided inside the week count; one decided the week before doesn't.
+	yes := models.IdeaVerdictYes
+	for id, at := range map[string]time.Time{"i-in": w.Start.Add(time.Hour), "i-prev": w.PrevStart.Add(time.Hour)} {
+		idea := &models.Idea{ID: id, Title: id, Verdict: &yes, DecidedAt: &at, DecidedBy: new("user-1"), CreatedAt: w.PrevStart, UpdatedAt: w.PrevStart}
+		if _, err := db.NewInsert().Model(idea).Exec(ctx); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+
 	c, err := repo.Counts(ctx, tid, w)
 	if err != nil {
 		t.Fatalf("counts: %v", err)
 	}
-	if c.PrevPublished != 1 || c.Failed != 1 || c.PrevFailed != 1 {
+	if c.PrevPublished != 1 || c.Failed != 1 || c.PrevFailed != 1 || c.IdeasDecided != 1 {
 		t.Fatalf("counts = %+v", c)
 	}
 

@@ -131,6 +131,10 @@ type WeeklyIdeas struct {
 	Waiting string `json:"waiting,omitempty"`
 	Summary string `json:"summary,omitempty"`
 	URL     string `json:"url"`
+	// Decided and WaitingCount are the week's ideas decided and those still
+	// waiting, as numbers for a client that words them itself.
+	Decided      int `json:"decided"`
+	WaitingCount int `json:"waiting_count"`
 }
 
 // WeeklyTeam is the Team section.

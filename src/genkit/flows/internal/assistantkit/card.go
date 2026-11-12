@@ -85,6 +85,9 @@ const (
 	CardRowGrounding = "grounding"
 	// CardRowTags is the tags added or removed.
 	CardRowTags = "tags"
+	// CardRowRecipient is someone the work is sent to, with how they're
+	// reached in Note.
+	CardRowRecipient = "recipient"
 )
 
 // CardRow is one detail of an offer. Kind lets the client label and lay it

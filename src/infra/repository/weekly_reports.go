@@ -70,6 +70,7 @@ type WeeklyCounts struct {
 	CampaignsCreated int `bun:"campaigns_created"`
 	IdeasWaiting     int `bun:"ideas_waiting"`
 	IdeasCreated     int `bun:"ideas_created"`
+	IdeasDecided     int `bun:"ideas_decided"`
 	RemindersDue     int `bun:"reminders_due"`
 	AssetsCreated    int `bun:"assets_created"`
 	MembersTotal     int `bun:"members_total"`
@@ -214,6 +215,8 @@ SELECT
   (SELECT count(*) FROM ideas WHERE tenant_id = ?0 AND verdict IS NULL) AS ideas_waiting,
   (SELECT count(*) FROM ideas WHERE tenant_id = ?0
      AND created_at >= ?2 AND created_at < ?3) AS ideas_created,
+  (SELECT count(*) FROM ideas WHERE tenant_id = ?0
+     AND decided_at >= ?2 AND decided_at < ?3) AS ideas_decided,
   (SELECT count(*) FROM ideas WHERE tenant_id = ?0 AND verdict = 'later'
      AND remind_at < ?5) AS reminders_due,
   (SELECT count(*) FROM assets WHERE tenant_id = ?0

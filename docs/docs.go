@@ -23605,6 +23605,10 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                },
+                "title": {
+                    "description": "Title is the post's, when the caller looked it up; the report leaves\nit empty.",
+                    "type": "string"
                 }
             }
         },
