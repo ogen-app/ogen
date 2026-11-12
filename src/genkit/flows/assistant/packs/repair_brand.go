@@ -13,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_check"
+	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
@@ -180,7 +181,7 @@ func (out *CheckBrandOutput) addFindings(ctx context.Context, d Deps, found []br
 			continue
 		}
 		if _, ok := dismissed[p.CampaignID]; !ok {
-			keys, err := d.dismissedKeys(ctx, p.CampaignID)
+			keys, err := campaign_assistant.DismissedKeys(ctx, d.Dismissals, p.CampaignID)
 			if err != nil {
 				return err
 			}

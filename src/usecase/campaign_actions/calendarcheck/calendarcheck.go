@@ -129,11 +129,27 @@ type Finding struct {
 	Code     string   `json:"code"`
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
-	PostIDs  []string `json:"postIds,omitempty"`
-	Fixes    []Fix    `json:"fixes"`
+	// Detail says more under the message: what the finding will cost, or
+	// the rule it breaks.
+	Detail string `json:"detail,omitempty"`
+	// BlocksPublishing marks a finding whose posts will be refused when
+	// they publish, as against one that is only worth a look.
+	BlocksPublishing bool     `json:"blocksPublishing,omitzero"`
+	PostIDs          []string `json:"postIds,omitempty"`
+	// Posts are PostIDs' posts with their titles and days, in that order.
+	Posts []PostRef `json:"posts,omitempty"`
+	Fixes []Fix     `json:"fixes"`
 	// scope tells apart findings of one code over the same posts, such as
 	// the goal's periods, in the key.
 	scope string
+}
+
+// PostRef is a finding's post: its title, and its day in the campaign's
+// timezone, YYYY-MM-DD, when it is dated.
+type PostRef struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Date  string `json:"date,omitempty"`
 }
 
 // Check returns the campaign's calendar findings, warnings first. ideas
@@ -153,9 +169,22 @@ func Check(c *models.Campaign, posts []models.Post, ideas map[string][]string, n
 	out = append(out, cal.closeTogether(ideas)...)
 	out = append(out, cal.crowdedSlots()...)
 	out = append(out, cal.goal()...)
+	byID := make(map[string]*models.Post, len(posts))
+	for i := range posts {
+		byID[posts[i].ID] = &posts[i]
+	}
 	for i := range out {
 		f := &out[i]
 		f.Key = key(c.ID, f.Code, f.PostIDs, f.Fixes, f.scope)
+		for _, id := range f.PostIDs {
+			if p := byID[id]; p != nil {
+				ref := PostRef{ID: id, Title: p.Title}
+				if p.ScheduledAt != nil {
+					ref.Date = day(*p.ScheduledAt).Format(time.DateOnly)
+				}
+				f.Posts = append(f.Posts, ref)
+			}
+		}
 	}
 	slices.SortStableFunc(out, bySeverity)
 	return out
@@ -176,6 +205,8 @@ func dateChecks(c *models.Campaign, posts []models.Post, day func(time.Time) tim
 	enabled := scheduling.EnabledWeekdays(c.PublishingDays)
 
 	var outside, offDay []string
+	var outsideDays []time.Time
+	offWeekdays := map[time.Weekday]bool{}
 	crowd := map[string][]string{}
 	// movableCrowd marks the crowded days holding a post a redistribution
 	// can move.
@@ -190,9 +221,11 @@ func dateChecks(c *models.Campaign, posts []models.Post, day func(time.Time) tim
 		movable := reschedule.Eligible(p.Status)
 		if dated && movable && (d.Before(start) || d.After(end)) {
 			outside = append(outside, p.ID)
+			outsideDays = append(outsideDays, d)
 		}
 		if movable && len(enabled) > 0 && !enabled[d.Weekday()] {
 			offDay = append(offDay, p.ID)
+			offWeekdays[d.Weekday()] = true
 		}
 		k := p.PlatformID + "|" + d.Format(time.DateOnly)
 		crowd[k] = append(crowd[k], p.ID)
@@ -205,11 +238,13 @@ func dateChecks(c *models.Campaign, posts []models.Post, day func(time.Time) tim
 	if len(outside) > 0 {
 		out = append(out, Finding{Code: CodeOutsideWindow, Severity: SeverityWarning, PostIDs: sorted(outside),
 			Message: fmt.Sprintf("%d post(s) are dated outside the campaign (%s to %s)", len(outside), start.Format("2 Jan"), end.Format("2 Jan")),
+			Detail:  fmt.Sprintf("Set for %s; the campaign runs %s to %s.", dayList(outsideDays), start.Format("2 Jan"), end.Format("2 Jan")),
 			Fixes:   []Fix{redistribute}})
 	}
 	if len(offDay) > 0 {
 		out = append(out, Finding{Code: CodeDisabledDay, Severity: SeverityWarning, PostIDs: sorted(offDay),
 			Message: fmt.Sprintf("%d post(s) fall on days the campaign doesn't publish (%s)", len(offDay), scheduling.DayLabels(c.PublishingDays)),
+			Detail:  fmt.Sprintf("The campaign doesn't publish on %s.", weekdays(offWeekdays)),
 			Fixes:   []Fix{redistribute}})
 	}
 	out = append(out, crowded(crowd, movableCrowd, redistribute)...)
@@ -217,6 +252,7 @@ func dateChecks(c *models.Campaign, posts []models.Post, day func(time.Time) tim
 		for _, g := range gaps(start, end, scheduled) {
 			out = append(out, Finding{Code: CodeGap, Severity: SeverityInfo,
 				Message: fmt.Sprintf("nothing is planned from %s to %s", g[0].Format("2 Jan"), g[1].Format("2 Jan")),
+				Detail:  fmt.Sprintf("%d days with nothing on the calendar; the longest quiet the check lets pass is %d days.", days(g[0], g[1])+1, GapDays),
 				Fixes:   []Fix{{Kind: FixPlanWindow, Title: "Plan ideas for these days", From: g[0].Format(time.DateOnly), To: g[1].Format(time.DateOnly)}}})
 		}
 	}
@@ -241,6 +277,7 @@ func crowded(crowd map[string][]string, movable map[string]bool, fix Fix) []Find
 		platform, date, _ := strings.Cut(k, "|")
 		f := Finding{Code: CodeCrowdedDay, Severity: SeverityWarning, PostIDs: sorted(ids),
 			Message: fmt.Sprintf("%d posts for %s on %s", len(ids), cmp.Or(platform, "no platform"), date),
+			Detail:  fmt.Sprintf("A platform takes at most %d posts a day before they crowd each other out.", CrowdedPerDay),
 			Fixes:   []Fix{fix}}
 		if !movable[k] {
 			f.Message += "; they're all scheduled, so evening out the calendar can't move them: reschedule one by hand"
@@ -273,10 +310,12 @@ func dueSoon(p models.Post, d, today time.Time) (Finding, bool) {
 	case models.PostStatusPlanned:
 		return Finding{Code: CodeUnwrittenSoon, Severity: SeverityWarning, PostIDs: []string{p.ID},
 			Message: fmt.Sprintf("%q publishes %s but has no body yet", p.Title, d.Format("Mon 2 Jan")),
+			Detail:  "It is still a planned post, with theses and no body.",
 			Fixes:   []Fix{{Kind: FixOpenPost, Title: "Write it", PostID: p.ID}}}, true
 	case models.PostStatusDraft:
 		return Finding{Code: CodeNotReadySoon, Severity: SeverityWarning, PostIDs: []string{p.ID},
 			Message: fmt.Sprintf("%q publishes %s but isn't marked ready", p.Title, d.Format("Mon 2 Jan")),
+			Detail:  "It is still a draft; it publishes once it is marked ready.",
 			Fixes:   []Fix{{Kind: FixOpenPost, Title: "Finish it", PostID: p.ID}}}, true
 	}
 	return Finding{}, false
@@ -312,6 +351,35 @@ func Location(c *models.Campaign) *time.Location {
 		return loc
 	}
 	return time.UTC
+}
+
+// dayList is days as "Sat 2 May", "Sat 2 May and Sun 3 May", or the first
+// two and how many more, in order.
+func dayList(ds []time.Time) string {
+	ds = slices.SortedFunc(slices.Values(ds), time.Time.Compare)
+	ds = slices.CompactFunc(ds, time.Time.Equal)
+	label := func(d time.Time) string { return d.Format("Mon 2 Jan") }
+	switch len(ds) {
+	case 0:
+		return ""
+	case 1:
+		return label(ds[0])
+	case 2:
+		return label(ds[0]) + " and " + label(ds[1])
+	}
+	return fmt.Sprintf("%s, %s and %d more", label(ds[0]), label(ds[1]), len(ds)-2)
+}
+
+// weekdays names days of the week, Monday first, as "Sundays" or
+// "Saturdays and Sundays".
+func weekdays(days map[time.Weekday]bool) string {
+	var names []string
+	for i := range 7 {
+		if d := (time.Monday + time.Weekday(i)) % 7; days[d] {
+			names = append(names, d.String()+"s")
+		}
+	}
+	return list(names)
 }
 
 func sorted(ids []string) []string {

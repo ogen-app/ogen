@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -72,6 +71,11 @@ func repairPack(d Deps) assistant.Pack {
 				assistantkit.Wrap(func(ctx context.Context, in DismissFindingInput) (*DismissFindingOutput, error) {
 					return dismissFinding(ctx, d, in)
 				}), ai.WithStrictSchema(false))
+			restore := genkit.DefineTool(g, "restoreFinding",
+				"Takes back a dismissal of a calendar or review finding, so checks raise it again.",
+				assistantkit.Wrap(func(ctx context.Context, in DismissFindingInput) (*RestoreFindingOutput, error) {
+					return restoreFinding(ctx, d, in)
+				}), ai.WithStrictSchema(false))
 			specs := []assistantkit.Spec{
 				spec(repairPackName, check, assistantkit.TierRead,
 					`Call this when the user asks what's wrong with the calendar or plan, or to check it — "anything I should fix?", "is the calendar ok?". Relay the findings in order and offer their fixes, which are already offered (proposalId) or are a post to open (navigate to it). Don't fix anything they didn't pick. When the user asks to fix one problem by its key (as the campaign's Overview does), check and offer only that finding's fixes.`),
@@ -81,6 +85,8 @@ func repairPack(d Deps) assistant.Pack {
 					`Never call this yourself: it is what an optimise or check offer runs once confirmed.`),
 				spec(repairPackName, dismiss, assistantkit.TierRead,
 					`Call this when the user says a finding is fine as it is ("leave the gap", "that's intended"). Pass its key, and the campaign the check was for when it isn't the thread's.`),
+				spec(repairPackName, restore, assistantkit.TierRead,
+					`Call this when the user wants a dismissed finding back ("bring back the gap", "restore it"); a check's dismissedFindings carry their keys. Pass its key, and the campaign the check was for when it isn't the thread's.`),
 			}
 			specs = append(specs, postFixSpecs(g, d)...)
 			if d.CheckBrief != nil && d.CheckPosts != nil {
@@ -136,30 +142,26 @@ func (d Deps) loadCampaign(ctx context.Context, ref CampaignRef) (*models.Campai
 	return c, err
 }
 
-// FixOffer is a finding's fix, as the assistant offers it.
-type FixOffer struct {
-	calendarcheck.Fix
-	// ProposalID is the offer that applies the fix; empty for a post to
-	// open, which navigate does.
-	ProposalID string `json:"proposalId,omitempty"`
-}
+// FixOffer is a finding's fix with the offer that applies it.
+type FixOffer = campaign_assistant.FixOffer
 
 // FindingOut is a finding with its fixes offered.
 type FindingOut struct {
-	Key      string     `json:"key"`
-	Code     string     `json:"code"`
-	Severity string     `json:"severity"`
-	Message  string     `json:"message"`
-	PostIDs  []string   `json:"postIds,omitempty"`
-	Fixes    []FixOffer `json:"fixes"`
+	calendarcheck.Finding
+	Fixes []FixOffer `json:"fixes"`
 }
 
 // CheckCalendarOutput is the campaign's open findings.
 type CheckCalendarOutput struct {
 	CampaignID string       `json:"campaignId"`
 	Findings   []FindingOut `json:"findings"`
-	// Dismissed counts findings left out because the user dismissed them.
-	Dismissed int `json:"dismissed,omitempty"`
+	// Dismissed counts findings left out because the user dismissed them;
+	// DismissedFindings are those findings, without their fixes, for the
+	// card to show and restore.
+	Dismissed         int          `json:"dismissed,omitempty"`
+	DismissedFindings []FindingOut `json:"dismissedFindings"`
+	// CheckedAt is when the calendar was read.
+	CheckedAt time.Time `json:"checkedAt"`
 }
 
 func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarOutput, error) {
@@ -177,19 +179,21 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 			return nil, fmt.Errorf("read the posts' ideas: %w", err)
 		}
 	}
-	dismissed, err := d.dismissedKeys(ctx, c.ID)
+	dismissed, err := campaign_assistant.DismissedKeys(ctx, d.Dismissals, c.ID)
 	if err != nil {
 		return nil, err
 	}
-	out := &CheckCalendarOutput{CampaignID: c.ID, Findings: []FindingOut{}}
+	now := time.Now().UTC()
+	out := &CheckCalendarOutput{CampaignID: c.ID, Findings: []FindingOut{}, DismissedFindings: []FindingOut{}, CheckedAt: now}
 	// One redistribution fixes every finding that offers it.
 	var redistributeID string
-	for _, f := range calendarcheck.Check(c, posts, ideas, time.Now()) {
+	for _, f := range calendarcheck.Check(c, posts, ideas, now) {
+		fo := FindingOut{Finding: f, Fixes: []FixOffer{}}
 		if dismissed[f.Key] {
 			out.Dismissed++
+			out.DismissedFindings = append(out.DismissedFindings, fo)
 			continue
 		}
-		fo := FindingOut{Key: f.Key, Code: f.Code, Severity: string(f.Severity), Message: f.Message, PostIDs: f.PostIDs, Fixes: []FixOffer{}}
 		for _, fix := range f.Fixes {
 			offer, ok, err := offerFix(ctx, d, c, posts, fix, &redistributeID)
 			if err != nil {
@@ -604,32 +608,43 @@ func dismissFinding(ctx context.Context, d Deps, in DismissFindingInput) (*Dismi
 	return &DismissFindingOutput{Dismissed: true}, nil
 }
 
-// ReviewFinding is a brief or post finding with its fixes.
-type ReviewFinding struct {
-	// Kind is brief or post.
-	Kind string `json:"kind"`
-	// Key dismisses the finding while the brief, or its post, stays the
-	// same.
-	Key        string     `json:"key"`
-	Severity   string     `json:"severity"`
-	Aspect     string     `json:"aspect,omitempty"`
-	PostID     string     `json:"postId,omitempty"`
-	Title      string     `json:"title,omitempty"`
-	Issue      string     `json:"issue"`
-	Suggestion string     `json:"suggestion,omitempty"`
-	Fixes      []FixOffer `json:"fixes"`
+// RestoreFindingOutput says whether the finding was dismissed and is back.
+type RestoreFindingOutput struct {
+	Restored bool `json:"restored"`
 }
 
-// ReviewOutput is the campaign's review.
-type ReviewOutput struct {
-	CampaignID   string          `json:"campaignId"`
-	BriefSummary string          `json:"briefSummary,omitempty"`
-	PostsSummary string          `json:"postsSummary,omitempty"`
-	PostsChecked int             `json:"postsChecked"`
-	Findings     []ReviewFinding `json:"findings"`
-	// Dismissed counts findings left out because the user dismissed them.
-	Dismissed int `json:"dismissed,omitempty"`
+// restoreFinding takes back the campaign's dismissal of the finding, and
+// this thread's from before dismissals followed the campaign.
+func restoreFinding(ctx context.Context, d Deps, in DismissFindingInput) (*RestoreFindingOutput, error) {
+	if d.Dismissals == nil {
+		return nil, assistantkit.Refused("findings can't be restored here")
+	}
+	if strings.TrimSpace(in.Key) == "" {
+		return nil, assistantkit.Refused("pass the finding's key")
+	}
+	c, err := d.loadCampaign(ctx, CampaignRef{CampaignID: in.CampaignID})
+	if err != nil {
+		return nil, err
+	}
+	restored, err := d.Dismissals.Restore(ctx, models.AssistantScopeCampaign, c.ID, in.Key)
+	if err != nil {
+		return nil, err
+	}
+	if scope, ok := assistant.Scope(ctx); ok && (scope.Kind != models.AssistantScopeCampaign || scope.ID != c.ID) {
+		inThread, err := d.Dismissals.Restore(ctx, scope.Kind, scope.ID, in.Key)
+		if err != nil {
+			return nil, err
+		}
+		restored = restored || inThread
+	}
+	return &RestoreFindingOutput{Restored: restored}, nil
 }
+
+// ReviewFinding is a brief or post finding with its fixes.
+type ReviewFinding = campaign_assistant.ReviewFinding
+
+// ReviewOutput is the campaign's review.
+type ReviewOutput = campaign_assistant.ReviewOutput
 
 func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput, error) {
 	c, err := d.loadCampaign(ctx, in)
@@ -644,128 +659,23 @@ func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput,
 	if err != nil {
 		return nil, assistantkit.Refused("couldn't review the posts: " + err.Error())
 	}
-	dismissed, err := d.dismissedKeys(ctx, c.ID)
+	dismissed, err := campaign_assistant.DismissedKeys(ctx, d.Dismissals, c.ID)
 	if err != nil {
 		return nil, err
 	}
-	out := &ReviewOutput{CampaignID: c.ID, BriefSummary: brief.Summary, PostsSummary: postsReview.Summary,
-		PostsChecked: postsReview.Checked, Findings: []ReviewFinding{}}
-	var open []consistency.Finding
-	for _, f := range brief.Findings {
-		if dismissed[f.Key] {
-			out.Dismissed++
-			continue
-		}
-		open = append(open, f)
-	}
-	briefs, err := briefFindings(ctx, d, c, open)
-	if err != nil {
+	out := campaign_assistant.NewReview(c.ID)
+	can := campaign_assistant.ReviewOffers{Brief: d.Campaign != nil, Revise: d.Revise != nil}
+	if err := out.AddBrief(ctx, brief, dismissed, can); err != nil {
 		return nil, err
 	}
-	out.Findings = append(out.Findings, briefs...)
-	for _, f := range postsReview.Findings {
-		if dismissed[f.Key] {
-			out.Dismissed++
-			continue
-		}
-		rf, err := postFinding(ctx, d, c, f)
-		if err != nil {
-			return nil, err
-		}
-		out.Findings = append(out.Findings, rf)
+	if err := out.AddPosts(ctx, postsReview, dismissed, can); err != nil {
+		return nil, err
 	}
 	return out, nil
-}
-
-// briefFindings offers the brief's open findings their fixes: each its own
-// brief edit, and when there are several, one edit taking them all.
-func briefFindings(ctx context.Context, d Deps, c *models.Campaign, open []consistency.Finding) ([]ReviewFinding, error) {
-	var allFix *FixOffer
-	if len(open) > 1 && d.Campaign != nil {
-		id, err := assistantkit.Offer(ctx, assistantkit.Proposal{
-			Tool:    "enrichBrief",
-			Args:    campaign_assistant.EnrichBriefInput{CampaignID: c.ID, Instruction: "Fix these review findings: " + briefIssues(open)},
-			Summary: "Improve the brief to fix the review's findings",
-		})
-		if err != nil {
-			return nil, err
-		}
-		allFix = &FixOffer{Fix: calendarcheck.Fix{Kind: consistency.FixImproveBrief, Title: "Fix all of the brief's findings"}, ProposalID: id}
-	}
-	out := make([]ReviewFinding, 0, len(open))
-	for _, f := range open {
-		rf := ReviewFinding{Kind: "brief", Key: f.Key, Severity: f.Severity, Aspect: f.Aspect, Issue: f.Issue, Suggestion: f.Suggestion, Fixes: []FixOffer{}}
-		for _, fix := range f.Fixes {
-			if fix.Kind != consistency.FixImproveBrief || d.Campaign == nil {
-				continue
-			}
-			id, err := assistantkit.Offer(ctx, assistantkit.Proposal{Tool: "enrichBrief",
-				Args: campaign_assistant.EnrichBriefInput{CampaignID: c.ID, Instruction: fix.Instruction}, Summary: fix.Title})
-			if err != nil {
-				return nil, err
-			}
-			rf.Fixes = append(rf.Fixes, FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixKind(fix.Kind), Title: fix.Title}, ProposalID: id})
-		}
-		if allFix != nil {
-			rf.Fixes = append(rf.Fixes, *allFix)
-		}
-		out = append(out, rf)
-	}
-	return out, nil
-}
-
-// postFinding offers a drifting post's fixes: rewriting it, when the
-// writer is here, and opening it.
-func postFinding(ctx context.Context, d Deps, c *models.Campaign, f consistency.PostFinding) (ReviewFinding, error) {
-	rf := ReviewFinding{Kind: "post", Key: f.Key, Severity: f.Severity, PostID: f.PostID, Title: f.Title,
-		Issue: f.Issue, Suggestion: f.Suggestion, Fixes: []FixOffer{}}
-	for _, fix := range f.Fixes {
-		offer := FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixKind(fix.Kind), Title: fix.Title, PostID: fix.PostID}}
-		if fix.Kind == consistency.FixRevisePost {
-			if d.Revise == nil {
-				continue
-			}
-			var err error
-			if offer.ProposalID, err = assistantkit.Offer(ctx, assistantkit.Proposal{Tool: "revisePost",
-				Args: RevisePostInput{CampaignID: c.ID, PostID: fix.PostID, Instruction: fix.Instruction}, Summary: fix.Title}); err != nil {
-				return ReviewFinding{}, err
-			}
-		}
-		rf.Fixes = append(rf.Fixes, offer)
-	}
-	return rf, nil
-}
-
-// dismissedKeys are the campaign's dismissed findings, the ones its Overview
-// and any thread dismissed, and those dismissed in this thread before
-// dismissals followed the campaign.
-func (d Deps) dismissedKeys(ctx context.Context, campaignID string) (map[string]bool, error) {
-	if d.Dismissals == nil {
-		return map[string]bool{}, nil
-	}
-	keys, err := d.Dismissals.Keys(ctx, models.AssistantScopeCampaign, campaignID)
-	if err != nil {
-		return nil, err
-	}
-	scope, _ := assistant.Scope(ctx)
-	if scope.Kind == models.AssistantScopeCampaign && scope.ID == campaignID {
-		return keys, nil
-	}
-	thread, err := d.Dismissals.Keys(ctx, scope.Kind, scope.ID)
-	if err != nil {
-		return nil, err
-	}
-	keys = maps.Clone(keys)
-	maps.Copy(keys, thread)
-	return keys, nil
 }
 
 // RevisePostInput is a post of the campaign and how to rewrite it.
-type RevisePostInput struct {
-	CampaignID  string `json:"campaignId,omitempty" jsonschema:"description=Defaults to the thread's campaign"`
-	PostID      string `json:"postId"`
-	Instruction string `json:"instruction"`
-}
+type RevisePostInput = campaign_assistant.RevisePostInput
 
 // RevisePostOutput confirms the rewrite, and whether it was saved as a
 // version.
@@ -874,12 +784,4 @@ func platformNames(c *models.Campaign) []string {
 		out[i] = p.Name
 	}
 	return out
-}
-
-func briefIssues(fs []consistency.Finding) string {
-	parts := make([]string, len(fs))
-	for i, f := range fs {
-		parts[i] = fmt.Sprintf("%s: %s (%s)", f.Aspect, f.Issue, f.Suggestion)
-	}
-	return strings.Join(parts, "; ")
 }

@@ -113,7 +113,7 @@ func TestCheckCalendar_PostTypeFixes(t *testing.T) {
 		p := sink.got[slices.IndexFunc(sink.got, func(p assistantkit.Proposal) bool { return p.Summary == fix.Title })]
 		tools = append(tools, p.Tool)
 	}
-	want := []string{"updateCampaignPlatforms", "changePostType", "changePostType", "unschedulePosts", "deletePosts"}
+	want := []string{"changePostType", "changePostType", "updateCampaignPlatforms", "unschedulePosts", "deletePosts"}
 	if !slices.Equal(tools, want) {
 		t.Fatalf("tools = %v, want %v", tools, want)
 	}

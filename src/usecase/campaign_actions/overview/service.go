@@ -62,6 +62,49 @@ var ErrNoProblems = errors.New("campaign problems are not available")
 // overview nor the assistant raises it again while a check gives the same
 // key.
 func (s *Service) Dismiss(ctx context.Context, campaignID, key, by string) error {
+	if err := s.withCampaign(ctx, campaignID); err != nil {
+		return err
+	}
+	return s.dismissals.Dismiss(ctx, models.AssistantScopeCampaign, campaignID, key, by)
+}
+
+// Restore takes a dismissal of the campaign back, so the overview and the
+// assistant raise the finding again; restoring one not dismissed is a no-op.
+func (s *Service) Restore(ctx context.Context, campaignID, key string) error {
+	if err := s.withCampaign(ctx, campaignID); err != nil {
+		return err
+	}
+	_, err := s.dismissals.Restore(ctx, models.AssistantScopeCampaign, campaignID, key)
+	return err
+}
+
+// Dismissal is a finding dismissed on a campaign.
+type Dismissal struct {
+	Key         string    `json:"key"`
+	DismissedAt time.Time `json:"dismissedAt"`
+	DismissedBy string    `json:"dismissedBy"`
+}
+
+// Dismissed lists the campaign's dismissed findings, the latest first, so a
+// reloaded thread can tell which of its findings were dismissed since.
+func (s *Service) Dismissed(ctx context.Context, campaignID string) ([]Dismissal, error) {
+	if err := s.withCampaign(ctx, campaignID); err != nil {
+		return nil, err
+	}
+	rows, err := s.dismissals.List(ctx, models.AssistantScopeCampaign, campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("list dismissals: %w", err)
+	}
+	out := make([]Dismissal, len(rows))
+	for i, r := range rows {
+		out[i] = Dismissal{Key: r.FindingKey, DismissedAt: r.CreatedAt, DismissedBy: r.CreatedBy}
+	}
+	return out, nil
+}
+
+// withCampaign checks that problems can be dismissed and the campaign is
+// the caller's.
+func (s *Service) withCampaign(ctx context.Context, campaignID string) error {
 	if s.dismissals == nil {
 		return ErrNoProblems
 	}
@@ -71,7 +114,7 @@ func (s *Service) Dismiss(ctx context.Context, campaignID, key, by string) error
 		}
 		return fmt.Errorf("load campaign: %w", err)
 	}
-	return s.dismissals.Dismiss(ctx, models.AssistantScopeCampaign, campaignID, key, by)
+	return nil
 }
 
 // Overview loads the campaign (with its type + phases hydrated) and its posts,
@@ -116,7 +159,7 @@ func (s *Service) Overview(ctx context.Context, campaignID string) (*Overview, e
 // problems fills in the calendar's findings the campaign's thread hasn't
 // dismissed.
 func (s *Service) problems(ctx context.Context, ov *Overview, c *models.Campaign, posts []models.Post) error {
-	ov.Problems = []calendarcheck.Finding{}
+	ov.Problems, ov.DismissedProblems = []calendarcheck.Finding{}, []calendarcheck.Finding{}
 	if s.dismissals == nil {
 		return nil
 	}
@@ -134,6 +177,7 @@ func (s *Service) problems(ctx context.Context, ov *Overview, c *models.Campaign
 	for _, f := range calendarcheck.Check(c, posts, ideas, ov.GeneratedAt) {
 		if dismissed[f.Key] {
 			ov.ProblemsDismissed++
+			ov.DismissedProblems = append(ov.DismissedProblems, f)
 			continue
 		}
 		ov.Problems = append(ov.Problems, f)

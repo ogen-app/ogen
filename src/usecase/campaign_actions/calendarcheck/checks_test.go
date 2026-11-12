@@ -17,8 +17,9 @@ func kinds(fs []Fix) []FixKind {
 }
 
 // Posts of a type the campaign narrowed away get a finding per platform and
-// type, with the type allowed again, a conversion to each type it allows,
-// taking them off the calendar and deleting them as fixes.
+// type, with a conversion to each type it allows first, then the type
+// allowed again, taking them off the calendar and deleting them as fixes.
+// One of them is dated, so publishing it is refused.
 func TestCheck_PostTypeNotAllowed(t *testing.T) {
 	c := campaign()
 	c.TargetPlatforms = models.CampaignPlatforms{{ID: "li", PostTypes: []string{"text", "image", models.PostTypeLinkPost}}}
@@ -33,19 +34,25 @@ func TestCheck_PostTypeNotAllowed(t *testing.T) {
 	if f == nil || !slices.Equal(f.PostIDs, []string{"v1", "v2"}) {
 		t.Fatalf("finding = %+v", f)
 	}
-	want := []FixKind{FixEnablePostType, FixConvertPostType, FixConvertPostType, FixUnschedule, FixDelete}
+	want := []FixKind{FixConvertPostType, FixConvertPostType, FixEnablePostType, FixUnschedule, FixDelete}
 	if !slices.Equal(kinds(f.Fixes), want) {
 		t.Fatalf("fixes = %v, want %v", kinds(f.Fixes), want)
 	}
-	if e := f.Fixes[0]; e.PlatformID != "li" || e.PostType != "video" {
-		t.Fatalf("enable = %+v", e)
-	}
 	// The link post isn't offered: a video has no link to carry over.
-	if f.Fixes[1].PostType != "text" || f.Fixes[2].PostType != "image" {
-		t.Fatalf("converts = %+v", f.Fixes[1:3])
+	if f.Fixes[0].PostType != "text" || f.Fixes[1].PostType != "image" {
+		t.Fatalf("converts = %+v", f.Fixes[0:2])
+	}
+	if e := f.Fixes[2]; e.PlatformID != "li" || e.PostType != "video" {
+		t.Fatalf("enable = %+v", e)
 	}
 	if !slices.Equal(f.Fixes[3].PostIDs, []string{"v1"}) {
 		t.Fatalf("unschedule = %+v", f.Fixes[3])
+	}
+	if !f.BlocksPublishing || f.Detail != "LinkedIn on this campaign runs text, image and link-post. It publishes Tue 8 Dec and will be refused." {
+		t.Fatalf("blocks = %v, detail = %q", f.BlocksPublishing, f.Detail)
+	}
+	if len(f.Posts) != 2 || f.Posts[0].Date != "2026-12-08" || f.Posts[1].Date != "" {
+		t.Fatalf("posts = %+v", f.Posts)
 	}
 }
 
@@ -67,6 +74,12 @@ func TestCheck_SameIdeaClose(t *testing.T) {
 	// The 14th is the first weekday a week after the 7th.
 	if len(f.Fixes) != 1 || f.Fixes[0].Kind != FixMovePost || f.Fixes[0].PostID != "b" || f.Fixes[0].To != "2026-12-14" {
 		t.Fatalf("fix = %+v", f.Fixes)
+	}
+	if f.Detail != "Mon 7 Dec and Wed 9 Dec; posts that come from the same idea go out at least 7 days apart on one platform." {
+		t.Fatalf("detail = %q", f.Detail)
+	}
+	if len(f.Posts) != 2 || f.Posts[0].Title != "A" || f.Posts[1].Title != "B" {
+		t.Fatalf("posts = %+v", f.Posts)
 	}
 	if n := len(slices.DeleteFunc(slices.Clone(got), func(f Finding) bool { return f.Code != CodeSameIdea })); n != 1 {
 		t.Fatalf("%d same-idea findings, want 1", n)
@@ -137,8 +150,11 @@ func TestCheck_Goal(t *testing.T) {
 	if fx := short[2].Fixes[0]; fx.From != "2026-12-29" || fx.To != "2026-12-31" || fx.Count != 1 {
 		t.Fatalf("week 5 fix = %+v", fx)
 	}
-	if f := find(got, CodeGoalOver); f == nil || len(f.Fixes) != 0 {
+	if f := find(got, CodeGoalOver); f == nil || len(f.Fixes) != 0 || !strings.HasPrefix(f.Detail, "The goal is 2 a week. Fine to keep") {
 		t.Fatalf("over = %+v", f)
+	}
+	if short[0].Detail != "The goal is 2 a week." || short[0].BlocksPublishing {
+		t.Fatalf("short detail = %q", short[0].Detail)
 	}
 	if short[0].Key == short[1].Key {
 		t.Fatal("two periods share a key")
