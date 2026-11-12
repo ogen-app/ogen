@@ -25,6 +25,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
+	"github.com/ogen-app/ogen/src/genkit/flows/ideas_common"
 	"github.com/ogen-app/ogen/src/genkit/flows/more_like_these"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_quality"
@@ -499,6 +500,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	pd.Compare = asset_compare.New(g, provider, r.recorder)
 	pd.CheckBrand = brand_check.New(g, provider, r.recorder)
 	pd.MoreLike = more_like_these.New(g, provider, r.recorder)
+	pd.CommonThread = ideas_common.New(g, provider, r.recorder)
 	if pd.Compose != nil {
 		pd.Compose = pd.Compose.WithDrafter(ideaDrafter(r))
 	}

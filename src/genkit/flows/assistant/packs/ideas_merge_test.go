@@ -115,6 +115,30 @@ func TestMergeIdeas(t *testing.T) {
 	}
 }
 
+// Several groups merge in one call, each into its kept idea; an idea in two
+// groups is refused, and a group that fails after one merged stops the rest
+// and says why.
+func TestMergeIdeas_Groups(t *testing.T) {
+	d, repo := duplicateDeps()
+	ctx, _ := turn(t, workspace, nil)
+	_, err := mergeIdeas(ctx, d, MergeIdeasInput{Groups: []MergeGroup{{KeepID: "i3", MergeIDs: []string{"i1"}}, {KeepID: "i1", MergeIDs: []string{"i2"}}}})
+	refused(t, err)
+	_, err = mergeIdeas(ctx, d, MergeIdeasInput{})
+	refused(t, err)
+
+	out, err := mergeIdeas(ctx, d, MergeIdeasInput{Groups: []MergeGroup{{KeepID: "i3", MergeIDs: []string{"i1"}}, {KeepID: "i4", MergeIDs: []string{"i5"}}}})
+	if err != nil || len(out.Groups) != 2 || out.Groups[1].Idea.ID != "i4" || !slices.Equal(out.Groups[1].Deleted, []string{"i5"}) ||
+		out.Idea.ID != "i3" || out.Stopped != "" || repo.byID["i1"] != nil || repo.byID["i5"] != nil {
+		t.Fatalf("merge = %+v, %v", out, err)
+	}
+
+	d, _ = duplicateDeps()
+	out, err = mergeIdeas(ctx, d, MergeIdeasInput{KeepID: "i3", MergeIDs: []string{"i1"}, Groups: []MergeGroup{{KeepID: "i4", MergeIDs: []string{"gone"}}}})
+	if err != nil || len(out.Groups) != 1 || out.Stopped == "" {
+		t.Fatalf("merge stopped part way = %+v, %v", out, err)
+	}
+}
+
 type memProposals struct{ got []assistantkit.Proposal }
 
 func (s *memProposals) Propose(_ context.Context, p assistantkit.Proposal) (string, error) {
@@ -144,5 +168,10 @@ func TestMergeIdeas_AlwaysProposed(t *testing.T) {
 	}
 	if _, err := tool.RunRaw(ctx, map[string]any{"keepId": "i3", "mergeIds": []any{"i4"}}); err != nil || len(sink.got) != 1 {
 		t.Fatalf("a cross-campaign merge was offered: %v, %d", err, len(sink.got))
+	}
+	// Two groups are one offer.
+	groups := []any{map[string]any{"keepId": "i3", "mergeIds": []any{"i1"}}, map[string]any{"keepId": "i4", "mergeIds": []any{"i5"}}}
+	if _, err := tool.RunRaw(ctx, map[string]any{"groups": groups}); err != nil || len(sink.got) != 2 || sink.got[1].Summary != "Merge 2 groups: 4 ideas into 2" {
+		t.Fatalf("groups offer = %v, %+v", err, sink.got)
 	}
 }

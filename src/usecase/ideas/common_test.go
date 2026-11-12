@@ -42,4 +42,16 @@ func TestInCommon(t *testing.T) {
 	if !slices.Equal(c.Terms[0].IdeaIDs, []string{"i1", "i2", "i3"}) || !slices.Equal(c.Assets[1].IdeaIDs, []string{"i2", "i3"}) {
 		t.Fatalf("ideas sharing = %+v / %+v", c.Terms[0], c.Assets[1])
 	}
+	// One platform among the ideas that have one is no split; nor is a
+	// campaign held by some ideas while the rest have none.
+	if len(c.Splits) != 0 {
+		t.Fatalf("splits = %+v; want none", c.Splits)
+	}
+
+	list[2].Plan.PlatformID, list[2].Plan.PostType = new("instagram"), new("carousel")
+	c = InCommon(list)
+	if len(c.Splits) != 1 || c.Splits[0].Field != FieldPlatform || !slices.Equal(values(c.Splits[0].Values), []string{"linkedin", "instagram"}) ||
+		!slices.Equal(c.Splits[0].Values[1].IdeaIDs, []string{"i3"}) {
+		t.Fatalf("splits = %+v", c.Splits)
+	}
 }

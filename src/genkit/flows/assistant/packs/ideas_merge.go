@@ -27,12 +27,28 @@ func defineMergeTools(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		"Merges ideas into one kept idea: it gains their assets and notes, and they are deleted. Always offered for the user to confirm first.",
 		assistantkit.Gated("mergeIdeas", assistantkit.Gate[MergeIdeasInput]{
 			Precheck: func(ctx context.Context, in MergeIdeasInput) error {
-				_, err := d.Ideas.CheckMerge(ctx, in.KeepID, in.MergeIDs)
-				return mergeErr(err)
+				groups, err := mergeGroups(in)
+				if err != nil {
+					return err
+				}
+				for _, g := range groups {
+					if _, err := d.Ideas.CheckMerge(ctx, g.KeepID, g.MergeIDs); err != nil {
+						return mergeErr(err)
+					}
+				}
+				return nil
 			},
 			Describe: func(ctx context.Context, in MergeIdeasInput) string {
-				n := len(dedupe(in.MergeIDs)) + 1
-				if keep, err := d.Ideas.Get(ctx, in.KeepID); err == nil {
+				groups, _ := mergeGroups(in)
+				if len(groups) != 1 {
+					n := 0
+					for _, g := range groups {
+						n += len(g.MergeIDs) + 1
+					}
+					return fmt.Sprintf("Merge %d groups: %d ideas into %d", len(groups), n, len(groups))
+				}
+				n := len(groups[0].MergeIDs) + 1
+				if keep, err := d.Ideas.Get(ctx, groups[0].KeepID); err == nil {
 					return fmt.Sprintf("Merge %d ideas into “%s”", n, keep.Title)
 				}
 				return fmt.Sprintf("Merge %d ideas into one", n)
@@ -44,7 +60,7 @@ func defineMergeTools(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		spec(ideasPackName, find, assistantkit.TierRead,
 			`Call this when the user asks about duplicate, repeated or overlapping ideas — "do I have the same idea twice?", "clean up my ideas". It compares open ideas (not turned down, not made into a post) of this thread's campaign, or the workspace-wide ideas outside a campaign. Each group's keepId is the suggested idea to keep; offer mergeIdeas for the groups the user wants merged.`),
 		spec(ideasPackName, merge, assistantkit.TierProposal,
-			`Call this to merge duplicate ideas — "merge these", "keep the first one". keepId is the idea to keep (default the group's keepId from findDuplicateIdeas); mergeIds are the others (1 to 50). They must share a campaign and none may have been made into a post. Always offered first; the merged ideas are deleted and it can't be undone.`),
+			`Call this to merge duplicate ideas — "merge these", "keep the first one", "merge both pairs". keepId is the idea to keep (default the group's keepId from findDuplicateIdeas); mergeIds are the others (1 to 50). To merge several groups at once — "merge them all" after findDuplicateIdeas — pass groups instead, one {keepId, mergeIds} per group, in one call so the user confirms them together. Each group's ideas must share a campaign and none may have been made into a post. Always offered first; the merged ideas are deleted and it can't be undone.`),
 	}
 }
 
@@ -96,27 +112,84 @@ func findDuplicateIdeas(ctx context.Context, d Deps, in FindDuplicateIdeasInput)
 	return out, nil
 }
 
-// MergeIdeasInput merges ideas into one.
+// MergeIdeasInput merges ideas into one, or each group of them into one.
 type MergeIdeasInput struct {
-	KeepID   string   `json:"keepId"   jsonschema:"description=The idea to keep"`
-	MergeIDs []string `json:"mergeIds" jsonschema:"description=The ideas to merge into it and delete; 1 to 50"`
+	KeepID   string       `json:"keepId,omitempty"   jsonschema:"description=The idea to keep"`
+	MergeIDs []string     `json:"mergeIds,omitempty" jsonschema:"description=The ideas to merge into it and delete; 1 to 50"`
+	Groups   []MergeGroup `json:"groups,omitempty"   jsonschema:"description=Several merges at once, instead of keepId and mergeIds; at most 20"`
 }
 
-// MergeIdeasOutput is the kept idea and the ideas merged away.
+// MergeGroup is one merge: the idea kept and the ideas merged into it.
+type MergeGroup struct {
+	KeepID   string   `json:"keepId"`
+	MergeIDs []string `json:"mergeIds"`
+}
+
+// mergeGroups is in as its groups: keepId and mergeIds first, then groups.
+// An idea may be in one group only, kept or merged.
+func mergeGroups(in MergeIdeasInput) ([]MergeGroup, error) {
+	var groups []MergeGroup
+	if in.KeepID != "" || len(in.MergeIDs) > 0 {
+		groups = append(groups, MergeGroup{KeepID: in.KeepID, MergeIDs: in.MergeIDs})
+	}
+	groups = append(groups, in.Groups...)
+	switch {
+	case len(groups) == 0:
+		return nil, assistantkit.Refused("which ideas? pass keepId and mergeIds, or groups")
+	case len(groups) > maxDuplicateGroups:
+		return nil, assistantkit.Refused(fmt.Sprintf("at most %d groups at once", maxDuplicateGroups))
+	}
+	seen := map[string]bool{}
+	for _, g := range groups {
+		for _, id := range append([]string{g.KeepID}, dedupe(g.MergeIDs)...) {
+			if seen[id] {
+				return nil, assistantkit.Refused("an idea can be in one merge only; " + id + " is in two")
+			}
+			seen[id] = true
+		}
+	}
+	return groups, nil
+}
+
+// MergeIdeasOutput is each kept idea and the ideas merged into it. Idea and
+// Deleted are the first group's, for a call that merged one group.
 type MergeIdeasOutput struct {
+	Idea    IdeaRef       `json:"idea"`
+	Deleted []string      `json:"deleted"`
+	Groups  []MergedGroup `json:"groups"`
+	// Stopped is why the merges stopped part way; the groups after it were
+	// not merged.
+	Stopped string `json:"stopped,omitempty"`
+}
+
+// MergedGroup is one merge done.
+type MergedGroup struct {
 	Idea    IdeaRef  `json:"idea"`
 	Deleted []string `json:"deleted"`
 }
 
 func mergeIdeas(ctx context.Context, d Deps, in MergeIdeasInput) (*MergeIdeasOutput, error) {
-	res, err := d.Ideas.Merge(ctx, in.KeepID, in.MergeIDs)
+	groups, err := mergeGroups(in)
 	if err != nil {
-		return nil, mergeErr(err)
+		return nil, err
+	}
+	out := &MergeIdeasOutput{Groups: []MergedGroup{}}
+	for _, g := range groups {
+		res, err := d.Ideas.Merge(ctx, g.KeepID, g.MergeIDs)
+		if err != nil {
+			if len(out.Groups) == 0 {
+				return nil, mergeErr(err)
+			}
+			out.Stopped = "stopped early: " + mergeErr(err).Error()
+			break
+		}
+		// Other sessions showing a merged idea learn it is gone.
+		ideas.PublishDeleted(ctx, d.Hub, res.Deleted)
+		out.Groups = append(out.Groups, MergedGroup{Idea: ideaRef(*res.Idea), Deleted: res.Deleted})
 	}
 	assistantkit.Touch(ctx, "idea", "")
-	// Other sessions showing a merged idea learn it is gone.
-	ideas.PublishDeleted(ctx, d.Hub, res.Deleted)
-	return &MergeIdeasOutput{Idea: ideaRef(*res.Idea), Deleted: res.Deleted}, nil
+	out.Idea, out.Deleted = out.Groups[0].Idea, out.Groups[0].Deleted
+	return out, nil
 }
 
 // mergeErr turns a merge's input errors into refusals.

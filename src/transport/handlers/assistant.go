@@ -114,7 +114,7 @@ type assistantTurnRequest struct {
 // @Description  by,byId,source}],more,note}; setAutoPublish {done,autoPublish,undoId}; openConnect {done,note}.
 // @Description  The ideas pack's, where an idea is {id,title,verdict,remindAt,origin,campaignId,fitScore,plan,posts} (remindAt: when a
 // @Description  later idea comes back; once past, it is woken and counts as undecided though its verdict stays later) and grounding
-// @Description  {mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total}; setIdeaVerdict {idea,undoId};
+// @Description  {mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total,pileTotal (the filter's pile with no other filter; absent without a pile)}; setIdeaVerdict {idea,undoId};
 // @Description  setIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,ideas,verdict,remindAt,undoId}: ideas are the ideas a
 // @Description  triage or move changed, as they are now (none for a delete); verdict (yes|later|no|none), remindAt and undoId are a triage's;
 // @Description  compileIdeas {postId,title,status,campaignId,platformId,postType,date,posts,ideas,builtFrom,theses,grounding,undoId} (posts: each
@@ -123,10 +123,13 @@ type assistantTurnRequest struct {
 // @Description  {posts[{postId,title,platformId,publishDate (none when unscheduled),excerpt,campaignId,ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
 // @Description  rationale,sources,fit{score,lens,campaignId,criteria[{key,question,weight,level,means,why,phase,campaign}],
 // @Description  caps[{cap,meaning}]},sourceAsset{id,title},analysis{id,lens,gist,summary},posts,author,createdAt,explain};
-// @Description  ideasInCommon {ideas[{id,title,angle}],missing,assets,campaigns,origins,lenses,platforms,postTypes,phases,
-// @Description  terms}, each [{value,label,ideaIds}]; editIdea {idea,note,before{title,note,plan},changed,undoId}; similarIdeas {ideaId,title,
+// @Description  ideasInCommon {ideas[{id,title,angle}],missing,theme,angle,assets,campaigns,origins,lenses,platforms,postTypes,phases,
+// @Description  terms,splits}, each list [{value,label,ideaIds}]; theme (a few words) and angle (a sentence) word the thread they share,
+// @Description  absent when none could be worded; lenses are the analysis lens each idea was read and scored in ("workspace" or a campaign);
+// @Description  splits [{field: campaign|lens|platform|postType|phase, values[{value,label,ideaIds}]}] are where they differ; editIdea {idea,note,before{title,note,plan},changed,undoId}; similarIdeas {ideaId,title,
 // @Description  similar[{idea,score,why}]}; findDuplicateIdeas {groups[{keepId,similarity,ideas}],total,truncated};
-// @Description  mergeIdeas {idea,deleted}.
+// @Description  mergeIdeas {idea,deleted,groups[{idea,deleted}],stopped} (one per group merged; idea and deleted are the first's;
+// @Description  stopped says why later groups weren't merged).
 // @Description  Plus "unsaved": true when the turn ran but could not be stored in the thread. "error"
 // @Description  carries {"message":"...","code":<http_code>} and ends the stream.
 // @Description  Offers: runContentPlan, redistributePosts, updateCampaignPlatforms, moveIdeas, deleteIdeas, schedulePost,
