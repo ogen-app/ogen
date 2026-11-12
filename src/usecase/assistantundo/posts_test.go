@@ -85,3 +85,52 @@ func TestUndo_PostTypes(t *testing.T) {
 		t.Fatalf("a = %s %s", p.PlatformPostType, p.Status)
 	}
 }
+
+// Undoing a rewrite puts the old copy and status back as the newest version,
+// but not over a later edit.
+func TestUndo_PostRewritten(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, nil)
+	posts := repository.NewPostRepository(f.db)
+	versions := repository.NewPostVersionRepository(f.db)
+	svc := assistantundo.New(f.db, f.actions, f.campaigns).WithPosts(posts)
+	undoPost(t, f, posts, "a", nil, models.PostStatusPlanned, "")
+	before, _ := posts.GetByID(f.ctx, "a")
+	rewrite := func(content string) *models.Post {
+		p, _ := posts.GetByID(f.ctx, "a")
+		p.Content, p.Status = content, models.PostStatusDraft
+		if err := posts.Update(f.ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		vid, _ := models.NewID()
+		if err := versions.CreateNext(f.ctx, &models.PostVersion{ID: vid, PostID: "a", Content: content, Creator: models.PostVersionCreatorAssistant}); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	log := func(after *models.Post) string {
+		id, err := assistantundo.Record(f.ctx, f.actions, &models.AssistantAction{ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1",
+			Kind: models.AssistantActionPostRewritten, EntityID: "a", Before: assistantundo.PostContent(before),
+			After: assistantundo.PostContent(after), CreatedBy: "user-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	stale := log(rewrite("Rewritten"))
+	rewrite("Edited by hand")
+	if _, err := svc.Undo(f.ctx, stale, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+		t.Fatalf("undo over a later edit = %v", err)
+	}
+
+	if _, err := svc.Undo(f.ctx, log(rewrite("Rewritten again")), "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := posts.GetByID(f.ctx, "a"); p.Content != before.Content || p.Status != models.PostStatusPlanned {
+		t.Fatalf("a = %q %s", p.Content, p.Status)
+	}
+	if v, err := versions.GetLatestByPostID(f.ctx, "a"); err != nil || v.Content != before.Content || v.VersionNumber != 4 || v.Note != "Rewrite undone" {
+		t.Fatalf("latest version = %+v, %v", v, err)
+	}
+}

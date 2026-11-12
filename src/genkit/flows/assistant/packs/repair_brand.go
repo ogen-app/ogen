@@ -3,7 +3,9 @@ package packs
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_check"
+	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
@@ -25,21 +28,43 @@ type CheckBrandInput struct {
 	CampaignID string   `json:"campaignId,omitempty" jsonschema:"description=Check this campaign's unpublished posts"`
 }
 
-// BrandFinding is a way a post breaks the brand, with its fix.
+// BrandFinding is a way a post breaks the brand, with its fixes: rewriting
+// the post, while its copy isn't locked, and opening it.
 type BrandFinding struct {
 	brand_check.Finding
-	// CampaignID is the post's campaign, which opening it needs.
-	CampaignID string   `json:"campaignId"`
-	Title      string   `json:"title,omitempty"`
-	Fix        FixOffer `json:"fix"`
+	// Key dismisses the finding, in the post's campaign, while the post
+	// stays the same.
+	Key string `json:"key"`
+	// CampaignID is the post's campaign, which opening it and dismissing
+	// the finding need.
+	CampaignID string     `json:"campaignId"`
+	Title      string     `json:"title,omitempty"`
+	Fixes      []FixOffer `json:"fixes"`
 }
 
-// CheckBrandOutput is what the check found. Left counts the posts past the
-// cap that weren't read.
+// BrandRef names a voice the posts were checked against.
+type BrandRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// CheckedAgainst is the brand the posts were read against: the voices they
+// are written in and whether there were guardrails.
+type CheckedAgainst struct {
+	Voices     []BrandRef `json:"voices"`
+	Guardrails bool       `json:"guardrails"`
+}
+
+// CheckBrandOutput is what the check found. Clean counts the posts checked
+// with no finding left; Left the posts past the cap that weren't read.
 type CheckBrandOutput struct {
-	Checked  int            `json:"checked"`
-	Left     int            `json:"left,omitzero"`
-	Findings []BrandFinding `json:"findings"`
+	Checked        int            `json:"checked"`
+	Clean          int            `json:"clean"`
+	Left           int            `json:"left,omitzero"`
+	CheckedAgainst CheckedAgainst `json:"checkedAgainst"`
+	Findings       []BrandFinding `json:"findings"`
+	// Dismissed counts findings left out because the user dismissed them.
+	Dismissed int `json:"dismissed,omitzero"`
 }
 
 // postsToCheck are the posts named, else the thread's post, else the
@@ -85,7 +110,7 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 	if err != nil {
 		return nil, err
 	}
-	out := &CheckBrandOutput{Left: left, Findings: []BrandFinding{}}
+	out := &CheckBrandOutput{Left: left, Findings: []BrandFinding{}, CheckedAgainst: CheckedAgainst{Voices: []BrandRef{}}}
 	if len(posts) == 0 {
 		return out, nil
 	}
@@ -93,7 +118,7 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 	ctx = brandresolve.WithMemo(ctx)
 	groups := map[string]*brand_check.Group{}
 	var order []string
-	titles, campaignIDs := map[string]string{}, map[string]string{}
+	byID := map[string]*models.Post{}
 	campaigns := map[string]*models.Campaign{}
 	for _, p := range posts {
 		c, ok := campaigns[p.CampaignID]
@@ -107,6 +132,10 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 		if err != nil {
 			return nil, err
 		}
+		if v := r.Voice; v != nil && !slices.ContainsFunc(out.CheckedAgainst.Voices, func(b BrandRef) bool { return b.ID == v.ID }) {
+			out.CheckedAgainst.Voices = append(out.CheckedAgainst.Voices, BrandRef{ID: v.ID, Name: v.Name})
+		}
+		out.CheckedAgainst.Guardrails = out.CheckedAgainst.Guardrails || r.Guardrails != nil
 		block := r.PromptBlock(p.PlatformID)
 		g, ok := groups[block]
 		if !ok {
@@ -122,7 +151,7 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 			platform = cmp.Or(p.Platform.Name, platform)
 		}
 		g.Posts = append(g.Posts, brand_check.Post{ID: p.ID, Platform: platform, Text: p.Content})
-		titles[p.ID], campaignIDs[p.ID] = p.Title, p.CampaignID
+		byID[p.ID] = &p
 	}
 	req := brand_check.Request{}
 	for _, b := range order {
@@ -133,12 +162,61 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 		return nil, assistantkit.Refused("couldn't check the posts: " + err.Error())
 	}
 	out.Checked = res.Checked
+	dismissed := map[string]map[string]bool{}
+	flagged := map[string]bool{}
 	for _, f := range res.Findings {
-		out.Findings = append(out.Findings, BrandFinding{Finding: f, CampaignID: campaignIDs[f.PostID], Title: titles[f.PostID],
-			Fix: FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixOpenPost, Title: "Open the post", PostID: f.PostID}}})
+		p, ok := byID[f.PostID]
+		if !ok {
+			continue
+		}
+		if _, ok := dismissed[p.CampaignID]; !ok {
+			if dismissed[p.CampaignID], err = d.dismissedKeys(ctx, p.CampaignID); err != nil {
+				return nil, err
+			}
+		}
+		bf := BrandFinding{Finding: f, Key: brandFindingKey(p, f), CampaignID: p.CampaignID, Title: p.Title}
+		if dismissed[p.CampaignID][bf.Key] {
+			out.Dismissed++
+			continue
+		}
+		if bf.Fixes, err = brandFixes(ctx, d, p, f); err != nil {
+			return nil, err
+		}
+		flagged[p.ID] = true
+		out.Findings = append(out.Findings, bf)
 	}
+	out.Clean = max(out.Checked-len(flagged), 0)
 	slices.SortStableFunc(out.Findings, func(a, b BrandFinding) int { return cmp.Compare(severityRank(a.Severity), severityRank(b.Severity)) })
 	return out, nil
+}
+
+// brandFindingKey keys a finding by its post's text, so it holds while the
+// post stays the same.
+func brandFindingKey(p *models.Post, f brand_check.Finding) string {
+	h := sha256.New()
+	for _, s := range []string{p.CampaignID, p.ID, f.Rule, f.Quote, f.Issue, p.Title + "\x00" + p.Content} {
+		h.Write([]byte(s + "|"))
+	}
+	return "brand_" + f.Rule + ":" + hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+// brandFixes offers to rewrite the post to fix the finding, while its copy
+// isn't locked and the writer is here, and to open it.
+func brandFixes(ctx context.Context, d Deps, p *models.Post, f brand_check.Finding) ([]FixOffer, error) {
+	var out []FixOffer
+	if d.Revise != nil && !p.Status.IsSubmitted() {
+		instruction := "Bring the post in line with the brand. The issue: " + f.Issue
+		if f.Suggestion != "" {
+			instruction += " Fix it this way: " + f.Suggestion
+		}
+		id, err := assistantkit.Offer(ctx, assistantkit.Proposal{Tool: "revisePost",
+			Args: RevisePostInput{CampaignID: p.CampaignID, PostID: p.ID, Instruction: instruction}, Summary: "Rewrite it to follow the brand"})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixKind(consistency.FixRevisePost), Title: "Rewrite it to follow the brand", PostID: p.ID}, ProposalID: id})
+	}
+	return append(out, FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixOpenPost, Title: "Open the post", PostID: p.ID}}), nil
 }
 
 func severityRank(s string) int {

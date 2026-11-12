@@ -12,7 +12,62 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 )
+
+// postContent is a post's copy as a rewrite found and left it.
+type postContent struct {
+	Content string            `json:"content"`
+	Status  models.PostStatus `json:"status"`
+}
+
+// PostContent is a post's copy and status for the undo log of a rewrite.
+func PostContent(p *models.Post) models.JSONMap {
+	return toMap(postContent{Content: p.Content, Status: p.Status})
+}
+
+type postRewrite struct{}
+
+// Undo puts back the copy a rewrite replaced, and its status, while the post
+// still holds the rewrite, and saves it as the newest version so the post's
+// history follows. The post's row is locked first.
+func (postRewrite) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	var before, after postContent
+	if err := fromMap(a.Before, &before); err != nil {
+		return err
+	}
+	if err := fromMap(a.After, &after); err != nil {
+		return err
+	}
+	var p models.Post
+	err := tx.NewSelect().Model(&p).Where("po.id = ?", a.EntityID).For("UPDATE OF po").Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrChangedSince
+	}
+	if err != nil {
+		return err
+	}
+	if p.Content != after.Content || p.Status != after.Status {
+		return ErrChangedSince
+	}
+	p.Content, p.Status, p.UpdatedAt = before.Content, before.Status, time.Now().UTC()
+	if _, err := tx.NewUpdate().Model(&p).Column("content", "status", "updated_at").WherePK().Exec(ctx); err != nil {
+		return err
+	}
+	var latest int
+	if err := tx.NewSelect().Model((*models.PostVersion)(nil)).ColumnExpr("COALESCE(MAX(pv.version_number), 0)").
+		Where("pv.post_id = ?", p.ID).Scan(ctx, &latest); err != nil {
+		return err
+	}
+	id, err := models.NewID()
+	if err != nil {
+		return err
+	}
+	by, _ := logging.UserIDFrom(ctx)
+	_, err = tx.NewInsert().Model(&models.PostVersion{ID: id, PostID: p.ID, VersionNumber: latest + 1, Content: before.Content,
+		Note: "Rewrite undone", Creator: models.PostVersionCreatorUser, CreatedBy: by}).Exec(ctx)
+	return err
+}
 
 // PostState is the part of a post a fix changed: its date, or its post type
 // and status.
@@ -46,12 +101,13 @@ func beforeAfter(a *models.AssistantAction) (before, after []PostState, err erro
 	return b.Posts, f.Posts, nil
 }
 
-// WithPosts lets s undo posts taken off the calendar, posts changed to
-// another post type, and posts made from ideas.
+// WithPosts lets s undo posts taken off the calendar, rewritten or changed
+// to another post type, and posts made from ideas.
 func (s *Service) WithPosts(posts repository.PostRepository) *Service {
 	s.undoers[models.AssistantActionPostSchedules] = postSchedules{posts}
 	s.undoers[models.AssistantActionPostTypes] = postTypes{posts}
 	s.undoers[models.AssistantActionPostCreated] = postCreated{posts}
+	s.undoers[models.AssistantActionPostRewritten] = postRewrite{}
 	return s
 }
 
