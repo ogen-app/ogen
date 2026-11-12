@@ -11,10 +11,10 @@ import (
 // at zero in the first has no percentage.
 func TestCompareCards(t *testing.T) {
 	got := compareCards(
-		[]overview.Card{{Metric: "reach", Label: "Cumulative reach", Value: 1000}, {Metric: "posts_published", Value: 0}, {Metric: "followers", Value: 50}},
-		[]overview.Card{{Metric: "followers", Value: 60}, {Metric: "reach", Value: 1250}, {Metric: "posts_published", Value: 4}},
+		[]overview.Card{{Metric: "reach", Label: "Cumulative reach", Value: 1000}, {Metric: "posts_published", Value: 0}, {Metric: "followers", Value: 50}, {Metric: "engagement_rate", Value: 3.6}},
+		[]overview.Card{{Metric: "followers", Value: 60}, {Metric: "reach", Value: 1250}, {Metric: "posts_published", Value: 4}, {Metric: "engagement_rate", Value: 4.2}},
 	)
-	if len(got) != 3 || got[0].Metric != "reach" || got[0].Change != 250 || got[0].ChangePct == nil || *got[0].ChangePct != 25 {
+	if len(got) != 4 || got[0].Metric != "reach" || got[0].Unit != UnitCount || got[0].Change != 250 || got[0].ChangePct == nil || *got[0].ChangePct != 25 {
 		t.Fatalf("reach = %+v", got)
 	}
 	if got[1].ChangePct != nil || got[1].Change != 4 {
@@ -22,6 +22,10 @@ func TestCompareCards(t *testing.T) {
 	}
 	if *got[2].ChangePct != 20 {
 		t.Fatalf("followers = %+v", got[2])
+	}
+	// A rate's change is in points.
+	if got[3].Unit != UnitRate || got[3].Change != 0.6 {
+		t.Fatalf("rate = %+v", got[3])
 	}
 }
 

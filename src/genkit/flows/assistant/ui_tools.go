@@ -55,6 +55,12 @@ type UIAction struct {
 	// Window replaces an analytics screen's window: its dates, platforms
 	// and campaign.
 	Window *viewcontext.Window `json:"window,omitempty"`
+	// Before is the window a set_window replaced, for its before → after
+	// rows; nil when the screen had none.
+	Before *viewcontext.Window `json:"before,omitempty"`
+	// Changed names what a set_window changed, of viewcontext's
+	// WindowPeriod, WindowPlatforms and WindowCampaign.
+	Changed []string `json:"changed,omitempty"`
 	// Connect opens the settings screen's connect flow for one platform, or
 	// the reconnect flow for one account. The client runs the flow.
 	Connect *UIConnect `json:"connect,omitempty"`

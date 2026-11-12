@@ -43,6 +43,16 @@ func TestAnalyticsOverview_CitesTheWindow(t *testing.T) {
 	if out, err = analyticsOverview(ctx, d, AnalyticsQuery{CampaignID: "all"}); err != nil || out.Applied.Campaign != nil {
 		t.Fatalf("all = %+v, %v", out, err)
 	}
+	// Dates picked by hand have no preset; a span, or none at all, does.
+	if a.Preset != "" {
+		t.Fatalf("dates preset = %q", a.Preset)
+	}
+	if out, err = analyticsOverview(ctx, d, AnalyticsQuery{Window: "12w"}); err != nil || out.Applied.Preset != "12w" {
+		t.Fatalf("span = %+v, %v", out, err)
+	}
+	if out, err = analyticsOverview(analyticsTurn(t, nil), d, AnalyticsQuery{}); err != nil || out.Applied.Preset != defaultPreset {
+		t.Fatalf("default = %+v, %v", out, err)
+	}
 }
 
 // A live insight read takes the screen's platform when it shows one, refuses

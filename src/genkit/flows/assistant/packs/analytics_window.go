@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,7 +32,9 @@ type SetWindowInput struct {
 type SetWindowOutput struct {
 	Done    string  `json:"done"`
 	Applied Applied `json:"applied"`
-	Note    string  `json:"note"`
+	// Changed names what the call changed: period, platforms, campaign.
+	Changed []string `json:"changed"`
+	Note    string   `json:"note"`
 }
 
 func setWindowSpec(g *genkit.Genkit, d Deps) assistantkit.Spec {
@@ -47,8 +50,10 @@ func setWindowSpec(g *genkit.Genkit, d Deps) assistantkit.Spec {
 
 func setAnalyticsWindow(ctx context.Context, d Deps, in SetWindowInput) (*SetWindowOutput, error) {
 	var sc *analytics.Scope
+	var changed []string
 	screen, w, err := assistant.SetWindow(ctx, func(cur *viewcontext.Window) (viewcontext.Window, error) {
 		w, err := mergeWindow(cur, in)
+		changed = w.Changes(cur)
 		if err != nil {
 			return w, err
 		}
@@ -63,12 +68,16 @@ func setAnalyticsWindow(ctx context.Context, d Deps, in SetWindowInput) (*SetWin
 	if err != nil {
 		return nil, err
 	}
-	a := Applied{From: w.From, To: w.To, Platforms: sc.Platforms()}
+	a := Applied{From: w.From, To: w.To, Platforms: sc.Platforms(), Preset: w.Preset}
 	if id := sc.Campaign(); id != "" {
 		a.Campaign = &AppliedCampaign{ID: id, Name: sc.CampaignName()}
 	}
-	return &SetWindowOutput{Done: "showing " + describeWindow(a) + " on " + string(screen), Applied: a,
-		Note: "The user's screen changes when your reply arrives; describe it as done."}, nil
+	done := string(screen) + " already shows " + describeWindow(a, nil)
+	if len(changed) > 0 {
+		done = "set " + string(screen) + " to " + describeWindow(a, changed)
+	}
+	return &SetWindowOutput{Done: done, Applied: a, Changed: changed,
+		Note: "The user's screen changes when your reply arrives; describe it as done, naming only what changed."}, nil
 }
 
 // mergeWindow is cur with what in sets: its dates, its platforms ("all"
@@ -87,6 +96,12 @@ func mergeWindow(cur *viewcontext.Window, in SetWindowInput) (viewcontext.Window
 			return w, assistantkit.Refused("the window is a relative span like 28d, or from and to dates")
 		}
 		w.From, w.To = rng.From.Format(time.DateOnly), rng.To.AddDate(0, 0, -1).Format(time.DateOnly)
+		// Dates picked by hand have no span; a window keeps its own, so the
+		// picker shows it as a preset.
+		w.Preset = ""
+		if in.From == "" && in.To == "" {
+			w.Preset = in.Window
+		}
 	}
 	switch {
 	case len(in.Platforms) == 1 && strings.EqualFold(in.Platforms[0], "all"):
@@ -106,18 +121,30 @@ func mergeWindow(cur *viewcontext.Window, in SetWindowInput) (viewcontext.Window
 	return w, nil
 }
 
-// describeWindow says a window in words.
-func describeWindow(a Applied) string {
-	parts := []string{"every platform"}
-	if len(a.Platforms) > 0 {
-		parts[0] = strings.Join(a.Platforms, ", ")
-	}
-	if a.From != "" || a.To != "" {
+// describeWindow says a window in words: only the parts in changed, or
+// every part when changed is nil.
+func describeWindow(a Applied, changed []string) string {
+	says := func(part string) bool { return changed == nil || slices.Contains(changed, part) }
+	var parts []string
+	switch {
+	case !says(viewcontext.WindowPeriod):
+	case a.Preset != "":
+		parts = append(parts, "the last "+a.Preset)
+	case a.From != "" || a.To != "":
 		parts = append(parts, fmt.Sprintf("%s to %s", a.From, a.To))
 	}
-	if a.Campaign != nil {
+	switch {
+	case !says(viewcontext.WindowPlatforms):
+	case len(a.Platforms) > 0:
+		parts = append(parts, strings.Join(a.Platforms, ", "))
+	default:
+		parts = append(parts, "every platform")
+	}
+	switch {
+	case !says(viewcontext.WindowCampaign):
+	case a.Campaign != nil:
 		parts = append(parts, fmt.Sprintf("campaign %q", a.Campaign.Name))
-	} else {
+	default:
 		parts = append(parts, "the whole workspace")
 	}
 	return strings.Join(parts, ", ")

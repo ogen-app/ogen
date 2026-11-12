@@ -303,6 +303,16 @@ func TestSetWindowAndSelected(t *testing.T) {
 	if len(ui) != 2 || ui[1].Type != UISetWindow || ui[1].Window.To != "2026-03-31" || Window(ctx).From != "2026-03-01" {
 		t.Fatalf("ui = %+v", ui)
 	}
+	// It says what it replaced, none at first, and what changed.
+	if ui[1].Before != nil || !slices.Equal(ui[1].Changed, []string{viewcontext.WindowPeriod}) {
+		t.Fatalf("first = %+v", ui[1])
+	}
+	if _, _, err := SetWindow(ctx, to(viewcontext.Window{From: "2026-03-01", To: "2026-03-31", Platforms: []string{"linkedin"}})); err != nil {
+		t.Fatal(err)
+	}
+	if next := st.uiActions()[2]; next.Before == nil || next.Before.To != "2026-03-31" || !slices.Equal(next.Changed, []string{viewcontext.WindowPlatforms}) {
+		t.Fatalf("second = %+v", next)
+	}
 	if got := Selected(ctx, viewcontext.KindPost); len(got) != 2 || Selected(ctx, viewcontext.KindIdea) != nil {
 		t.Fatalf("selected = %v", got)
 	}

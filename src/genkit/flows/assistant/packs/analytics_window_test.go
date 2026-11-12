@@ -2,6 +2,7 @@ package packs
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -25,6 +26,10 @@ func TestSetAnalyticsWindow(t *testing.T) {
 	if out.Applied.From != "2026-10-01" || out.Applied.Platforms[0] != "linkedin" || out.Applied.Campaign.Name != "Spring" {
 		t.Fatalf("out = %+v", out)
 	}
+	// It names only what changed; the period stayed.
+	if !slices.Equal(out.Changed, []string{viewcontext.WindowPlatforms, viewcontext.WindowCampaign}) || out.Done != `set analytics to linkedin, campaign "Spring"` {
+		t.Fatalf("changed %v, done %q", out.Changed, out.Done)
+	}
 	if w := assistant.Window(ctx); w.CampaignID != "c1" || w.Platforms[0] != "linkedin" || w.To != "2026-10-14" {
 		t.Fatalf("the turn reads %+v", w)
 	}
@@ -36,6 +41,21 @@ func TestSetAnalyticsWindow(t *testing.T) {
 	if out, err = setAnalyticsWindow(ctx, d, SetWindowInput{From: "2026-03-01", To: "2026-03-31", Platforms: []string{"all"}, CampaignID: "all"}); err != nil ||
 		out.Applied.Campaign != nil || len(out.Applied.Platforms) != 0 || out.Applied.To != "2026-03-31" {
 		t.Fatalf("widened = %+v, %v", out, err)
+	}
+	// A span keeps itself as the preset, which a later read cites; dates
+	// clear it.
+	if out, err = setAnalyticsWindow(ctx, d, SetWindowInput{Window: "90d"}); err != nil || out.Applied.Preset != "90d" ||
+		!slices.Equal(out.Changed, []string{viewcontext.WindowPeriod}) || out.Done != "set analytics to the last 90d" {
+		t.Fatalf("span = %+v, %v", out, err)
+	}
+	if over, err := analyticsOverview(ctx, d, AnalyticsQuery{}); err != nil || over.Applied.Preset != "90d" {
+		t.Fatalf("a later read = %+v, %v", over, err)
+	}
+	if out, err = setAnalyticsWindow(ctx, d, SetWindowInput{Window: "7d", From: "2026-05-01", To: "2026-05-31"}); err != nil || out.Applied.Preset != "" {
+		t.Fatalf("dates = %+v, %v", out, err)
+	}
+	if out, err = setAnalyticsWindow(ctx, d, SetWindowInput{From: "2026-05-01", To: "2026-05-31"}); err != nil || out.Changed != nil || out.Done == "" {
+		t.Fatalf("unchanged = %+v, %v", out, err)
 	}
 	_, err = setAnalyticsWindow(ctx, d, SetWindowInput{Platforms: []string{"myspace"}})
 	refused(t, err)

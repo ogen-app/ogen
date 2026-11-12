@@ -26,16 +26,36 @@ type ComparePeriodsInput struct {
 	CampaignID string   `json:"campaignId,omitempty" jsonschema:"description=Defaults to the campaign on screen, else the thread's; 'all' for the whole workspace"`
 }
 
+// The units of a compared metric.
+const (
+	// UnitCount is a count, e.g. reach or posts: its change reads in
+	// percent, or in the count itself.
+	UnitCount = "count"
+	// UnitRate is a percentage, e.g. engagement rate: its change reads in
+	// points, never in percent of itself.
+	UnitRate = "rate"
+)
+
 // MetricComparison is one metric over both periods.
 type MetricComparison struct {
 	Metric string  `json:"metric"`
 	Label  string  `json:"label"`
+	Unit   string  `json:"unit"`
 	First  float64 `json:"first"`
 	Second float64 `json:"second"`
-	// Change is second minus first; ChangePct is that against first, nil
-	// when first is zero.
+	// Change is second minus first, in points for a rate; ChangePct is that
+	// against first, nil when first is zero.
 	Change    float64  `json:"change"`
 	ChangePct *float64 `json:"changePct"`
+}
+
+// metricUnit is a compared metric's unit: engagement rate is a rate, the
+// rest counts.
+func metricUnit(metric string) string {
+	if metric == "engagement_rate" {
+		return UnitRate
+	}
+	return UnitCount
 }
 
 // ComparePeriodsOutput is both periods' figures side by side.
@@ -54,7 +74,7 @@ func comparePeriodsSpec(g *genkit.Genkit, d Deps) assistantkit.Spec {
 			return comparePeriods(ctx, d, in)
 		})), ai.WithStrictSchema(false))
 	return spec(analyticsPackName, tool, assistantkit.TierRead,
-		`Call this when the user compares two periods — "March vs April", "this month against last month", "how did Q3 compare with Q2?". Pass the earlier or named-first period as first. Quote the figures and changes as given; don't compute your own.`)
+		`Call this when the user compares two periods — "March vs April", "this month against last month", "how did Q3 compare with Q2?". Pass the earlier or named-first period as first. Quote the figures and changes as given; don't compute your own. A rate's change is in points (engagement rate up 0.6 points), never a percent of itself; a count's is a percent or the count.`)
 }
 
 func comparePeriods(ctx context.Context, d Deps, in ComparePeriodsInput) (*ComparePeriodsOutput, error) {
@@ -72,7 +92,7 @@ func comparePeriods(ctx context.Context, d Deps, in ComparePeriodsInput) (*Compa
 	if err != nil {
 		return nil, err
 	}
-	out := &ComparePeriodsOutput{First: windowApplied(rngA, sc, ""), Second: windowApplied(rngB, sc, ""), Metrics: []MetricComparison{}}
+	out := &ComparePeriodsOutput{First: appliedFor(ctx, query(in.First), rngA, sc, ""), Second: appliedFor(ctx, query(in.Second), rngB, sc, ""), Metrics: []MetricComparison{}}
 	a, reason, err := d.Analytics.Overview(ctx, rngA, sc)
 	if err != nil {
 		return nil, err
@@ -101,7 +121,8 @@ func compareCards(a, b []overview.Card) []MetricComparison {
 			if cb.Metric != ca.Metric {
 				continue
 			}
-			m := MetricComparison{Metric: ca.Metric, Label: ca.Label, First: ca.Value, Second: cb.Value, Change: cb.Value - ca.Value}
+			m := MetricComparison{Metric: ca.Metric, Label: ca.Label, Unit: metricUnit(ca.Metric), First: ca.Value, Second: cb.Value,
+				Change: math.Round((cb.Value-ca.Value)*100) / 100}
 			if ca.Value != 0 {
 				pct := math.Round(m.Change/ca.Value*1000) / 10
 				m.ChangePct = &pct

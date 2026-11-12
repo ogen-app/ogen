@@ -197,6 +197,9 @@ func renderView(p *prompts, v *viewresolve.Resolved, offers []models.AssistantPr
 	}
 	if w := v.View.Window; w != nil {
 		d.Window = cmp.Or(w.From, "…") + " to " + cmp.Or(w.To, "…")
+		if w.Preset != "" {
+			d.Window += " (the last " + w.Preset + ")"
+		}
 		if len(w.Platforms) > 0 {
 			d.Window += ", platforms " + strings.Join(w.Platforms, ", ")
 		}
