@@ -40,10 +40,10 @@ func draftDeps(failOn int) (Deps, *[]compose.DraftRequest) {
 // from, for the analysed idea; nothing for the one written by hand.
 func TestDraftIdeas_Grounding(t *testing.T) {
 	d, calls := draftDeps(0)
-	var events []DraftedIdeaPost
+	var events []IdeaDraftEvent
 	ctx, touched := turn(t, workspace, func(kind assistant.SSEEventKind, data any) {
 		if kind == "idea_draft_post" {
-			events = append(events, data.(DraftedIdeaPost))
+			events = append(events, data.(IdeaDraftEvent))
 		}
 	})
 	out, err := draftIdeas(ctx, d, DraftIdeasInput{IdeaIDs: []string{"i1", "i2"}})
@@ -60,6 +60,11 @@ func TestDraftIdeas_Grounding(t *testing.T) {
 	}
 	if second.Grounding.Mode != assistantkit.Exploratory || len(second.Grounding.Sources) != 0 || events[1].Grounding.Mode != assistantkit.Exploratory {
 		t.Fatalf("second = %+v, event %+v", second, events[1])
+	}
+	// Each event counts the posts written of those planned, and names the
+	// post's campaign whatever the thread's.
+	if events[0].Done != 1 || events[1].Done != 2 || events[1].Total != 2 || events[0].CampaignID != "c1" || first.CampaignID != "c1" {
+		t.Fatalf("events = %+v", events)
 	}
 }
 

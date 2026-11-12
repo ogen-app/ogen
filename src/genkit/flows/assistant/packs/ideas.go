@@ -467,6 +467,10 @@ type CompileIdeasOutput struct {
 	Posts      []CompiledPost `json:"posts"`
 	CampaignID string         `json:"campaignId"`
 	Ideas      int            `json:"ideas"`
+	// BuiltFrom names the ideas, in their theses' order.
+	BuiltFrom []IdeaName `json:"builtFrom"`
+	// Theses are every post's theses, one per idea.
+	Theses []compose.Thesis `json:"theses"`
 	// Grounding is the ideas' assets the posts' theses rest on; exploratory
 	// when they had none.
 	Grounding assistantkit.Grounding `json:"grounding"`
@@ -480,7 +484,14 @@ type CompiledPost struct {
 	Title      string `json:"title"`
 	Status     string `json:"status"`
 	PlatformID string `json:"platformId,omitempty"`
+	PostType   string `json:"postType,omitempty"`
 	Date       string `json:"date,omitempty"`
+}
+
+// IdeaName is an idea by id and title.
+type IdeaName struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 func calendarDate(s string) (*models.CalendarDate, error) {
@@ -521,15 +532,18 @@ func compileIdeas(ctx context.Context, d Deps, in CompileIdeasInput) (*CompileId
 		return nil, composeErr(err)
 	}
 	first := res.Posts[0].Post
-	out := &CompileIdeasOutput{CampaignID: first.CampaignID, Ideas: len(res.Ideas),
+	out := &CompileIdeasOutput{CampaignID: first.CampaignID, Ideas: len(res.Ideas), Theses: compose.Theses(res.Ideas),
 		Grounding: analysed(ctx, d, &first.CampaignID, newAssetTitles(d).grounding(ctx, fromIdeas(first.UsedAssetIDs, res.Ideas)))}
 	made := make([]assistantundo.MadePost, len(res.Posts))
 	for i, c := range res.Posts {
 		p := c.Post
 		assistantkit.Touch(ctx, "post", p.ID)
 		made[i] = assistantundo.MadePost{Post: p, Notes: []models.PostNote{*c.Note}}
-		cp := CompiledPost{PostID: p.ID, Title: p.Title, Status: string(p.Status), PlatformID: p.PlatformID, Date: c.Date}
+		cp := CompiledPost{PostID: p.ID, Title: p.Title, Status: string(p.Status), PlatformID: p.PlatformID, PostType: p.PlatformPostType, Date: c.Date}
 		out.Posts = append(out.Posts, cp)
+	}
+	for _, i := range res.Ideas {
+		out.BuiltFrom = append(out.BuiltFrom, IdeaName{ID: i.ID, Title: i.Title})
 	}
 	out.CompiledPost = out.Posts[0]
 	out.UndoID = recordUndo(ctx, d, models.AssistantActionPostCreated, first.ID, models.JSONMap{}, assistantundo.PostsCreated(made))
@@ -622,11 +636,18 @@ type DraftIdeasOutput struct {
 }
 
 // DraftedIdeaPost is a post written from ideas and what it is grounded in:
-// the ideas' assets the writer was given, or exploratory without any. It
-// is also each idea_draft_post event.
+// the ideas' assets the writer was given, or exploratory without any.
 type DraftedIdeaPost struct {
 	compose.DraftedPost
 	Grounding assistantkit.Grounding `json:"grounding"`
+}
+
+// IdeaDraftEvent is an idea_draft_post event: a post as it is written, and
+// how many of the planned posts are written with it.
+type IdeaDraftEvent struct {
+	DraftedIdeaPost
+	Done  int `json:"done"`
+	Total int `json:"total"`
 }
 
 func planDraft(ctx context.Context, d Deps, in DraftIdeasInput) (*compose.DraftPlan, error) {
@@ -663,7 +684,7 @@ func draftIdeas(ctx context.Context, d Deps, in DraftIdeasInput) (*DraftIdeasOut
 		}
 		drafted := DraftedIdeaPost{DraftedPost: p, Grounding: g}
 		out.Posts = append(out.Posts, drafted)
-		assistant.Emit(ctx, "idea_draft_post", drafted)
+		assistant.Emit(ctx, "idea_draft_post", IdeaDraftEvent{DraftedIdeaPost: drafted, Done: len(out.Posts), Total: plan.Posts()})
 	})
 	if err != nil && (res == nil || len(res.Posts) == 0) {
 		return nil, err
