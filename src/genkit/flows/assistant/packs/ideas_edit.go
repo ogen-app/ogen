@@ -45,6 +45,17 @@ type EditIdeaInput struct {
 	Plan   *PlanEdit `json:"plan,omitempty" jsonschema:"description=The plan fields to change; \"\" clears one"`
 }
 
+// IdeaText is an idea's editable fields.
+type IdeaText struct {
+	Title string          `json:"title"`
+	Note  string          `json:"note,omitempty"`
+	Plan  models.IdeaPlan `json:"plan"`
+}
+
+// ideaReadOnlyCode refuses an edit to an analysed idea's words, as the
+// ideas API's 409 does.
+const ideaReadOnlyCode = "idea_read_only"
+
 // PlanEdit changes an idea's plan field by field: nil keeps a field, ""
 // clears it.
 type PlanEdit struct {
@@ -54,10 +65,11 @@ type PlanEdit struct {
 	TargetDate *string `json:"targetDate,omitempty" jsonschema:"description=YYYY-MM-DD"`
 }
 
-// EditIdeaOutput is the idea after the edit.
+// EditIdeaOutput is the idea after the edit, and before it.
 type EditIdeaOutput struct {
 	Idea    IdeaRef  `json:"idea"`
 	Note    string   `json:"note,omitempty"`
+	Before  IdeaText `json:"before"`
 	Changed []string `json:"changed"`
 	UndoID  string   `json:"undoId,omitempty"`
 }
@@ -82,13 +94,14 @@ func editIdea(ctx context.Context, d Deps, in EditIdeaInput) (*EditIdeaOutput, e
 	}
 	idea, columns, err := d.Ideas.Update(ctx, in.IdeaID, up)
 	if errors.Is(err, ideas.ErrReadOnly) {
-		return nil, assistantkit.Refused("an analysed idea's title and note can't be edited: its fit score rests on them. Its plan can be")
+		return nil, assistantkit.RefusedCode(ideaReadOnlyCode, "an analysed idea's title and note can't be edited: its fit score rests on them. Its plan can be")
 	}
 	if err != nil {
 		return nil, triageErr(err)
 	}
 	assistantkit.Touch(ctx, "idea", idea.ID)
 	return &EditIdeaOutput{Idea: ideaRef(*idea), Note: idea.Note, Changed: changedFields(columns),
+		Before: IdeaText{Title: before.Title, Note: before.Note, Plan: before.Plan},
 		UndoID: recordUndo(ctx, d, models.AssistantActionIdeaEdit, idea.ID, assistantundo.IdeaEdit(before), assistantundo.IdeaEdit(idea))}, nil
 }
 

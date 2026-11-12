@@ -95,7 +95,8 @@ type assistantTurnRequest struct {
 // @Description  one workspace, campaign or post. A malformed viewContext is a 400 that names the field; a
 // @Description  campaign or post scope that doesn't exist is a 404; an instruction over 8000 characters is a 400.
 // @Description  Events, in order: "explanation_delta" {"delta"} as the reply streams; "tool_call" {"name","input","ref"}
-// @Description  and "tool_result" {"name","ref","ok"} for each tool, "ok" false when it refused or hit a conflict; "pack_loaded" {"pack"} when the turn restarted
+// @Description  and "tool_result" {"name","ref","ok","code"} for each tool, "ok" false when it refused or hit a conflict, "code" naming a refusal
+// @Description  the client draws its own card for (editIdea's "idea_read_only": an analysed idea's title and note can't change); "pack_loaded" {"pack"} when the turn restarted
 // @Description  with another domain's tools (deltas before it are void); one "ui_action" per change to the screen,
 // @Description  once the reply is final: {"type": navigate|set_filter|select|open_saved_view|set_window|open_connect|open_add_source, "screen", "campaignId",
 // @Description  "focus" {kind,id}, "filter", "selection" {kind,ids}, "savedViewId", "window" {from,to,platforms,campaignId},
@@ -111,15 +112,17 @@ type assistantTurnRequest struct {
 // @Description  health,tokenExpiresAt,autoPublish}],note}; weeklyDigest {from,to,empty,report};
 // @Description  emailWeeklyDigest {done,from,to}; postHistory {postId,title,entries[{at,kind: version|event,what,version,
 // @Description  by,byId,source}],more,note}; setAutoPublish {done,autoPublish,undoId}; openConnect {done,note}.
-// @Description  The ideas pack's, where an idea is {id,title,verdict,origin,campaignId,fitScore,plan} and grounding
+// @Description  The ideas pack's, where an idea is {id,title,verdict,remindAt,origin,campaignId,fitScore,plan,posts} (remindAt: when a
+// @Description  later idea comes back; once past, it is woken and counts as undecided though its verdict stays later) and grounding
 // @Description  {mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total}; setIdeaVerdict {idea,undoId};
-// @Description  setIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,undoId (setIdeaVerdicts only)};
+// @Description  setIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,ideas,verdict,remindAt,undoId}: ideas are the ideas a
+// @Description  triage or move changed, as they are now (none for a delete); verdict (yes|later|no|none), remindAt and undoId are a triage's;
 // @Description  compileIdeas {postId,title,status,campaignId,platformId,date,posts,ideas,grounding,undoId} (posts: each {postId,title,status,platformId,date}, one per platform; the flat fields are the first; date empty when undated); draftIdeas
 // @Description  {posts[{postId,title,platformId,publishDate (none when unscheduled),ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
 // @Description  rationale,sources,fit{score,lens,campaignId,criteria[{key,question,weight,level,means,why,phase,campaign}],
 // @Description  caps[{cap,meaning}]},sourceAsset{id,title},analysis{id,lens,gist,summary},posts,author,createdAt,explain};
 // @Description  ideasInCommon {ideas[{id,title,angle}],missing,assets,campaigns,origins,lenses,platforms,postTypes,phases,
-// @Description  terms}, each [{value,label,ideaIds}]; editIdea {idea,note,changed,undoId}; similarIdeas {ideaId,title,
+// @Description  terms}, each [{value,label,ideaIds}]; editIdea {idea,note,before{title,note,plan},changed,undoId}; similarIdeas {ideaId,title,
 // @Description  similar[{idea,score,why}]}; findDuplicateIdeas {groups[{keepId,similarity,ideas}],total,truncated};
 // @Description  mergeIdeas {idea,deleted}.
 // @Description  Plus "unsaved": true when the turn ran but could not be stored in the thread. "error"

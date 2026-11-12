@@ -2,12 +2,15 @@ package packs
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 )
 
@@ -31,6 +34,9 @@ func TestEditIdea(t *testing.T) {
 	if !slices.Equal(out.Changed, []string{"title", "plan"}) || len(touched()) != 1 {
 		t.Fatalf("changed = %v, touched %v", out.Changed, touched())
 	}
+	if out.Before.Title != "Pricing myths" || *out.Before.Plan.PlatformID != "x" || out.Before.Plan.TargetDate == nil {
+		t.Fatalf("before = %+v", out.Before)
+	}
 	a := actions.rows[0]
 	if a.Kind != models.AssistantActionIdeaEdit || a.Before["title"] != "Pricing myths" || a.After["title"] != "Five pricing myths" {
 		t.Fatalf("action = %+v", a)
@@ -38,7 +44,9 @@ func TestEditIdea(t *testing.T) {
 
 	repo.byID["i2"].Origin = models.IdeaOriginAssetAnalysis
 	_, err = editIdea(ctx, d, EditIdeaInput{IdeaID: "i2", Note: new("rewritten")})
-	refused(t, err)
+	if r, ok := errors.AsType[*assistantkit.Refusal](err); !ok || r.Code != "idea_read_only" {
+		t.Fatalf("analysed idea's note = %v; want the idea_read_only refusal", err)
+	}
 	if _, err := editIdea(ctx, d, EditIdeaInput{IdeaID: "i2", Plan: &PlanEdit{PostType: new("carousel")}}); err != nil {
 		t.Fatalf("an analysed idea's plan is editable: %v", err)
 	}
@@ -46,6 +54,31 @@ func TestEditIdea(t *testing.T) {
 		{IdeaID: "i1", Plan: &PlanEdit{PhaseID: new("launch")}}, {IdeaID: "gone", Title: new("x")}} {
 		_, err := editIdea(ctx, d, in)
 		refused(t, err)
+	}
+}
+
+// A bulk triage says what it set and names each idea it changed, with the
+// date a later one comes back; a move names the ideas it moved.
+func TestSetIdeaVerdicts_SaysWhatChanged(t *testing.T) {
+	d, _, _ := ideaDeps()
+	ctx, _ := turn(t, workspace, nil)
+	back := time.Now().AddDate(0, 1, 0).Format(time.DateOnly)
+	out, err := setIdeaVerdicts(ctx, d, SetIdeaVerdictsInput{IdeaIDs: []string{"i1", "i2", "gone"}, Verdict: "later", RemindAt: back})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Verdict != "later" || out.RemindAt == nil || out.RemindAt.Format(time.DateOnly) != back || len(out.Ideas) != 2 {
+		t.Fatalf("verdicts = %+v", out)
+	}
+	if i := out.Ideas[1]; i.ID != "i2" || i.Title != "Founder story" || i.Verdict != "later" || i.RemindAt == nil {
+		t.Fatalf("row = %+v", i)
+	}
+	if out, _ = setIdeaVerdicts(ctx, d, SetIdeaVerdictsInput{IdeaIDs: []string{"i1"}, Verdict: "none"}); out.Verdict != "none" || out.Ideas[0].Verdict != "" {
+		t.Fatalf("back to the inbox = %+v", out)
+	}
+	moved, err := moveIdeas(ctx, d, MoveIdeasInput{IdeaIDs: []string{"i1"}})
+	if err != nil || len(moved.Ideas) != 1 || moved.Ideas[0].Title != "Pricing myths" || moved.Verdict != "" {
+		t.Fatalf("move = %+v, %v", moved, err)
 	}
 }
 

@@ -89,7 +89,7 @@ func OfferIDs(content string) []string {
 // SSEEventKind names an event the turn streams. In order:
 //
 //   - explanation_delta {delta}: a fragment of the reply, as it streams.
-//   - tool_call {name, input, ref} and tool_result {name, ref, ok, step}: a tool
+//   - tool_call {name, input, ref} and tool_result {name, ref, ok, step, code}: a tool
 //     the orchestrator ran.
 //   - pack_loaded {pack}: the turn restarted with another pack's tools;
 //     the deltas streamed before it are void.
@@ -140,6 +140,9 @@ type ToolResultEventPayload struct {
 	// Step is what the step read or made, for its line; absent when the
 	// tool says nothing beyond its name.
 	Step *assistantkit.Step `json:"step,omitempty"`
+	// Code names a refusal the client draws its own card for, e.g.
+	// idea_read_only; absent for any other result.
+	Code string `json:"code,omitempty"`
 }
 
 // PackLoadedEventPayload is a "pack_loaded" event.
