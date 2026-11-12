@@ -48,7 +48,7 @@ const (
 	// AssistantActionCampaignSeries is a campaign starting or stopping a
 	// series, or running it at another rhythm.
 	AssistantActionCampaignSeries AssistantActionKind = "campaign_series"
-	// AssistantActionPostSchedules is posts of a campaign taken off the
+	// AssistantActionPostSchedules is posts of a campaign moved, or taken off the
 	// calendar.
 	AssistantActionPostSchedules AssistantActionKind = "post_schedules"
 	// AssistantActionPostTypes is posts of a campaign changed to another

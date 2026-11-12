@@ -88,6 +88,15 @@ const (
 	// CardRowRecipient is someone the work is sent to, with how they're
 	// reached in Note.
 	CardRowRecipient = "recipient"
+	// CardRowPost is a post the work changes: its title, and its status,
+	// platform and date in Note.
+	CardRowPost = "post"
+	// CardRowMedia is what happens to a post's media.
+	CardRowMedia = "media"
+	// CardRowPlatform is a platform and the post types it will run.
+	CardRowPlatform = "platform"
+	// CardRowFixes is what else the work puts right.
+	CardRowFixes = "fixes"
 )
 
 // CardRow is one detail of an offer. Kind lets the client label and lay it

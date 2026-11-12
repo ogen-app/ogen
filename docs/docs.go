@@ -15410,6 +15410,13 @@ const docTemplate = `{
                 "postType": {
                     "type": "string"
                 },
+                "slots": {
+                    "description": "Slots are the free days a move_post fix can move its post to,\nYYYY-MM-DD, nearest first; To is the first.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "title": {
                     "type": "string"
                 },

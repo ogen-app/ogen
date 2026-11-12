@@ -303,6 +303,32 @@ func TestApplyMoves_SkipsPostsChangedSince(t *testing.T) {
 	}
 }
 
+// A run says what it moved, from and to which times, by the posts' status,
+// how many scheduled posts it left, and can be undone.
+func TestApplyMoves_SaysWhatMovedAndUndoes(t *testing.T) {
+	d, _, _ := repairDeps()
+	actions := &memActions{}
+	d.Actions = actions
+	ctx, _ := turn(t, campaign1, nil)
+	out, err := applyMoves(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: []Move{
+		{PostID: "p1", From: "2027-02-20", FromAt: day("2027-02-20"), To: "2027-03-02"},
+		{PostID: "p2", From: "2027-03-03", FromAt: day("2027-03-03"), To: "2027-03-08"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Moved != 2 || len(out.Moves) != 2 || out.Moves[0].Title != "Early" || out.Moves[0].ToAt == nil ||
+		!out.Moves[0].ToAt.Equal(time.Date(2027, 3, 2, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("moves = %+v", out.Moves)
+	}
+	if out.ByStatus[models.PostStatusDraft] != 1 || out.ByStatus[models.PostStatusReadyForPublish] != 1 || out.Locked != 1 {
+		t.Fatalf("by status %v, locked %d", out.ByStatus, out.Locked)
+	}
+	if out.UndoID == "" || len(actions.rows) != 1 || actions.rows[0].Kind != models.AssistantActionPostSchedules {
+		t.Fatalf("undo = %q, logged %+v", out.UndoID, actions.rows)
+	}
+}
+
 func TestOptimiseCalendar(t *testing.T) {
 	d, _, _ := repairDeps()
 	sink := &offers{}
@@ -320,8 +346,12 @@ func TestOptimiseCalendar(t *testing.T) {
 		}
 	}
 	// The scheduled post is the one kept in place, for the before and after.
-	if len(out.Locked) != 1 || out.Locked[0].PostID != "p3" || out.Locked[0].Date != "2027-03-04" {
+	if len(out.Locked) != 1 || out.Locked[0].PostID != "p3" || out.Locked[0].Date != "2027-03-04" || out.Locked[0].At.IsZero() {
 		t.Fatalf("locked = %+v", out.Locked)
+	}
+	// The moves land at a time, within the campaign's dates.
+	if out.Moves[0].ToAt == nil || out.Window != (Window{From: "2027-03-01", To: "2027-03-31"}) || out.CheckedAt.IsZero() {
+		t.Fatalf("to %v, window %+v", out.Moves[0].ToAt, out.Window)
 	}
 	undated := Deps{Campaigns: &memCampaigns{c: &models.Campaign{ID: "c1"}}, Posts: &memPosts{}}
 	_, err = optimiseCalendar(ctx, undated, CampaignRef{})

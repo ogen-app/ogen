@@ -75,6 +75,10 @@ func TestCheck_SameIdeaClose(t *testing.T) {
 	if len(f.Fixes) != 1 || f.Fixes[0].Kind != FixMovePost || f.Fixes[0].PostID != "b" || f.Fixes[0].To != "2026-12-14" {
 		t.Fatalf("fix = %+v", f.Fixes)
 	}
+	// The next free days far enough away are the other slots to choose.
+	if !slices.Equal(f.Fixes[0].Slots, []string{"2026-12-14", "2026-12-15", "2026-12-16"}) {
+		t.Fatalf("slots = %v", f.Fixes[0].Slots)
+	}
 	if f.Detail != "Mon 7 Dec and Wed 9 Dec; posts that come from the same idea go out at least 7 days apart on one platform." {
 		t.Fatalf("detail = %q", f.Detail)
 	}
