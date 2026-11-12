@@ -76,6 +76,8 @@ type VoiceRef struct {
 // VoiceOut is a voice changed and the undo handle.
 type VoiceOut struct {
 	Voice BrandVoiceOut `json:"voice"`
+	// Changes are the fields an update changed.
+	Changes []FieldChange `json:"changes,omitempty"`
 	// Unbound counts the campaigns and posts a removed voice was set on.
 	Unbound int    `json:"unbound,omitzero"`
 	UndoID  string `json:"undoId,omitempty"`
@@ -104,6 +106,7 @@ type AudienceRef struct {
 // AudienceOut is an audience changed and the undo handle.
 type AudienceOut struct {
 	Audience BrandAudienceOut `json:"audience"`
+	Changes  []FieldChange    `json:"changes,omitempty"`
 	Unbound  int              `json:"unbound,omitzero"`
 	UndoID   string           `json:"undoId,omitempty"`
 }
@@ -124,7 +127,10 @@ type GuardrailsInput struct {
 // GuardrailsOut is the guardrails changed and the undo handle.
 type GuardrailsOut struct {
 	Guardrails *models.BrandGuardrails `json:"guardrails"`
-	UndoID     string                  `json:"undoId,omitempty"`
+	// Changes are the lines added and removed and the disclaimer changed;
+	// none when the edit changed nothing.
+	Changes []FieldChange `json:"changes,omitempty"`
+	UndoID  string        `json:"undoId,omitempty"`
 }
 
 func libErr(err error, missing string) error {
@@ -265,7 +271,7 @@ func updateVoice(ctx context.Context, d Deps, lib *brandlib.Service, in UpdateVo
 	assistantkit.Touch(ctx, "voice", after.ID)
 	undo := recordUndo(ctx, d, models.AssistantActionBrandVoice, after.ID,
 		assistantundo.BrandVoice(before, nil, ""), assistantundo.BrandVoice(after, nil, replaced))
-	return &VoiceOut{Voice: voiceOut(after), UndoID: undo}, nil
+	return &VoiceOut{Voice: voiceOut(after), Changes: voiceChanges(before, after), UndoID: undo}, nil
 }
 
 func removeVoice(ctx context.Context, d Deps, lib *brandlib.Service, in VoiceRef) (*VoiceOut, error) {
@@ -328,7 +334,7 @@ func updateAudience(ctx context.Context, d Deps, lib *brandlib.Service, in Updat
 	assistantkit.Touch(ctx, "audience", after.ID)
 	undo := recordUndo(ctx, d, models.AssistantActionBrandAudience, after.ID,
 		assistantundo.BrandAudience(before, nil), assistantundo.BrandAudience(after, nil))
-	return &AudienceOut{Audience: audienceOut(after), UndoID: undo}, nil
+	return &AudienceOut{Audience: audienceOut(after), Changes: audienceChanges(before, after), UndoID: undo}, nil
 }
 
 func removeAudience(ctx context.Context, d Deps, lib *brandlib.Service, in AudienceRef) (*AudienceOut, error) {
@@ -378,7 +384,7 @@ func updateGuardrails(ctx context.Context, d Deps, lib *brandlib.Service, in Gua
 	assistantkit.Touch(ctx, "guardrails", "")
 	undo := recordUndo(ctx, d, models.AssistantActionBrandGuardrails, "guardrails",
 		assistantundo.BrandGuardrails(before), assistantundo.BrandGuardrails(after))
-	return &GuardrailsOut{Guardrails: after, UndoID: undo}, nil
+	return &GuardrailsOut{Guardrails: after, Changes: guardrailsChanges(before, after), UndoID: undo}, nil
 }
 
 // librarySpecs are the voice, audience and guardrail edits, each undoable.
