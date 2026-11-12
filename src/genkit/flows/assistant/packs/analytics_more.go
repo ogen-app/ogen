@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -32,30 +34,13 @@ type MoreLikeTheseInput struct {
 	Instruction string   `json:"instruction,omitempty" jsonschema:"description=Steering for the writer"`
 }
 
-// TrailAsset is an asset on an example's trail.
-type TrailAsset struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-}
-
-// TrailIdea is an idea an example was made from, and the asset it came from.
-type TrailIdea struct {
-	ID    string      `json:"id"`
-	Title string      `json:"title"`
-	Asset *TrailAsset `json:"asset,omitempty"`
-}
-
-// TrailStep is how one example came to be: the ideas it was made from and
-// the assets it used.
-type TrailStep struct {
-	PostID string       `json:"postId"`
-	Title  string       `json:"title"`
-	Ideas  []TrailIdea  `json:"ideas"`
-	Assets []TrailAsset `json:"assets"`
-	// NoTrail is an example with no ideas or assets recorded: its own text
-	// is the only source, and the new ideas cite it.
-	NoTrail bool `json:"noTrail,omitempty"`
-}
+// The trail's types are the offer card's, so the card before the yes and
+// the result after it read alike.
+type (
+	TrailAsset = assistantkit.TrailAsset
+	TrailIdea  = assistantkit.TrailIdea
+	TrailStep  = assistantkit.TrailStep
+)
 
 // NewIdea is an idea "more like these" saved.
 type NewIdea struct {
@@ -75,6 +60,10 @@ type MoreLikeTheseOutput struct {
 	Grounding  []TrailAsset `json:"grounding,omitempty"`
 	CampaignID string       `json:"campaignId,omitempty"`
 	Ideas      []NewIdea    `json:"ideas"`
+	// Filter is the Ideas list's query, in its own syntax, that shows the
+	// ideas this run saved: the assistant's, created while it saved them,
+	// in the campaign.
+	Filter string `json:"filter,omitempty"`
 }
 
 func moreLikeTheseSpec(g *genkit.Genkit, d Deps) assistantkit.Spec {
@@ -89,6 +78,9 @@ func moreLikeTheseSpec(g *genkit.Genkit, d Deps) assistantkit.Spec {
 			Summary: func(in MoreLikeTheseInput) string {
 				return fmt.Sprintf("Write %s like the top posts", plural(ideaCount(in), "idea", "ideas"))
 			},
+			Card: func(ctx context.Context, in MoreLikeTheseInput) *assistantkit.Card {
+				return moreLikeTheseCard(ctx, d, in)
+			},
 		}, assistantkit.Wrap(recorded(analyticsPackName, "moreLikeThese", nil, func(ctx context.Context, in MoreLikeTheseInput) (*MoreLikeTheseOutput, error) {
 			return moreLikeThese(ctx, d, in)
 		}))), ai.WithStrictSchema(false))
@@ -97,6 +89,34 @@ func moreLikeTheseSpec(g *genkit.Genkit, d Deps) assistantkit.Spec {
 }
 
 func ideaCount(in MoreLikeTheseInput) int { return min(cmp.Or(in.Count, 3), 10) }
+
+// moreLikeTheseCard shows the examples' trails before the yes, so the user
+// sees what the ideas will learn from. A trail it can't read leaves the
+// card without one.
+func moreLikeTheseCard(ctx context.Context, d Deps, in MoreLikeTheseInput) *assistantkit.Card {
+	n := ideaCount(in)
+	card := &assistantkit.Card{Verb: "Plan " + plural(n, "idea", "ideas")}
+	ids, err := examplesOf(ctx, in)
+	if err != nil {
+		return card
+	}
+	card.Meta = "like " + plural(len(ids), "post", "posts")
+	t := newTrailSources(d)
+	var trail []TrailStep
+	for _, id := range ids {
+		p, err := d.Posts.GetByID(ctx, id)
+		if err != nil {
+			return card
+		}
+		step, err := trailOf(ctx, t, p)
+		if err != nil {
+			return card
+		}
+		trail = append(trail, step)
+	}
+	card.Trail = trail
+	return card
+}
 
 // examplesOf is the example posts: the ones named, else the ones selected.
 func examplesOf(ctx context.Context, in MoreLikeTheseInput) ([]string, error) {
@@ -124,6 +144,13 @@ type trailSources struct {
 	// it for that reference.
 	analysisOf  map[string]string
 	analysisVia map[string]string
+	// posts is each example's title, for an idea that cites it.
+	posts map[string]string
+}
+
+func newTrailSources(d Deps) *trailSources {
+	return &trailSources{d: d, labels: map[string]string{}, assetOf: map[string]string{}, assets: map[string]*TrailAsset{},
+		analysisOf: map[string]string{}, analysisVia: map[string]string{}, posts: map[string]string{}}
 }
 
 func (t *trailSources) add(ref, label, title, text, assetID string) {
@@ -152,11 +179,29 @@ func (t *trailSources) asset(ctx context.Context, id string) (*TrailAsset, error
 		case err != nil:
 			return nil, err
 		default:
-			a = &TrailAsset{ID: id, Title: got.Title}
+			a = &TrailAsset{ID: id, Title: got.Title, Type: deref(got.Type)}
 		}
 	}
 	t.assets[id] = a
 	return a, nil
+}
+
+// analysis names the asset's analysis id, the lens an idea was distilled
+// by: the workspace's, or a campaign's by name. An analysis since gone
+// still names its id.
+func (t *trailSources) analysis(ctx context.Context, assetID, id string) (*assistantkit.TrailAnalysis, error) {
+	out := &assistantkit.TrailAnalysis{ID: id}
+	if t.d.Analyses == nil {
+		return out, nil
+	}
+	lenses, err := t.d.Analyses.ListByAsset(ctx, assetID)
+	if err != nil {
+		return nil, fmt.Errorf("read the asset's analyses: %w", err)
+	}
+	if i := slices.IndexFunc(lenses, func(a models.AssetAnalysis) bool { return a.ID == id }); i >= 0 && lenses[i].CampaignID != nil {
+		out.CampaignID, out.CampaignName = *lenses[i].CampaignID, deref(lenses[i].CampaignName)
+	}
+	return out, nil
 }
 
 func moreLikeThese(ctx context.Context, d Deps, in MoreLikeTheseInput) (*MoreLikeTheseOutput, error) {
@@ -164,7 +209,7 @@ func moreLikeThese(ctx context.Context, d Deps, in MoreLikeTheseInput) (*MoreLik
 	if err != nil {
 		return nil, err
 	}
-	t := &trailSources{d: d, labels: map[string]string{}, assetOf: map[string]string{}, assets: map[string]*TrailAsset{}, analysisOf: map[string]string{}, analysisVia: map[string]string{}}
+	t := newTrailSources(d)
 	out := &MoreLikeTheseOutput{Trail: []TrailStep{}, Ideas: []NewIdea{}}
 	var examples []more_like_these.Example
 	var posts []*models.Post
@@ -179,7 +224,6 @@ func moreLikeThese(ctx context.Context, d Deps, in MoreLikeTheseInput) (*MoreLik
 		}
 		posts = append(posts, p)
 		examples = append(examples, more_like_these.Example{ID: p.ID, Title: p.Title, Platform: p.PlatformID, Text: p.Content})
-		t.labels["post:"+p.ID] = "Post: " + p.Title
 		step, err := trailOf(ctx, t, p)
 		if err != nil {
 			return nil, err
@@ -218,6 +262,8 @@ func moreLikeThese(ctx context.Context, d Deps, in MoreLikeTheseInput) (*MoreLik
 		return nil, fmt.Errorf("write ideas: %w", err)
 	}
 	platform := cmp.Or(in.PlatformID, posts[0].PlatformID)
+	// The ideas' creation window; whole seconds, as the list's filter reads.
+	from := time.Now().UTC().Truncate(time.Second)
 	for _, w := range written {
 		idea, grounding, err := saveIdea(ctx, d, t, w, campaign, platform, ids)
 		if err != nil {
@@ -226,45 +272,44 @@ func moreLikeThese(ctx context.Context, d Deps, in MoreLikeTheseInput) (*MoreLik
 		out.Ideas = append(out.Ideas, NewIdea{ID: idea.ID, Title: idea.Title, Angle: w.Angle, Rationale: w.Rationale, Grounding: grounding})
 		assistantkit.Touch(ctx, "idea", idea.ID)
 	}
+	if len(out.Ideas) > 0 {
+		out.Filter = savedIdeasFilter(out.CampaignID, from, time.Now().UTC())
+	}
 	return out, nil
+}
+
+// savedIdeasFilter is the Ideas list's query for the assistant's ideas
+// created from from to to, in the campaign when there is one.
+func savedIdeasFilter(campaignID string, from, to time.Time) string {
+	v := url.Values{}
+	v.Set(models.IdeaFacetOrigin, string(models.IdeaOriginAssistant))
+	v.Set("created_after", from.Format(time.RFC3339))
+	v.Set("created_before", to.Truncate(time.Second).Add(time.Second).Format(time.RFC3339))
+	if campaignID != "" {
+		v.Set(models.IdeaFacetCampaign, campaignID)
+	}
+	return v.Encode()
 }
 
 // trailOf is one example's trail: its ideas, the asset each came from, and
 // the assets it used, each a source for the writer.
 func trailOf(ctx context.Context, t *trailSources, p *models.Post) (TrailStep, error) {
 	step := TrailStep{PostID: p.ID, Title: p.Title, Ideas: []TrailIdea{}, Assets: []TrailAsset{}}
+	t.labels["post:"+p.ID], t.posts[p.ID] = "Post: "+p.Title, p.Title
+	var err error
+	if step.Rate, err = t.rate(ctx, p.ID); err != nil {
+		return step, err
+	}
 	linked, err := t.d.Links.IdeasOfPost(ctx, p.ID)
 	if err != nil {
 		return step, err
 	}
 	for _, li := range linked {
-		ti := TrailIdea{ID: li.ID, Title: li.Title}
-		idea, err := t.d.IdeaRepo.GetByID(ctx, li.ID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		ti, err := t.idea(ctx, li.ID, li.Title)
+		if err != nil {
 			return step, err
 		}
-		text, assetID := "", ""
-		if idea != nil {
-			text = strings.TrimSpace(cmp.Or(deref(idea.Angle), idea.Note))
-			assetID = deref(idea.SourceAssetID)
-			if assetID == "" && len(idea.AssetIDs) > 0 {
-				assetID = idea.AssetIDs[0]
-			}
-			// An idea distilled from the asset names the analysis it came by.
-			if an := deref(idea.AssetAnalysisID); an != "" && assetID == deref(idea.SourceAssetID) {
-				t.analysisVia["idea:"+li.ID] = an
-			}
-		}
-		if assetID != "" {
-			if ti.Asset, err = t.asset(ctx, assetID); err != nil {
-				return step, err
-			}
-			if ti.Asset == nil {
-				assetID = ""
-			}
-		}
 		step.Ideas = append(step.Ideas, ti)
-		t.add("idea:"+li.ID, "Idea: "+li.Title, li.Title, text, assetID)
 	}
 	for _, id := range p.UsedAssetIDs {
 		a, err := t.asset(ctx, id)
@@ -279,6 +324,55 @@ func trailOf(ctx context.Context, t *trailSources, p *models.Post) (TrailStep, e
 	}
 	step.NoTrail = len(step.Ideas) == 0 && len(step.Assets) == 0
 	return step, nil
+}
+
+// rate is the post's engagement rate, nil when it has no figures.
+func (t *trailSources) rate(ctx context.Context, postID string) (*float64, error) {
+	if t.d.Analytics == nil || t.d.Analytics.Repo == nil {
+		return nil, nil
+	}
+	figures, err := t.d.Analytics.Repo.GetByPostID(ctx, postID)
+	if err != nil || figures == nil {
+		return nil, err
+	}
+	return &figures.EngagementRate, nil
+}
+
+// idea is one idea on a trail, with the asset it came from and the
+// analysis it came by, recorded as a source for the writer.
+func (t *trailSources) idea(ctx context.Context, id, title string) (TrailIdea, error) {
+	ti := TrailIdea{ID: id, Title: title}
+	idea, err := t.d.IdeaRepo.GetByID(ctx, id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return ti, err
+	}
+	text, assetID := "", ""
+	if idea != nil {
+		text = strings.TrimSpace(cmp.Or(deref(idea.Angle), idea.Note))
+		assetID = deref(idea.SourceAssetID)
+		if assetID == "" && len(idea.AssetIDs) > 0 {
+			assetID = idea.AssetIDs[0]
+		}
+		// An idea distilled from the asset names the analysis it came by.
+		if an := deref(idea.AssetAnalysisID); an != "" && assetID == deref(idea.SourceAssetID) {
+			t.analysisVia["idea:"+id] = an
+		}
+	}
+	if assetID != "" {
+		if ti.Asset, err = t.asset(ctx, assetID); err != nil {
+			return ti, err
+		}
+		if ti.Asset == nil {
+			assetID = ""
+		}
+	}
+	if an := t.analysisVia["idea:"+id]; an != "" && assetID != "" {
+		if ti.Analysis, err = t.analysis(ctx, assetID, an); err != nil {
+			return ti, err
+		}
+	}
+	t.add("idea:"+id, "Idea: "+title, title, text, assetID)
+	return ti, nil
 }
 
 // groundingOf is the campaign's ready sources not already on the trail, up
@@ -336,6 +430,47 @@ func (t *trailSources) gists(ctx context.Context, assetIDs []string) error {
 	return nil
 }
 
+// cited is what an idea's refs name: their labels, the assets among them,
+// and its grounding's sources — each asset once, and each post, which
+// names the idea's source without grounding it.
+func (t *trailSources) cited(refs []string) (labels, assetIDs []string, sources []assistantkit.Source) {
+	labels, assetIDs = []string{}, []string{}
+	for _, r := range refs {
+		if label, ok := t.labels[r]; ok {
+			labels = append(labels, label)
+		}
+		if post, ok := strings.CutPrefix(r, "post:"); ok {
+			title, known := t.posts[post]
+			if known && !slices.ContainsFunc(sources, func(s assistantkit.Source) bool { return s.Kind == assistantkit.SourcePost && s.ID == post }) {
+				sources = append(sources, assistantkit.Source{ID: post, Title: title, Kind: assistantkit.SourcePost})
+			}
+			continue
+		}
+		a := t.assetOf[r]
+		if a == "" {
+			continue
+		}
+		src := assistantkit.Source{ID: a, AnalysisID: cmp.Or(t.analysisVia[r], t.analysisOf[a])}
+		if ta := t.assets[a]; ta != nil {
+			src.Title = ta.Title
+		}
+		if via, ok := strings.CutPrefix(r, "idea:"); ok {
+			src.IdeaID = via
+		}
+		// An asset cited twice is one source: an idea it came through, named
+		// later, still traces it, with that idea's analysis.
+		if i := slices.IndexFunc(sources, func(s assistantkit.Source) bool { return s.Kind == "" && s.ID == a }); i >= 0 {
+			if sources[i].IdeaID == "" && src.IdeaID != "" {
+				sources[i].IdeaID, sources[i].AnalysisID = src.IdeaID, src.AnalysisID
+			}
+			continue
+		}
+		assetIDs = append(assetIDs, a)
+		sources = append(sources, src)
+	}
+	return labels, assetIDs, sources
+}
+
 // saveIdea saves one written idea, undated, in the campaign: its sources by
 // name, the assets it cites, and whether those ground it. An idea citing
 // nothing cites the examples, its only source. It returns the idea's
@@ -351,34 +486,9 @@ func saveIdea(ctx context.Context, d Deps, t *trailSources, w more_like_these.Id
 	if err != nil {
 		return nil, assistantkit.Grounding{}, err
 	}
-	idea := &models.Idea{ID: id, Title: w.Title, Origin: models.IdeaOriginAssistant, Sources: []string{}, AssetIDs: []string{}}
+	idea := &models.Idea{ID: id, Title: w.Title, Origin: models.IdeaOriginAssistant}
 	var sources []assistantkit.Source
-	for _, r := range refs {
-		if label, ok := t.labels[r]; ok {
-			idea.Sources = append(idea.Sources, label)
-		}
-		a := t.assetOf[r]
-		if a == "" {
-			continue
-		}
-		src := assistantkit.Source{ID: a, AnalysisID: cmp.Or(t.analysisVia[r], t.analysisOf[a])}
-		if ta := t.assets[a]; ta != nil {
-			src.Title = ta.Title
-		}
-		if via, ok := strings.CutPrefix(r, "idea:"); ok {
-			src.IdeaID = via
-		}
-		// An asset cited twice is one source: an idea it came through, named
-		// later, still traces it, with that idea's analysis.
-		if i := slices.IndexFunc(sources, func(s assistantkit.Source) bool { return s.ID == a }); i >= 0 {
-			if sources[i].IdeaID == "" && src.IdeaID != "" {
-				sources[i].IdeaID, sources[i].AnalysisID = src.IdeaID, src.AnalysisID
-			}
-			continue
-		}
-		idea.AssetIDs = append(idea.AssetIDs, a)
-		sources = append(sources, src)
-	}
+	idea.Sources, idea.AssetIDs, sources = t.cited(refs)
 	idea.GroundingMode = models.GroundingFor(len(idea.AssetIDs))
 	if len(idea.AssetIDs) > 0 {
 		idea.SourceAssetID = &idea.AssetIDs[0]

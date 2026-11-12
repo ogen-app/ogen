@@ -33,6 +33,9 @@ type Card struct {
 	// Widen offers the same work over more sources than the narrow default
 	// it was offered on, e.g. the campaign's assets instead of the open one.
 	Widen *CardWiden `json:"widen,omitempty"`
+	// Trail is how each example the work learns from came to be, shown
+	// before the yes; the tool's result carries the same trail after it.
+	Trail []TrailStep `json:"trail,omitempty"`
 }
 
 // The card actions: what the confirm button does.

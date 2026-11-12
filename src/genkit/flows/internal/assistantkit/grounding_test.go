@@ -66,6 +66,25 @@ func TestGrounding_WithAnalyses(t *testing.T) {
 	}
 }
 
+// A post names where output came from but doesn't ground it, and has no
+// analysis to look up; an asset beside it grounds.
+func TestGroundingFrom_Posts(t *testing.T) {
+	post := Source{ID: "p1", Title: "Opening day", Kind: SourcePost}
+	g := GroundingFrom([]Source{post})
+	if g.Mode != Exploratory || !slices.Equal(g.Sources, []Source{post}) {
+		t.Fatalf("post only = %+v", g)
+	}
+	if g := g.WithAnalyses(func([]string) (map[string]string, error) {
+		t.Fatal("looked up a post's analysis")
+		return nil, nil
+	}); g.Sources[0].AnalysisID != "" {
+		t.Fatalf("post = %+v", g.Sources[0])
+	}
+	if g := GroundingFrom([]Source{post, {ID: "a1"}}); g.Mode != Grounded {
+		t.Fatalf("with an asset = %+v", g)
+	}
+}
+
 // A saved turn's sources are what its tools quoted, read, compared or
 // generated from, each once with the analysis and idea it came through; a
 // turn that isn't JSON has none.
