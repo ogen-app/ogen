@@ -3,6 +3,7 @@ package packs
 import (
 	"context"
 	"database/sql"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -64,7 +65,7 @@ func campaignDeps(p plan, active int64) (Deps, *createdCampaigns, *memActions) {
 	lim := entitlements.NewLimiter(p, nil, entitlements.ModeEnforce).
 		Register("active_campaigns", entitlements.CounterFunc(func(context.Context, string) (int64, error) { return active, nil }))
 	return Deps{
-		Assets:         memAssets{all: []models.Asset{{ID: "a1", Title: "Brochure"}, {ID: "a2", Title: "Press kit"}}},
+		Assets:         memAssets{all: []models.Asset{{ID: "a1", Title: "Brochure", Type: new(models.AssetTypePDF)}, {ID: "a2", Title: "Press kit"}}},
 		CampaignTypes:  typeList{},
 		CreateCampaign: &create.Service{Campaigns: camps, Types: typeList{}, Limiter: lim},
 		Actions:        actions,
@@ -89,7 +90,8 @@ func TestCampaignFromAssets(t *testing.T) {
 	if c.PublishingTime == "" || len(c.PublishingDays) == 0 || c.GoalCadence == "" || c.CreatedBy != "u1" {
 		t.Fatalf("defaults = %q %v %q by %q", c.PublishingTime, c.PublishingDays, c.GoalCadence, c.CreatedBy)
 	}
-	if out.Type != "Launch" || out.UndoID == "" || !out.StartDate.Equal(time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)) {
+	if out.Type != "Launch" || out.UndoID == "" || !out.StartDate.Equal(time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)) || out.CreatedAt.IsZero() ||
+		*out.Step != (assistantkit.Step{Subject: "Spring reopening", Sources: 2}) {
 		t.Fatalf("out = %+v", out)
 	}
 	if a := actions.rows[0]; a.Kind != models.AssistantActionCampaignCreated || a.EntityID != c.ID || a.After["assetIds"] != "a1,a2" {
@@ -159,6 +161,32 @@ func TestCampaignFromAssets_Proposal(t *testing.T) {
 	if !strings.HasPrefix(line, `New campaign "Spring reopening" from 1 asset, Launch, 2 Mar – 26 Apr`) {
 		t.Fatalf("summary = %q", line)
 	}
+
+	// The card names its button, sources and dates, with why those dates.
+	card := campaignCard(page, d, CampaignFromAssetsInput{
+		AssetIDs: []string{"a1", "a2"}, Name: "Spring reopening", Type: "Launch",
+		StartDate: "2026-03-02", EndDate: "2026-04-26", DateReason: "Around the 14 March opening, from the brochure",
+	})
+	want := &assistantkit.Card{
+		Verb: "Create campaign", Meta: "from 2 assets",
+		Rows: []assistantkit.CardRow{
+			{Kind: assistantkit.CardRowType, Value: "Launch"},
+			{Kind: assistantkit.CardRowDates, Value: "2 Mar – 26 Apr 2026", Note: "Around the 14 March opening, from the brochure", Start: "2026-03-02", End: "2026-04-26"},
+		},
+		Sources:  []assistantkit.CardSource{{ID: "a1", Title: "Brochure", Type: "PDF"}, {ID: "a2", Title: "Press kit"}},
+		Footnote: "The 2 become its sources. No posts yet; a content plan can follow.",
+	}
+	if !reflect.DeepEqual(card, want) {
+		t.Fatalf("card = %+v\nwant %+v", card, want)
+	}
+	// One source is named; no dates leaves the row out; a bad call has none.
+	card = campaignCard(page, d, CampaignFromAssetsInput{Name: "x"})
+	if card.Meta != "from Press kit" || len(card.Rows) != 1 || !strings.HasPrefix(card.Footnote, "It becomes") {
+		t.Fatalf("one-source card = %+v", card)
+	}
+	if card := campaignCard(page, d, CampaignFromAssetsInput{}); card != nil {
+		t.Fatalf("card for a refused call = %+v", card)
+	}
 }
 
 // Creating a campaign calls no model, so a yes past the spend cap still runs.
@@ -172,5 +200,22 @@ func TestCampaignFromAssets_IsFree(t *testing.T) {
 	i := slices.IndexFunc(specs, func(s assistantkit.Spec) bool { return s.Name == "createCampaignFromAssets" })
 	if i < 0 || !specs[i].Free || specs[i].Tier != assistantkit.TierProposal {
 		t.Fatalf("spec = %+v", specs[max(i, 0)])
+	}
+}
+
+// The tagging offer's card names the tags and the assets they go on.
+func TestTagCard(t *testing.T) {
+	d, _, _ := campaignDeps(plan{}, 0)
+	ctx, _ := turn(t, workspace, nil)
+	card := tagCard(ctx, d, TagAssetsInput{AssetIDs: []string{"a1", "a2", "a1"}, Add: []string{"press", "spring"}, Remove: []string{"old"}})
+	if card.Verb != "Tag 2 assets" || card.Meta != "" || len(card.Sources) != 2 || card.Sources[0].Type != "PDF" ||
+		len(card.Rows) != 2 || card.Rows[0].Value != "Add press, spring" || card.Rows[1].Value != "Remove old" {
+		t.Fatalf("card = %+v", card)
+	}
+	if card := tagCard(ctx, d, TagAssetsInput{AssetIDs: []string{"a1"}, Remove: []string{"old"}}); card.Verb != "Untag 1 asset" {
+		t.Fatalf("untag card = %+v", card)
+	}
+	if card := tagCard(ctx, d, TagAssetsInput{AssetIDs: []string{"a9"}}); card != nil {
+		t.Fatalf("card for missing assets = %+v", card)
 	}
 }

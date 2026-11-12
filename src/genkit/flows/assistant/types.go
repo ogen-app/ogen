@@ -62,7 +62,7 @@ const (
 // SSEEventKind names an event the turn streams. In order:
 //
 //   - explanation_delta {delta}: a fragment of the reply, as it streams.
-//   - tool_call {name, input, ref} and tool_result {name, ref, ok}: a tool
+//   - tool_call {name, input, ref} and tool_result {name, ref, ok, step}: a tool
 //     the orchestrator ran.
 //   - pack_loaded {pack}: the turn restarted with another pack's tools;
 //     the deltas streamed before it are void.
@@ -107,6 +107,9 @@ type ToolResultEventPayload struct {
 	Ref  string `json:"ref,omitempty"`
 	// OK is false when the tool refused the call or hit a conflict.
 	OK bool `json:"ok"`
+	// Step is what the step read or made, for its line; absent when the
+	// tool says nothing beyond its name.
+	Step *assistantkit.Step `json:"step,omitempty"`
 }
 
 // PackLoadedEventPayload is a "pack_loaded" event.

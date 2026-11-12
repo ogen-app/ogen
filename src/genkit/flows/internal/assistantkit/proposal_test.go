@@ -93,6 +93,23 @@ func TestGated_DescribeReadsContext(t *testing.T) {
 	}
 }
 
+// The card's details are read with the offer, from the call it offers.
+func TestGated_Card(t *testing.T) {
+	tool := Gated("draft", Gate[countIn]{
+		Summary: func(in countIn) string { return "Draft posts" },
+		Card: func(_ context.Context, in countIn) *Card {
+			return &Card{Verb: fmt.Sprintf("Draft %d posts", in.Count), Rows: []CardRow{{Kind: CardRowDestination, Value: "LinkedIn"}}}
+		},
+	}, Wrap(func(context.Context, countIn) (int, error) { return 0, nil }))
+	sink := &memSink{}
+	if _, err := tool(&ai.ToolContext{Context: WithProposalSink(t.Context(), sink)}, countIn{Count: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.got) != 1 || sink.got[0].Card == nil || sink.got[0].Card.Verb != "Draft 5 posts" || sink.got[0].Card.Rows[0].Value != "LinkedIn" {
+		t.Fatalf("stored = %+v", sink.got)
+	}
+}
+
 // A stored proposal runs by tool name with its stored (JSON-decoded) args,
 // past its own gate.
 func TestRegistry_RunConfirmed(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -243,5 +244,31 @@ func TestReplaceWeakestDrafts(t *testing.T) {
 		Draft: DraftPostInput{Platforms: []string{"LinkedIn"}, Count: 1}})
 	if err != nil || !out.Succeeded() || out.Result.Deleted != 1 || !slices.Equal(deleted, []string{"d2"}) || !slices.Equal(out.Result.Kept, []string{"d1", "d3"}) {
 		t.Fatalf("out = %+v, err = %v, deleted = %v", out, err, deleted)
+	}
+}
+
+// The drafting offer's card names its button by the posts it makes, where
+// and when they land and the assets the research quoted.
+func TestDraftCard(t *testing.T) {
+	camp := timelineCampaign()
+	camp.Name = "Spring reopening"
+	st := &requestState{campaign: camp, proposalThreshold: 3, maxDraftPosts: 10}
+	ctx := st.bind(t.Context())
+
+	card := draftCard(ctx, DraftPostInput{
+		Platforms: []string{"LinkedIn"}, Count: 5, PublishDate: "2026-03-14",
+		Cited: []assistantkit.Source{{ID: "a1", Title: "Villa Aurora brochure 2026"}}, CitesKnown: true,
+	})
+	if card.Verb != "Draft 5 posts" || card.Meta != "from Villa Aurora brochure 2026" || len(card.Sources) != 1 ||
+		card.Rows[0] != (assistantkit.CardRow{Kind: assistantkit.CardRowDestination, Value: "LinkedIn in Spring reopening"}) ||
+		card.Rows[1].Start != "2026-03-14" || card.Rows[1].Value != "14 Mar 2026" {
+		t.Fatalf("card = %+v", card)
+	}
+
+	// Research that quoted no asset says it isn't grounded; no date spreads.
+	card = draftCard(ctx, DraftPostInput{Platforms: []string{"LinkedIn"}, CitesKnown: true})
+	if card.Verb != "Draft 1 post" || card.Meta != "from the research in this chat" || len(card.Rows) != 3 ||
+		card.Rows[1].Start != "" || card.Rows[2].Kind != assistantkit.CardRowGrounding || !strings.HasPrefix(card.Footnote, "It lands") {
+		t.Fatalf("ungrounded card = %+v", card)
 	}
 }

@@ -5,12 +5,14 @@ import (
 	"sync"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/usecase/assets"
 )
 
 // AssetsResult is what the assets tools found or made in a turn, for the
 // client's cards: each tool's last output. It reaches the client as
 // complete.results.assets, which the thread's history stores.
 type AssetsResult struct {
+	State    *assets.State             `json:"state,omitempty"`
 	Ask      *AskCard                  `json:"ask,omitempty"`
 	Analysis *ReadAnalysisOutput       `json:"analysis,omitempty"`
 	Compare  *CompareAssetsOutput      `json:"compare,omitempty"`
@@ -28,6 +30,7 @@ type AskCard struct {
 type AskCardCite struct {
 	AssetID string `json:"assetId"`
 	Title   string `json:"title"`
+	Type    string `json:"type,omitempty"`
 	Pages   string `json:"pages,omitempty"`
 }
 
@@ -60,7 +63,7 @@ func recordAssets(ctx context.Context, set func(*AssetsResult)) {
 func askCard(out *AskAssetsOutput) *AskCard {
 	c := &AskCard{Scope: out.Scope, Excerpts: make([]AskCardCite, len(out.Excerpts))}
 	for i, e := range out.Excerpts {
-		c.Excerpts[i] = AskCardCite{AssetID: e.AssetID, Title: e.Title, Pages: e.Pages}
+		c.Excerpts[i] = AskCardCite{AssetID: e.AssetID, Title: e.Title, Type: e.Type, Pages: e.Pages}
 	}
 	return c
 }

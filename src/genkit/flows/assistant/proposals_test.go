@@ -103,6 +103,9 @@ func bulkPack(ran *int) Pack {
 				assistantkit.GatedRetry("bulkThing", assistantkit.Gate[bulkIn]{
 					Needs:   func(_ context.Context, in bulkIn) bool { return in.N > 3 },
 					Summary: func(in bulkIn) string { return fmt.Sprintf("Do %d things", in.N) },
+					Card: func(_ context.Context, in bulkIn) *assistantkit.Card {
+						return &assistantkit.Card{Verb: fmt.Sprintf("Do %d", in.N)}
+					},
 					Recheck: func(_ context.Context, in bulkIn) (bulkIn, error) {
 						if in.N == shrunkBulk {
 							in.N--
@@ -163,7 +166,8 @@ func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
 		t.Fatal(err)
 	}
 	if *ran != 0 || len(store.rows) != 1 || store.rows[0].ScopeKind != models.AssistantScopeWorkspace || len(resp.Proposals) != 1 ||
-		resp.Proposals[0].Summary != "Do 5 things" || !slices.Contains(events, SSEEventProposalCreated) {
+		resp.Proposals[0].Summary != "Do 5 things" || resp.Proposals[0].Card == nil || resp.Proposals[0].Card.Verb != "Do 5" ||
+		!slices.Contains(events, SSEEventProposalCreated) {
 		t.Fatalf("ran = %d, rows = %d, resp = %+v, events = %v", *ran, len(store.rows), resp.Proposals, events)
 	}
 	id := store.rows[0].ID

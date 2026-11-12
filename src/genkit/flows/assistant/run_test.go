@@ -337,6 +337,39 @@ func TestRun_ToolResultReportsRefusal(t *testing.T) {
 	}
 }
 
+// A tool's step reaches its tool_result, for the step's line.
+func TestRun_ToolResultCarriesStep(t *testing.T) {
+	type stepOut struct {
+		Step *assistantkit.Step `json:"step"`
+	}
+	searched := Pack{
+		Name: "steps", Summary: "steps", Scopes: []models.AssistantScopeKind{models.AssistantScopeWorkspace},
+		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
+			tool := genkit.DefineTool(g, "searchThing", "Searches.",
+				assistantkit.Wrap(func(context.Context, struct{}) (*stepOut, error) {
+					return &stepOut{Step: &assistantkit.Step{Subject: "Brochure", Passages: 3}}, nil
+				}))
+			return []assistantkit.Spec{{Name: tool.Name(), Pack: "steps", Scopes: allScopes, Tier: assistantkit.TierRead, Guide: "Searches.", Tool: tool}}, nil
+		},
+	}
+	h := newHarness(t, searched)
+	_, _, _, err := h.turn(ideasView(t, 1, 1), "search",
+		fakemodel.Tools(fakemodel.Call{Name: "searchThing", Input: map[string]any{}}),
+		fakemodel.Answer(`{"explanation":"Found 3.","action":"answered"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range h.payloads {
+		if r, ok := d.(ToolResultEventPayload); ok && r.Name == "searchThing" {
+			if r.Step == nil || *r.Step != (assistantkit.Step{Subject: "Brochure", Passages: 3}) {
+				t.Fatalf("step = %+v", r.Step)
+			}
+			return
+		}
+	}
+	t.Fatal("no tool_result for searchThing")
+}
+
 func TestRun_UnsavedTurnStillCompletes(t *testing.T) {
 	h := newHarness(t)
 	h.msgs.fail = errors.New("db down")

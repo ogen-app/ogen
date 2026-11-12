@@ -19,6 +19,8 @@ type Proposal struct {
 	Args any
 	// Summary describes the call on the proposal card.
 	Summary string
+	// Card is the card's details; nil shows the summary alone.
+	Card    *Card
 	Options []Option
 }
 
@@ -89,6 +91,9 @@ type Gate[In any] struct {
 	// Describe is Summary for a card that needs to read something, e.g. the
 	// title of the idea a merge keeps. It wins over Summary when set.
 	Describe func(context.Context, In) string
+	// Card gives the card its details: the confirm button's verb, what the
+	// work draws on and makes. Nil leaves the summary alone.
+	Card func(context.Context, In) *Card
 	// Recheck runs when the user confirms, after Precheck, and returns the
 	// call narrowed to what still holds, e.g. without the ideas deleted
 	// while the offer waited. A call that narrowed is offered afresh
@@ -123,8 +128,17 @@ func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome
 		if gate.Needs != nil && !gate.Needs(ctx, in) {
 			return next(ctx, in)
 		}
-		return propose[Out](ctx, Proposal{Tool: tool, Args: in, Summary: gate.summary(ctx, tool, in)}, StatusProposed)
+		return propose[Out](ctx, gate.proposal(ctx, tool, in), StatusProposed)
 	}
+}
+
+// proposal is the offer of a call, with its card.
+func (g Gate[In]) proposal(ctx context.Context, tool string, in In) Proposal {
+	p := Proposal{Tool: tool, Args: in, Summary: g.summary(ctx, tool, in)}
+	if g.Card != nil {
+		p.Card = g.Card(ctx, in)
+	}
+	return p
 }
 
 // summary describes the call for its card.
@@ -168,7 +182,7 @@ func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], 
 			return Outcome[Out]{}, fmt.Errorf("recheck %s: %w", tool, err)
 		}
 		if !same {
-			out, err := propose[Out](ctx, Proposal{Tool: tool, Args: fresh, Summary: gate.summary(ctx, tool, fresh)}, StatusProposed)
+			out, err := propose[Out](ctx, gate.proposal(ctx, tool, fresh), StatusProposed)
 			out.Reason = ChangedSince + "nothing ran, and what still holds is offered again."
 			return out, err
 		}

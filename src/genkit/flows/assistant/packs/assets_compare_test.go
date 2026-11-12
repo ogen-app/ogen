@@ -13,6 +13,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_compare"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -99,6 +100,10 @@ func TestCompareAssets(t *testing.T) {
 	if out.Grounding.Mode != "grounded" || !slices.Equal(analyses, []string{"an-a1", "", "an-a3"}) {
 		t.Fatalf("grounding = %+v", out.Grounding)
 	}
+	// The step counts the analyses read and the passages.
+	if *out.Step != (assistantkit.Step{Analyses: 2, Passages: 2}) {
+		t.Fatalf("step = %+v", out.Step)
+	}
 	// The lens read is the thread's campaign's.
 	if lenses := d.Analyses.(*compareLenses).asked; lenses[0] == nil || *lenses[0] != "c1" {
 		t.Fatalf("lens = %v", lenses)
@@ -175,6 +180,9 @@ func TestCompareAssets_FocusAndMissing(t *testing.T) {
 	}
 	if !strings.Contains(req.Sources[0].Text, "Sells the reopening.") || !strings.Contains(req.Sources[0].Text, "Passages about spa hours:\n(p. 12) Spa hours 9:00–21:00.") {
 		t.Fatalf("analysis source = %q; want the analysis and the focused passages", req.Sources[0].Text)
+	}
+	if *out.Step != (assistantkit.Step{Analyses: 2, Passages: 2}) {
+		t.Fatalf("step = %+v; each analysis read one focused passage", out.Step)
 	}
 	if !slices.Equal(out.Missing, []string{"gone"}) || !strings.Contains(out.Note, "gone") {
 		t.Fatalf("missing = %v, note %q", out.Missing, out.Note)
