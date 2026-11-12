@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -140,8 +141,11 @@ func mergeGroups(in MergeIdeasInput) ([]MergeGroup, error) {
 		return nil, assistantkit.Refused(fmt.Sprintf("at most %d groups at once", maxDuplicateGroups))
 	}
 	seen := map[string]bool{}
-	for _, g := range groups {
-		for _, id := range append([]string{g.KeepID}, dedupe(g.MergeIDs)...) {
+	for i := range groups {
+		// Trimmed as Merge trims them, so the check sees the ids it merges.
+		g := &groups[i]
+		g.KeepID, g.MergeIDs = strings.TrimSpace(g.KeepID), dedupe(g.MergeIDs)
+		for _, id := range append([]string{g.KeepID}, g.MergeIDs...) {
 			if seen[id] {
 				return nil, assistantkit.Refused("an idea can be in one merge only; " + id + " is in two")
 			}

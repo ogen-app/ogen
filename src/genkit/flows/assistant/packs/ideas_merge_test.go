@@ -125,6 +125,12 @@ func TestMergeIdeas_Groups(t *testing.T) {
 	refused(t, err)
 	_, err = mergeIdeas(ctx, d, MergeIdeasInput{})
 	refused(t, err)
+	// A kept id padded with spaces is still the id another group merges.
+	_, err = mergeIdeas(ctx, d, MergeIdeasInput{Groups: []MergeGroup{{KeepID: " i3 ", MergeIDs: []string{"i1"}}, {KeepID: "i2", MergeIDs: []string{"i3"}}}})
+	refused(t, err)
+	if repo.byID["i1"] == nil || repo.byID["i3"] == nil {
+		t.Fatal("a refused merge merged")
+	}
 
 	out, err := mergeIdeas(ctx, d, MergeIdeasInput{Groups: []MergeGroup{{KeepID: "i3", MergeIDs: []string{"i1"}}, {KeepID: "i4", MergeIDs: []string{"i5"}}}})
 	if err != nil || len(out.Groups) != 2 || out.Groups[1].Idea.ID != "i4" || !slices.Equal(out.Groups[1].Deleted, []string{"i5"}) ||
