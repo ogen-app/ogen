@@ -32,7 +32,7 @@ func TestResults_LastOutputByTool(t *testing.T) {
 	for _, id := range []string{"s1", "s2", "refused", "broken"} {
 		_, _ = run(ctx, RunSeriesInput{SeriesID: id})
 	}
-	get := recorded("foundation", "getBrand", expiredOnly, func(context.Context, struct{}) (*BrandOut, error) {
+	get := recorded("foundation", "getBrand", brandResult, func(context.Context, struct{}) (*BrandOut, error) {
 		return &BrandOut{Voices: []BrandVoiceOut{{ID: "v1"}}, ExpiredFacts: []models.BrandFact{{ID: "f1"}}}, nil
 	})
 	if _, err := get(ctx, struct{}{}); err != nil {
@@ -54,8 +54,8 @@ func TestResults_LastOutputByTool(t *testing.T) {
 	if r := got["runSeries"].(*RunOut); r.SeriesID != "s2" {
 		t.Fatalf("runSeries = %+v; want the last that ran", r)
 	}
-	if b, ok := got["getBrand"].(BrandResult); !ok || len(b.ExpiredFacts) != 1 {
-		t.Fatalf("getBrand = %#v; want only the expired facts", got["getBrand"])
+	if b, ok := got["getBrand"].(BrandResult); !ok || len(b.ExpiredFacts) != 1 || len(b.Voices) != 1 {
+		t.Fatalf("getBrand = %#v; want the client result", got["getBrand"])
 	}
 }
 
