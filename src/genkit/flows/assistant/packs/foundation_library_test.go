@@ -178,6 +178,7 @@ func TestEditBrand(t *testing.T) {
 		t.Fatal("an empty edit passed")
 	}
 	refused(t, EditBrandInput{UpdateVoices: []UpdateVoiceInput{{Name: "x"}}}.precheck())
+	refused(t, EditBrandInput{RemoveFacts: []string{"f1"}, Kept: []KeptFact{{FactID: " f1", Reason: "still true"}}}.precheck())
 }
 
 // A bulk edit stopped by an error retries the changes from the one it

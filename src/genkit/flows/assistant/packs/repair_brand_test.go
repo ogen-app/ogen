@@ -70,15 +70,27 @@ func TestCheckBrand(t *testing.T) {
 	if k := out.Findings[0].Key; !strings.HasPrefix(k, "brand_banned_word:") || k == out.Findings[1].Key {
 		t.Fatalf("keys = %q, %q", k, out.Findings[1].Key)
 	}
+	// The key holds however the issue is worded; another quote is another
+	// break.
+	p1 := &posts.posts[0]
+	same := brand_check.Finding{PostID: "p1", Rule: "banned_word", Quote: " cheap ", Issue: "Uses a banned word."}
+	if brandFindingKey(p1, same) != out.Findings[0].Key {
+		t.Fatal("rewording the issue changed the key")
+	}
+	if same.Quote = "rooms"; brandFindingKey(p1, same) == out.Findings[0].Key {
+		t.Fatal("another quote kept the key")
+	}
 
 	// With the writer, a finding offers a rewrite first; a dismissed one is
 	// left out and its post counts as clean.
 	dismissals := &memDismissals{keys: map[string]bool{out.Findings[1].Key: true}}
-	d.Dismissals, d.Actions = dismissals, &memActions{}
+	d.Dismissals = dismissals
 	var revised []string
-	d.Revise = func(_ context.Context, id, instruction, _ string) (bool, error) {
+	actions := &memActions{}
+	d.Actions = actions
+	d.Revise = func(_ context.Context, id, instruction, _ string) (Revised, error) {
 		revised = append(revised, id+": "+instruction)
-		return true, nil
+		return Revised{Content: "Rooms, kindly priced.", Status: models.PostStatusDraft, Versioned: true}, nil
 	}
 	sink := &offers{}
 	out, err = checkBrand(assistantkit.WithProposalSink(ctx, sink), d, CheckBrandInput{})
@@ -98,8 +110,17 @@ func TestCheckBrand(t *testing.T) {
 		t.Fatalf("revised = %v, %v", revised, err)
 	}
 	// The rewrite names its post and voice and can be undone.
-	if done.Title != "Rooms" || done.VoiceName != "Plain" || done.CampaignID != "c1" || done.UndoID == "" {
+	if done.Title != "Rooms" || done.VoiceName != "Plain" || done.CampaignID != "c1" || done.UndoID == "" || !strings.Contains(done.Note, "undone") {
 		t.Fatalf("rewrite = %+v", done)
+	}
+	// The undo logs the copy the rewrite replaced and the copy it wrote.
+	if a := actions.rows[0]; a.Kind != models.AssistantActionPostRewritten || a.Before["content"] != "Cheap rooms!" || a.After["content"] != "Rooms, kindly priced." {
+		t.Fatalf("undo log = %+v", a)
+	}
+	// Without an action log nothing promises an undo.
+	d.Actions = nil
+	if done, err := revisePost(ctx, d, rewrite); err != nil || done.UndoID != "" || strings.Contains(done.Note, "undone") {
+		t.Fatalf("no log = %+v, %v", done, err)
 	}
 	d.Revise, d.Dismissals = nil, nil
 

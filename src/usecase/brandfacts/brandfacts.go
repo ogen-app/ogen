@@ -152,6 +152,10 @@ func (s *Service) Split(facts []models.BrandFact) (current, expired []models.Bra
 // a span to carry over: no expiry, or none it was checked or added before.
 var ErrNoRenewalSpan = errors.New("the fact has no expiry span to carry over; say until when it holds")
 
+// ErrRenewalInPast is a renewal until a day already gone, which would leave
+// the fact expired.
+var ErrRenewalInPast = errors.New("a renewed fact can't expire before today; give a later date")
+
 // Renewal is f confirmed today: checked today and good until expiresAt, or,
 // when that is nil, for as long again as it was good before, counted from
 // when it was last checked or else added. The other fields are f's.
@@ -160,6 +164,9 @@ func (s *Service) Renewal(f *models.BrandFact, expiresAt *models.CalendarDate) (
 	in := InputOf(f)
 	in.CheckedAt = &today
 	if expiresAt != nil {
+		if expiresAt.Before(today.Time) {
+			return Input{}, &RuleError{Err: ErrRenewalInPast}
+		}
 		in.ExpiresAt = expiresAt
 		return in, nil
 	}

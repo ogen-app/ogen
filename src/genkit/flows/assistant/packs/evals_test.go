@@ -484,7 +484,7 @@ func TestPackEvals(t *testing.T) {
 		CheckBrand:  func(context.Context, brand_check.Request) (*brand_check.Result, error) { return nil, nil },
 		MoreLike:    func(context.Context, more_like_these.Request) ([]more_like_these.Idea, error) { return nil, nil },
 		Remove:      evalRemover{},
-		Revise:      func(context.Context, string, string, string) (bool, error) { return true, nil },
+		Revise:      func(context.Context, string, string, string) (Revised, error) { return Revised{Versioned: true}, nil },
 		AutoPublish: evalAllowlist{}, ConnectPlatform: func(string) (string, bool) { return "LinkedIn", true },
 		Digest: evalDigest{}, Versions: evalVersions{}, PostLogs: evalPostLogs{},
 	})

@@ -203,11 +203,14 @@ func (out *CheckBrandOutput) addFindings(ctx context.Context, d Deps, found []br
 	return nil
 }
 
-// brandFindingKey keys a finding by its post's text, so it holds while the
-// post stays the same.
+// brandFindingKey keys a finding by its post's text, the rule it breaks and
+// the words it quotes, so it holds while the post stays the same however the
+// check words the issue; the quote, case and spacing aside, tells two breaks
+// of one rule apart.
 func brandFindingKey(p *models.Post, f brand_check.Finding) string {
+	quote := strings.Join(strings.Fields(strings.ToLower(f.Quote)), " ")
 	h := sha256.New()
-	for _, s := range []string{p.CampaignID, p.ID, f.Rule, f.Quote, f.Issue, p.Title + "\x00" + p.Content} {
+	for _, s := range []string{p.CampaignID, p.ID, f.Rule, quote, p.Title + "\x00" + p.Content} {
 		h.Write([]byte(s + "|"))
 	}
 	return "brand_" + f.Rule + ":" + hex.EncodeToString(h.Sum(nil))[:12]
