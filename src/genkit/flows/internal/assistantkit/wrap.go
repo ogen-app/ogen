@@ -30,6 +30,13 @@ func RefusedCode(code, reason string, alternatives ...string) error {
 	return &Refusal{Reason: reason, Alternatives: alternatives, Code: code}
 }
 
+// refused is r as a refused outcome.
+func refused[Out any](r *Refusal) Outcome[Out] {
+	o := Refuse[Out](r.Reason, r.Alternatives...)
+	o.Code = r.Code
+	return o
+}
+
 // Matcher recognises an error type a dependency uses for user-correctable
 // input and returns the reason to show the model.
 type Matcher func(error) (reason string, ok bool)
@@ -55,7 +62,7 @@ func Wrap[In, Out any](body func(context.Context, In) (Out, error), refusable ..
 			return OK(out), nil
 		}
 		if r, ok := errors.AsType[*Refusal](err); ok {
-			return Refuse[Out](r.Reason, r.Alternatives...), nil
+			return refused[Out](r), nil
 		}
 		for _, m := range refusable {
 			if reason, ok := m(err); ok {

@@ -150,7 +150,7 @@ func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome
 		if gate.Precheck != nil {
 			err := gate.Precheck(ctx, in)
 			if r, ok := errors.AsType[*Refusal](err); ok {
-				return Refuse[Out](r.Reason, r.Alternatives...), nil
+				return refused[Out](r), nil
 			}
 			if c, ok := errors.AsType[*ConflictError](err); ok {
 				return propose[Out](ctx, Proposal{Tool: tool, Args: in, Summary: c.Reason, Options: c.Options}, StatusConflict)

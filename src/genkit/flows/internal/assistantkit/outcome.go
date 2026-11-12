@@ -58,9 +58,11 @@ type Outcome[T any] struct {
 	Result       *T       `json:"result,omitempty"`
 	Reason       string   `json:"reason,omitempty"`
 	Alternatives []string `json:"alternatives,omitempty"`
-	Options      []Option `json:"options,omitempty"`
-	ProposalID   string   `json:"proposalId,omitempty"`
-	Summary      string   `json:"summary,omitempty"`
+	// Code names a refusal the client draws its own card for.
+	Code       string   `json:"code,omitempty"`
+	Options    []Option `json:"options,omitempty"`
+	ProposalID string   `json:"proposalId,omitempty"`
+	Summary    string   `json:"summary,omitempty"`
 	// Changes is what changed since a confirmed offer was made, in plain
 	// words, when that is why it ran nothing: it was refused, or what still
 	// holds was offered afresh (ProposalID).
@@ -132,4 +134,17 @@ func OutputOK(output any) bool {
 		return false
 	}
 	return true
+}
+
+// OutputCode is a refused tool response's code, empty for any other.
+func OutputCode(output any) string {
+	m, ok := output.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if s, _ := m["status"].(string); Status(s) != StatusRefused {
+		return ""
+	}
+	code, _ := m["code"].(string)
+	return code
 }

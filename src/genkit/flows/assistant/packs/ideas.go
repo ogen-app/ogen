@@ -170,9 +170,12 @@ type FindIdeasInput struct {
 
 // IdeaRef is an idea as the assistant sees it.
 type IdeaRef struct {
-	ID         string          `json:"id"`
-	Title      string          `json:"title"`
-	Verdict    string          `json:"verdict,omitempty"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Verdict string `json:"verdict,omitempty"`
+	// RemindAt is when a later idea comes back; past it, the idea is woken
+	// and sits with the undecided ones although its verdict stays later.
+	RemindAt   *time.Time      `json:"remindAt,omitempty"`
 	Origin     string          `json:"origin,omitempty"`
 	CampaignID string          `json:"campaignId,omitempty"`
 	FitScore   *int            `json:"fitScore,omitempty"`
@@ -216,7 +219,7 @@ func findIdeas(ctx context.Context, d Deps, in FindIdeasInput) (*FindIdeasOutput
 }
 
 func ideaRef(i models.Idea) IdeaRef {
-	r := IdeaRef{ID: i.ID, Title: i.Title, Origin: string(i.Origin), FitScore: i.FitScore, Plan: i.Plan, Posts: i.PostCount}
+	r := IdeaRef{ID: i.ID, Title: i.Title, RemindAt: i.RemindAt, Origin: string(i.Origin), FitScore: i.FitScore, Plan: i.Plan, Posts: i.PostCount}
 	if i.Verdict != nil {
 		r.Verdict = string(*i.Verdict)
 	}
@@ -263,6 +266,15 @@ func parseVerdict(verdict, remindAt string) (*models.IdeaVerdict, *time.Time, er
 		return nil, nil, assistantkit.Refused("remindAt is a YYYY-MM-DD date or an RFC 3339 time")
 	}
 	return v, &t, nil
+}
+
+// verdictName is a verdict as the tools name it: none for an idea back in
+// the inbox.
+func verdictName(v *models.IdeaVerdict) string {
+	if v == nil {
+		return "none"
+	}
+	return string(*v)
 }
 
 func verdictLabel(v string) string {
@@ -317,6 +329,13 @@ type SetIdeaVerdictsInput struct {
 type BulkIdeasOutput struct {
 	Done   int      `json:"done"`
 	Failed []string `json:"failed,omitempty"`
+	// Ideas are the ideas a triage or a move changed, as they are now; a
+	// delete leaves none.
+	Ideas []IdeaRef `json:"ideas,omitempty"`
+	// Verdict and RemindAt are what a triage set: yes, later, no, or none
+	// for back in the inbox.
+	Verdict  string     `json:"verdict,omitempty"`
+	RemindAt *time.Time `json:"remindAt,omitempty"`
 	// Stopped is why the change stopped part way; the ideas after it were
 	// not changed.
 	Stopped string `json:"stopped,omitempty"`
@@ -352,7 +371,7 @@ func setIdeaVerdicts(ctx context.Context, d Deps, in SetIdeaVerdictsInput) (*Bul
 	if err != nil {
 		return nil, err
 	}
-	out := &BulkIdeasOutput{}
+	out := &BulkIdeasOutput{Verdict: verdictName(verdict), RemindAt: remindAt}
 	var before, after []*models.Idea
 	// What changed is logged for undo whether or not the run finished.
 	defer func() {
@@ -367,6 +386,7 @@ func setIdeaVerdicts(ctx context.Context, d Deps, in SetIdeaVerdictsInput) (*Bul
 			var idea *models.Idea
 			if idea, _, err = d.Ideas.SetVerdict(ctx, id, verdict, remindAt, actor(ctx)); err == nil {
 				before, after = append(before, was), append(after, idea)
+				out.Ideas = append(out.Ideas, ideaRef(*idea))
 				out.Done++
 				continue
 			}
@@ -394,7 +414,8 @@ func moveIdeas(ctx context.Context, d Deps, in MoveIdeasInput) (*BulkIdeasOutput
 	out := &BulkIdeasOutput{}
 	ids := dedupe(in.IdeaIDs)
 	for i, id := range ids {
-		if _, _, err := d.Ideas.Update(ctx, id, ideas.UpdateInput{SetCampaign: true, CampaignID: campaign}); err != nil {
+		idea, _, err := d.Ideas.Update(ctx, id, ideas.UpdateInput{SetCampaign: true, CampaignID: campaign})
+		if err != nil {
 			if errors.Is(err, ideas.ErrCampaignNotFound) {
 				return stoppedEarly(ctx, out, ids[i:], assistantkit.Refused("that campaign doesn't exist"))
 			}
@@ -404,6 +425,7 @@ func moveIdeas(ctx context.Context, d Deps, in MoveIdeasInput) (*BulkIdeasOutput
 			out.Failed = append(out.Failed, id)
 			continue
 		}
+		out.Ideas = append(out.Ideas, ideaRef(*idea))
 		out.Done++
 	}
 	assistantkit.Touch(ctx, "idea", "")
@@ -509,7 +531,6 @@ func compileIdeas(ctx context.Context, d Deps, in CompileIdeasInput) (*CompileId
 		cp := CompiledPost{PostID: p.ID, Title: p.Title, Status: string(p.Status), PlatformID: p.PlatformID, Date: c.Date}
 		out.Posts = append(out.Posts, cp)
 	}
-	out.CompiledPost = out.Posts[0]
 	out.CompiledPost = out.Posts[0]
 	out.UndoID = recordUndo(ctx, d, models.AssistantActionPostCreated, first.ID, models.JSONMap{}, assistantundo.PostsCreated(made))
 	return out, nil

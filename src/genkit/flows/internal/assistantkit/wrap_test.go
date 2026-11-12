@@ -22,6 +22,8 @@ func TestWrap(t *testing.T) {
 			return 7, nil
 		case "refuse":
 			return 0, fmt.Errorf("check: %w", Refused("past date", "today", "tomorrow"))
+		case "coded":
+			return 0, RefusedCode("read_only", "it can't be edited")
 		case "invalid":
 			return 0, fmt.Errorf("engine: %w", &invalidInput{msg: "no platforms"})
 		}
@@ -39,11 +41,31 @@ func TestWrap(t *testing.T) {
 		!slices.Equal(out.Alternatives, []string{"today", "tomorrow"}) {
 		t.Fatalf("refuse: %+v, %v", out, err)
 	}
+	if out, err := call("coded"); err != nil || out.Status != StatusRefused || out.Code != "read_only" {
+		t.Fatalf("coded: %+v, %v", out, err)
+	}
 	if out, err := call("invalid"); err != nil || out.Status != StatusRefused || out.Reason != "no platforms" {
 		t.Fatalf("matched: %+v, %v", out, err)
 	}
 	if _, err := call("boom"); !errors.Is(err, infra) {
 		t.Fatalf("infra error = %v, want it returned", err)
+	}
+}
+
+func TestOutputCode(t *testing.T) {
+	cases := []struct {
+		output any
+		want   string
+	}{
+		{map[string]any{"status": "refused", "reason": "x", "code": "idea_read_only"}, "idea_read_only"},
+		{map[string]any{"status": "refused", "reason": "x"}, ""},
+		{map[string]any{"status": "ok", "code": "idea_read_only"}, ""},
+		{"plain", ""},
+	}
+	for _, tc := range cases {
+		if got := OutputCode(tc.output); got != tc.want {
+			t.Errorf("OutputCode(%v) = %q, want %q", tc.output, got, tc.want)
+		}
 	}
 }
 
