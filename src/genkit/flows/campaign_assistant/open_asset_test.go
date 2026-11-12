@@ -179,3 +179,22 @@ func TestAskCampaignAssets_Result(t *testing.T) {
 		t.Fatalf("end = %+v", res)
 	}
 }
+
+// An offer drawing on the open asset alone offers the campaign's ready
+// assets instead, when there are more.
+func TestWidenFromOpen(t *testing.T) {
+	ctx := onAssetPage(t, "a1")
+	w := widenFromOpen(ctx, []string{"a1"})
+	if w == nil || w.Label != "Use the campaign's 2 assets" || w.Instruction == "" {
+		t.Fatalf("widen = %+v", w)
+	}
+	card := contentPlanGate.Card(ctx, RunContentPlanInput{AssetIDs: []string{"a1"}})
+	if card.Verb != "Generate plan" || card.Widen == nil {
+		t.Fatalf("plan card = %+v", card)
+	}
+	for name, ids := range map[string][]string{"two assets": {"a1", "a2"}, "another asset": {"a2"}, "all": nil} {
+		if w := widenFromOpen(ctx, ids); w != nil {
+			t.Errorf("%s: widen = %+v", name, w)
+		}
+	}
+}

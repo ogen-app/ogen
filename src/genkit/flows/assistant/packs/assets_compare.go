@@ -39,8 +39,10 @@ type ComparedAsset struct {
 	Title  string `json:"title"`
 	Letter string `json:"letter"`
 	From   string `json:"from"`
-	// analysisID is the analysis read, when one was.
+	// analysisID is the analysis read, when one was, and passages how many
+	// passages.
 	analysisID string
+	passages   int
 }
 
 // ComparedClaim is a claim and the assets behind it, by id and letter.
@@ -64,6 +66,8 @@ type CompareAssetsOutput struct {
 	Missing   []string               `json:"missing,omitempty"`
 	Grounding assistantkit.Grounding `json:"grounding"`
 	Note      string                 `json:"note,omitempty"`
+	// Step is how many analyses and passages were read.
+	Step *assistantkit.Step `json:"step,omitempty"`
 }
 
 func compareAssets(ctx context.Context, d Deps, in CompareAssetsInput) (*CompareAssetsOutput, error) {
@@ -110,6 +114,13 @@ func compareAssets(ctx context.Context, d Deps, in CompareAssetsInput) (*Compare
 	out.Summary = res.Summary
 	out.Shared, out.Partial, out.Conflicts = claims(res.Shared), claims(res.Partial), claims(res.Conflicts)
 	out.Grounding = assistantkit.GroundingFrom(grounded)
+	out.Step = &assistantkit.Step{}
+	for _, a := range out.Assets {
+		if a.From == asset_compare.FromAnalysis {
+			out.Step.Analyses++
+		}
+		out.Step.Passages += a.passages
+	}
 	return out, nil
 }
 
@@ -165,7 +176,7 @@ func gatherSources(ctx context.Context, d Deps, ids []string, focus string, out 
 		if err != nil {
 			return nil, err
 		}
-		a := ComparedAsset{ID: id, Title: title, From: m.from, analysisID: m.analysisID}
+		a := ComparedAsset{ID: id, Title: title, From: m.from, analysisID: m.analysisID, passages: m.passages}
 		if m.text == "" {
 			out.Skipped = append(out.Skipped, a)
 			continue
@@ -184,7 +195,7 @@ func gatherSources(ctx context.Context, d Deps, ids []string, focus string, out 
 // No text when it has neither.
 func material(ctx context.Context, d Deps, assetID, focus string) (assetMaterial, error) {
 	focus = strings.TrimSpace(focus)
-	about, err := focusedPassages(ctx, d, assetID, focus)
+	about, n, err := focusedPassages(ctx, d, assetID, focus)
 	if err != nil {
 		return assetMaterial{}, err
 	}
@@ -201,7 +212,7 @@ func material(ctx context.Context, d Deps, assetID, focus string) (assetMaterial
 			if about != "" {
 				text = clip(text, compareRunes/2) + "\n\nPassages about " + focus + ":\n" + about
 			}
-			return assetMaterial{from: asset_compare.FromAnalysis, text: clip(text, compareRunes), analysisID: lens.ID}, nil
+			return assetMaterial{from: asset_compare.FromAnalysis, text: clip(text, compareRunes), analysisID: lens.ID, passages: n}, nil
 		}
 	}
 	if about == "" && d.Chunks != nil {
@@ -209,32 +220,33 @@ func material(ctx context.Context, d Deps, assetID, focus string) (assetMaterial
 		if err != nil {
 			return assetMaterial{}, err
 		}
-		about = joinPassages(chunks)
+		about, n = joinPassages(chunks), len(chunks)
 	}
-	return assetMaterial{from: asset_compare.FromPassages, text: clip(about, compareRunes)}, nil
+	return assetMaterial{from: asset_compare.FromPassages, text: clip(about, compareRunes), passages: n}, nil
 }
 
-// assetMaterial is what is read of an asset, where from, and the analysis
-// it came from when it did.
+// assetMaterial is what is read of an asset, where from, the analysis it
+// came from when it did, and how many passages it holds.
 type assetMaterial struct {
 	from, text, analysisID string
+	passages               int
 }
 
-// focusedPassages is the asset's passages about focus; "" without a focus,
-// or when search is unavailable or finds none.
-func focusedPassages(ctx context.Context, d Deps, assetID, focus string) (string, error) {
+// focusedPassages is the asset's passages about focus, and how many; none
+// without a focus, or when search is unavailable or finds none.
+func focusedPassages(ctx context.Context, d Deps, assetID, focus string) (string, int, error) {
 	if focus == "" || d.Chunks == nil || !embedopts.Available(d.Embedder) {
-		return "", nil
+		return "", 0, nil
 	}
 	emb, err := d.Embedder.Embed(ctx, &ai.EmbedRequest{Input: []*ai.Document{ai.DocumentFromText(focus, nil)}, Options: embedopts.Query()})
 	if err != nil || len(emb.Embeddings) == 0 {
-		return "", nil
+		return "", 0, nil
 	}
 	chunks, err := d.Chunks.SearchSimilar(ctx, pgvector.NewHalfVector(emb.Embeddings[0].Embedding), []string{assetID}, askMinSimilarity, comparePassages)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return joinPassages(chunks), nil
+	return joinPassages(chunks), len(chunks), nil
 }
 
 func joinPassages(chunks []models.AssetChunk) string {

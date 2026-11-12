@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 )
 
@@ -28,6 +29,9 @@ var (
 				return "Generate a new content plan for this campaign, without its sources"
 			}
 			return "Generate a new content plan for this campaign"
+		},
+		Card: func(ctx context.Context, in RunContentPlanInput) *assistantkit.Card {
+			return &assistantkit.Card{Verb: "Generate plan", Widen: widenFromOpen(ctx, in.AssetIDs)}
 		},
 	}
 	redistributeGate = assistantkit.Gate[struct{}]{
@@ -56,6 +60,13 @@ var (
 		Summary: func(in GeneratePostsInput) string {
 			return fmt.Sprintf("Plan %d ideas for %s", max(in.Count, 1), strings.Join(in.Platforms, ", "))
 		},
+		Card: func(ctx context.Context, in GeneratePostsInput) *assistantkit.Card {
+			return &assistantkit.Card{
+				Verb:  fmt.Sprintf("Plan %d ideas", generateTotal(ctx, in)),
+				Rows:  []assistantkit.CardRow{{Kind: assistantkit.CardRowDestination, Value: strings.Join(in.Platforms, ", ")}},
+				Widen: widenFromOpen(ctx, in.AssetIDs),
+			}
+		},
 	}
 	draftPostGate = assistantkit.Gate[DraftPostInput]{
 		Precheck: func(ctx context.Context, in DraftPostInput) error {
@@ -70,8 +81,69 @@ var (
 		Summary: func(in DraftPostInput) string {
 			return fmt.Sprintf("Write %d finished posts for %s from the research in this chat", max(in.Count, 1)*len(in.Platforms), strings.Join(in.Platforms, ", "))
 		},
+		Card: draftCard,
 	}
 )
+
+// widenFromOpen is a card's offer to draw on all the campaign's assets when
+// the call draws on the asset open on screen alone and the campaign has
+// more; nil otherwise.
+func widenFromOpen(ctx context.Context, ids []string) *assistantkit.CardWiden {
+	if len(ids) != 1 || ids[0] != assistant.FocusedAsset(ctx) {
+		return nil
+	}
+	st := getRequestState(ctx)
+	if st.repos.Assets == nil {
+		return nil
+	}
+	ready, err := readyCampaignAssetIDs(ctx, st.campaign, st.repos.Assets)
+	if err != nil || len(ready) < 2 {
+		return nil
+	}
+	return &assistantkit.CardWiden{
+		Note:        "Draws on the open asset only.",
+		Label:       fmt.Sprintf("Use the campaign's %d assets", len(ready)),
+		Instruction: "Use all the campaign's assets, not only the open one.",
+	}
+}
+
+// draftCard is the drafting offer's card: how many posts, where and when
+// they land, and the assets the research quoted.
+func draftCard(ctx context.Context, in DraftPostInput) *assistantkit.Card {
+	n := draftTotal(ctx, in)
+	verb := fmt.Sprintf("Draft %d posts", n)
+	if n == 1 {
+		verb = "Draft 1 post"
+	}
+	c := &assistantkit.Card{Verb: verb, Meta: "from the research in this chat"}
+	switch {
+	case len(in.Cited) == 1:
+		c.Meta = "from " + in.Cited[0].Title
+	case len(in.Cited) > 1:
+		c.Meta = fmt.Sprintf("from %d assets", len(in.Cited))
+	}
+	where := strings.Join(in.Platforms, ", ")
+	if camp := getRequestState(ctx).campaign; camp != nil {
+		where += " in " + camp.Name
+	}
+	c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowDestination, Value: where})
+	if day, err := time.Parse(time.DateOnly, strings.TrimSpace(in.PublishDate)); err == nil {
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowDates, Value: day.Format("2 Jan 2006"), Start: day.Format(time.DateOnly)})
+	} else {
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowDates, Value: "Spread over the next two weeks"})
+	}
+	for _, s := range in.Cited {
+		c.Sources = append(c.Sources, assistantkit.CardSource{ID: s.ID, Title: s.Title})
+	}
+	if in.CitesKnown && len(in.Cited) == 0 {
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowGrounding, Value: "Not grounded in an asset"})
+	}
+	c.Footnote = "They land in the campaign as drafts, ready to edit."
+	if n == 1 {
+		c.Footnote = "It lands in the campaign as a draft, ready to edit."
+	}
+	return c
+}
 
 // generateTotal is how many ideas a generatePosts call creates: the count,
 // capped per call as the tool caps it.

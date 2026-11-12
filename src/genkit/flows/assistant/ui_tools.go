@@ -49,6 +49,9 @@ type UIAction struct {
 	// Selection replaces the list's selection.
 	Selection   *UISelection `json:"selection,omitempty"`
 	SavedViewID string       `json:"savedViewId,omitempty"`
+	// SavedViewName names the saved view an open_saved_view opens, for the
+	// record of the turn.
+	SavedViewName string `json:"savedViewName,omitempty"`
 	// Window replaces an analytics screen's window: its dates, platforms
 	// and campaign.
 	Window *viewcontext.Window `json:"window,omitempty"`
@@ -259,13 +262,14 @@ func (t *toolSet) openSavedView(ctx context.Context, in OpenSavedViewInput) (*UI
 	if !ok {
 		return nil, assistantkit.Refused(fmt.Sprintf("saved views of %s can't be opened from here", view.Surface))
 	}
-	// Inside a campaign the view opens on the campaign's own list.
-	campaign := st.currentCampaign()
-	if campaign != "" {
-		screen = "campaign." + screen
+	// Saved views live on the workspace's lists only, so inside a campaign
+	// the view takes the user out to the workspace list.
+	note := uiApplies
+	if st.currentCampaign() != "" {
+		note = "It opens on the workspace's list, outside the campaign; say so. " + uiApplies
 	}
-	st.addUI(UIAction{Type: UIOpenSavedView, Screen: screen, CampaignID: campaign, SavedViewID: view.ID})
-	return &UIResult{Done: fmt.Sprintf("opening the saved view %q", view.Name), Note: uiApplies}, nil
+	st.addUI(UIAction{Type: UIOpenSavedView, Screen: screen, SavedViewID: view.ID, SavedViewName: view.Name})
+	return &UIResult{Done: fmt.Sprintf("opening the saved view %q", view.Name), Note: note}, nil
 }
 
 // ListSavedViewsInput names the list whose saved views to return.
@@ -274,15 +278,13 @@ type ListSavedViewsInput struct {
 }
 
 // SavedViewRef is one saved view: its name, the filter it stands for, and
-// how many items it matches across the workspace.
+// how many items it matches across the workspace, where it opens.
 type SavedViewRef struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Filter string `json:"filter"`
 	Shared bool   `json:"shared"`
-	// Count is left out inside a campaign, where the view opens on the
-	// campaign's own list and the workspace count would mislead.
-	Count *int `json:"count,omitempty"`
+	Count  *int   `json:"count,omitempty"`
 }
 
 // ListSavedViewsOutput is the saved views of one list.
@@ -316,13 +318,8 @@ func (t *toolSet) listSavedViews(ctx context.Context, in ListSavedViewsInput) (*
 	if _, ok := savedViewScreens[surface]; !ok {
 		return nil, assistantkit.Refused("which list? pass ideas or assets")
 	}
-	inCampaign := st.currentCampaign() != ""
-	var counts []string
-	if !inCampaign {
-		counts = []string{savedViewTotal}
-	}
 	user, _ := logging.UserIDFrom(ctx)
-	views, err := t.deps.SavedViewLists.List(ctx, savedviews.Caller{UserID: user}, surface, counts, time.UTC)
+	views, err := t.deps.SavedViewLists.List(ctx, savedviews.Caller{UserID: user}, surface, []string{savedViewTotal}, time.UTC)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +331,7 @@ func (t *toolSet) listSavedViews(ctx context.Context, in ListSavedViewsInput) (*
 			continue
 		}
 		ref := SavedViewRef{ID: v.ID, Name: v.Name, Filter: v.Query, Shared: v.Shared}
-		if n, ok := v.Counts[savedViewTotal]; ok && !inCampaign {
+		if n, ok := v.Counts[savedViewTotal]; ok {
 			ref.Count = new(n)
 		}
 		out.Views = append(out.Views, ref)
@@ -346,8 +343,8 @@ func (t *toolSet) listSavedViews(ctx context.Context, in ListSavedViewsInput) (*
 	if invalid > 0 {
 		notes = append(notes, fmt.Sprintf("%d of the saved views no longer match the list's filters and were left out.", invalid))
 	}
-	if inCampaign && len(out.Views) > 0 {
-		notes = append(notes, "Inside a campaign a saved view opens on the campaign's own list, so no counts are given.")
+	if st.currentCampaign() != "" && len(out.Views) > 0 {
+		notes = append(notes, "Saved views open on the workspace's list, outside the campaign, and count across the workspace.")
 	}
 	out.Note = strings.Join(notes, " ")
 	return out, nil

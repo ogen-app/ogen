@@ -233,7 +233,7 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 				emit(onEvent, SSEEventToolCall, ToolCallEventPayload{Name: tr.Name, Input: tr.Input, Ref: tr.Ref})
 			},
 			OnToolResult: func(tr *ai.ToolResponse) {
-				emit(onEvent, SSEEventToolResult, ToolResultEventPayload{Name: tr.Name, Ref: tr.Ref, OK: assistantkit.OutputOK(tr.Output)})
+				emit(onEvent, SSEEventToolResult, ToolResultEventPayload{Name: tr.Name, Ref: tr.Ref, OK: assistantkit.OutputOK(tr.Output), Step: assistantkit.StepOf(tr.Output)})
 			},
 		})),
 		// The system prompt, tools and history repeat every round and turn;

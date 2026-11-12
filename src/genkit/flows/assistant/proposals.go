@@ -43,6 +43,9 @@ type ProposalCard struct {
 	Summary   string           `json:"summary"`
 	ExpiresAt string           `json:"expiresAt"`
 	Options   []ProposalChoice `json:"options,omitempty"`
+	// Card is the card's details: the confirm button's verb, what the work
+	// draws on and makes. Absent, the card shows the summary and Confirm.
+	Card *assistantkit.Card `json:"card,omitempty"`
 }
 
 // ProposalChoice is one option on a card.
@@ -113,7 +116,7 @@ func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string,
 	if err := s.repos.Proposals.Create(ctx, row); err != nil {
 		return "", fmt.Errorf("store %s proposal: %w", p.Tool, err)
 	}
-	s.st.addCard(ProposalCard{ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339), Options: choices})
+	s.st.addCard(ProposalCard{ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339), Options: choices, Card: p.Card})
 	if s.st.proposedKeys == nil {
 		s.st.proposedKeys = map[string]string{}
 	}

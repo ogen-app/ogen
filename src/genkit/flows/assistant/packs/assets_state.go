@@ -14,9 +14,26 @@ import (
 )
 
 // assetsRules tell the model what the <assets> block is for.
-const assetsRules = `The <assets> block after the <view> is the asset bank's state, read on the server with the view: how many assets there are, how their analyses stand and how many ideas wait for a decision. Answer "what's left", "how many" and "what needs doing" from it without searching. Waiting analyses run on their own; offer analyseAsset only for failed ones, and offer analysing many at once before doing it.
+const assetsRules = `The <assets> block after the <view> is the asset bank's state, read on the server with the view: how many assets there are, how their analyses stand and how many ideas wait for a decision. Answer "what's left", "how many" and "what needs doing" from it without searching, and call readAssetsState once when the user asks how the bank stands, so the card shows the counts. Waiting analyses run on their own; offer analyseAsset only for failed ones, and offer analysing many at once before doing it.
 
 On an asset page the open asset is the default source: questions search it alone and generation draws on it alone, unless the user names other assets or asks for all of them. Say so when you answer ("from the brochure only"), so the narrower source is never hidden.`
+
+// ReadAssetsStateInput takes nothing: the state is the thread's campaign's
+// sources, else the workspace's bank.
+type ReadAssetsStateInput struct{}
+
+// ReadAssetsStateOutput is the bank's state for the client's card.
+type ReadAssetsStateOutput struct {
+	State *assets.State `json:"state"`
+}
+
+func readAssetsState(ctx context.Context, d Deps) (*ReadAssetsStateOutput, error) {
+	st, err := assets.ReadState(ctx, assets.StateReaders{Assets: d.Assets, Analyses: d.Analyses}, assistant.CampaignID(ctx), time.Now())
+	if err != nil {
+		return nil, err
+	}
+	return &ReadAssetsStateOutput{State: st}, nil
+}
 
 // assetsBegin readies the turn's results and gives it the bank's state: the
 // thread's campaign's sources, else the workspace's. A state that can't be

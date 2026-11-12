@@ -55,7 +55,10 @@ type Deps struct {
 	// confirmed after some went; nil keeps the offer as made.
 	Titles repository.EntityTitleRepository
 
-	Assets    repository.AssetRepository
+	Assets repository.AssetRepository
+	// Files gives the assets' length, pages or duration, for their cards;
+	// nil leaves it out.
+	Files     repository.AssetFileRepository
 	Campaigns repository.CampaignRepository
 	Tags      repository.TagRepository
 	Chunks    repository.AssetChunksRepository

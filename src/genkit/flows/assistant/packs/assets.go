@@ -82,6 +82,7 @@ func assetsPack(d Deps) assistant.Pack {
 					Summary: func(in TagAssetsInput) string {
 						return fmt.Sprintf("Tag %s", plural(len(in.AssetIDs), "asset", "assets"))
 					},
+					Card: func(ctx context.Context, in TagAssetsInput) *assistantkit.Card { return tagCard(ctx, d, in) },
 				}, assistantkit.Wrap(func(ctx context.Context, in TagAssetsInput) (*TagAssetsOutput, error) { return tagAssets(ctx, d, in) })), ai.WithStrictSchema(false))
 			attach := genkit.DefineTool(g, "attachAssets",
 				"Attaches assets to a campaign as its sources, or detaches them. Returns an undo id.",
@@ -109,6 +110,19 @@ func assetsPack(d Deps) assistant.Pack {
 					`Call this when the user asks to use assets in a campaign ("add these to the Spring campaign") or to stop using them (detach). campaignId defaults to the thread's. It can be undone.`),
 				spec(assetsPackName, importURL, assistantkit.TierRead,
 					`Call this when the user gives a web page to use — "add https://… as a source". The page is read in the background.`),
+			}
+			if d.Analyses != nil {
+				state := genkit.DefineTool(g, "readAssetsState",
+					"Reads the asset bank's state for its card: how many assets there are, how their analyses stand, the first waiting and failed ones, and the undecided ideas per lens.",
+					assistantkit.Wrap(func(ctx context.Context, _ ReadAssetsStateInput) (*ReadAssetsStateOutput, error) {
+						out, err := readAssetsState(ctx, d)
+						if err == nil {
+							recordAssets(ctx, func(r *AssetsResult) { r.State = out.State })
+						}
+						return out, err
+					}), ai.WithStrictSchema(false))
+				specs = append(specs, spec(assetsPackName, state, assistantkit.TierRead,
+					`Call this once when the user asks how the bank stands — "where are my assets at?", "what needs doing?" — so the card shows the counts with the assets to analyse or retry. Answer from it; it is the <assets> block, read again.`))
 			}
 			if d.Analyses != nil && d.IdeaRepo != nil {
 				read := genkit.DefineTool(g, "readAnalysis",
@@ -146,6 +160,9 @@ func assetsPack(d Deps) assistant.Pack {
 								return err
 							},
 							Describe: func(ctx context.Context, in CampaignFromAssetsInput) string { return campaignSummary(ctx, d, in) },
+							Card: func(ctx context.Context, in CampaignFromAssetsInput) *assistantkit.Card {
+								return campaignCard(ctx, d, in)
+							},
 						}, assistantkit.Wrap(func(ctx context.Context, in CampaignFromAssetsInput) (*CampaignFromAssetsOutput, error) {
 							out, err := campaignFromAssets(ctx, d, in)
 							if err == nil {
@@ -154,7 +171,7 @@ func assetsPack(d Deps) assistant.Pack {
 							return out, err
 						}))), ai.WithStrictSchema(false))
 				setUpSpec := spec(assetsPackName, setUp, assistantkit.TierProposal,
-					`Call this when the user asks to set up, start or make a campaign from assets — "set up a campaign from these". Pass the selected ids from getSelection, or the ones named; it defaults to the asset open on screen. Name it, and take the type and dates from what the sources say (an opening date, a launch), leaving dates out when they don't say; the card shows them so the user can change them. It creates no posts: offer a content plan once it's set up.`)
+					`Call this when the user asks to set up, start or make a campaign from assets — "set up a campaign from these". Pass the selected ids from getSelection, or the ones named; it defaults to the asset open on screen. Name it, and take the type and dates from what the sources say (an opening date, a launch), with dateReason saying where they come from, leaving dates out when they don't say; the card shows them so the user can change them. It creates no posts: offer a content plan once it's set up.`)
 				// Creating the campaign calls no model, so a yes isn't held to the
 				// spend cap; its sources' analyses keep their own cap.
 				setUpSpec.Free = true
@@ -244,8 +261,10 @@ const (
 type Excerpt struct {
 	AssetID string `json:"assetId"`
 	Title   string `json:"title"`
-	Pages   string `json:"pages,omitempty"`
-	Text    string `json:"text"`
+	// Type is the asset's kind: PDF, DOC, IMG, AUDIO, URL or MD.
+	Type  string `json:"type,omitempty"`
+	Pages string `json:"pages,omitempty"`
+	Text  string `json:"text"`
 }
 
 // AskAssetsOutput is the best passages, or why there are none.
@@ -255,6 +274,8 @@ type AskAssetsOutput struct {
 	// screen, the thread's campaign's assets or the workspace's.
 	Scope string `json:"scope"`
 	Note  string `json:"note,omitempty"`
+	// Step is the asset searched when it was one, and the passages found.
+	Step *assistantkit.Step `json:"step,omitempty"`
 }
 
 func askAssets(ctx context.Context, d Deps, in AskAssetsInput) (*AskAssetsOutput, error) {
@@ -284,18 +305,23 @@ func askAssets(ctx context.Context, d Deps, in AskAssetsInput) (*AskAssetsOutput
 	if err != nil {
 		return nil, fmt.Errorf("search assets: %w", err)
 	}
-	titles := map[string]string{}
-	if metas, err := d.Assets.ListMeta(ctx, ids); err == nil {
-		for _, a := range metas {
-			titles[a.ID] = a.Title
+	metas := map[string]models.Asset{}
+	if as, err := d.Assets.ListMeta(ctx, ids); err == nil {
+		for _, a := range as {
+			metas[a.ID] = a
 		}
 	}
 	out := &AskAssetsOutput{Excerpts: make([]Excerpt, 0, len(chunks)), Scope: scope}
 	for _, c := range chunks {
-		out.Excerpts = append(out.Excerpts, Excerpt{AssetID: c.AssetID, Title: titles[c.AssetID], Pages: pages(c.PageStart, c.PageEnd), Text: c.Content})
+		m := metas[c.AssetID]
+		out.Excerpts = append(out.Excerpts, Excerpt{AssetID: c.AssetID, Title: m.Title, Type: deref(m.Type), Pages: pages(c.PageStart, c.PageEnd), Text: c.Content})
 	}
 	if len(out.Excerpts) == 0 {
 		out.Note = "no asset content matched the question"
+	}
+	out.Step = &assistantkit.Step{Passages: len(out.Excerpts)}
+	if len(ids) == 1 {
+		out.Step.Subject = metas[ids[0]].Title
 	}
 	return out, nil
 }
@@ -437,6 +463,31 @@ type TagAssetsInput struct {
 	AssetIDs []string `json:"assetIds"`
 	Add      []string `json:"add,omitempty"    jsonschema:"description=Tag names to add; new names are created"`
 	Remove   []string `json:"remove,omitempty" jsonschema:"description=Tag names to remove"`
+}
+
+// tagCard is the tagging offer's card: the tags added and removed, on which
+// assets.
+func tagCard(ctx context.Context, d Deps, in TagAssetsInput) *assistantkit.Card {
+	ids := dedupe(in.AssetIDs)
+	metas, err := d.Assets.ListMeta(ctx, ids)
+	if err != nil || len(metas) == 0 {
+		return nil
+	}
+	verb := "Tag "
+	if len(in.Add) == 0 {
+		verb = "Untag "
+	}
+	c := &assistantkit.Card{
+		Verb:    verb + plural(len(ids), "asset", "assets"),
+		Sources: cardSources(metas),
+	}
+	if len(in.Add) > 0 {
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowTags, Value: "Add " + strings.Join(in.Add, ", ")})
+	}
+	if len(in.Remove) > 0 {
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowTags, Value: "Remove " + strings.Join(in.Remove, ", ")})
+	}
+	return c
 }
 
 // TagAssetsOutput is how many assets were tagged.

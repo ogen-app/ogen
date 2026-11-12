@@ -33,6 +33,7 @@ type CampaignFromAssetsInput struct {
 	Type        string   `json:"type,omitempty"        jsonschema:"description=The campaign type's name or label, e.g. Launch; omit for Evergreen"`
 	StartDate   string   `json:"startDate,omitempty"   jsonschema:"description=First day (YYYY-MM-DD), from what the sources say, e.g. an opening date; omit when they don't say"`
 	EndDate     string   `json:"endDate,omitempty"     jsonschema:"description=Last day (YYYY-MM-DD); omit when they don't say"`
+	DateReason  string   `json:"dateReason,omitempty"  jsonschema:"description=With dates: why those, in a few words from the sources, e.g. Around the 14 March opening, from the brochure"`
 	Description string   `json:"description,omitempty" jsonschema:"description=One or two sentences on what the campaign is for, from the sources"`
 }
 
@@ -45,11 +46,17 @@ type CampaignFromAssetsOutput struct {
 	EndDate    *time.Time `json:"endDate,omitempty"`
 	AssetIDs   []string   `json:"assetIds"`
 	UndoID     string     `json:"undoId,omitempty"`
+	// CreatedAt is when the yes made it.
+	CreatedAt time.Time `json:"createdAt"`
+	// Step is the campaign made and how many sources it got.
+	Step *assistantkit.Step `json:"step,omitempty"`
 }
 
-// campaignPlan is a proposal checked and resolved: its type and dates.
+// campaignPlan is a proposal checked and resolved: its type, dates and
+// sources.
 type campaignPlan struct {
 	ids        []string
+	sources    []models.Asset
 	ct         *models.CampaignType
 	start, end *time.Time
 }
@@ -109,8 +116,9 @@ func planCampaign(ctx context.Context, d Deps, in CampaignFromAssetsInput) (*cam
 		return nil, assistantkit.Refused("none of those assets exist")
 	}
 	for _, id := range ids {
-		if slices.ContainsFunc(metas, func(a models.Asset) bool { return a.ID == id }) {
+		if i := slices.IndexFunc(metas, func(a models.Asset) bool { return a.ID == id }); i >= 0 {
 			p.ids = append(p.ids, id)
+			p.sources = append(p.sources, metas[i])
 		}
 	}
 	return p, nil
@@ -139,6 +147,7 @@ func campaignFromAssets(ctx context.Context, d Deps, in CampaignFromAssetsInput)
 		return nil, err
 	}
 	cadence, _ := campaigngoal.Normalize("")
+	now := time.Now().UTC()
 	c := &models.Campaign{
 		ID: id, Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description),
 		CampaignTypeID: p.ct.ID, Status: models.StatusActive,
@@ -147,7 +156,7 @@ func campaignFromAssets(ctx context.Context, d Deps, in CampaignFromAssetsInput)
 		StartDate: p.start, EndDate: p.end,
 		PublishingTime: scheduling.DefaultPublishingTime, PublishingDays: scheduling.DefaultPublishingDays(),
 		SpreadMinutes: scheduling.DefaultSpreadMinutes, GoalCadence: cadence,
-		CreatedBy: actor(ctx),
+		CreatedBy: actor(ctx), CreatedAt: now, UpdatedAt: now,
 	}
 	err = d.CreateCampaign.Create(ctx, c, activity.SourceAssistant)
 	if refusal := createRefusal(err); refusal != nil {
@@ -160,7 +169,8 @@ func campaignFromAssets(ctx context.Context, d Deps, in CampaignFromAssetsInput)
 	undo := recordUndo(ctx, d, models.AssistantActionCampaignCreated, c.ID, models.JSONMap{}, assistantundo.CampaignCreated(c))
 	return &CampaignFromAssetsOutput{
 		CampaignID: c.ID, Name: c.Name, Type: cmp.Or(p.ct.Label, p.ct.Name),
-		StartDate: c.StartDate, EndDate: c.EndDate, AssetIDs: p.ids, UndoID: undo,
+		StartDate: c.StartDate, EndDate: c.EndDate, AssetIDs: p.ids, UndoID: undo, CreatedAt: c.CreatedAt,
+		Step: &assistantkit.Step{Subject: c.Name, Sources: len(p.ids)},
 	}, nil
 }
 
@@ -201,4 +211,64 @@ func campaignSummary(ctx context.Context, d Deps, in CampaignFromAssetsInput) st
 		}
 	}
 	return s
+}
+
+// campaignCard is the proposal card's details: the campaign's type and
+// dates, the assets it will draw on, and that no posts come with it.
+func campaignCard(ctx context.Context, d Deps, in CampaignFromAssetsInput) *assistantkit.Card {
+	p, err := planCampaign(ctx, d, in)
+	if err != nil {
+		return nil
+	}
+	c := &assistantkit.Card{
+		Verb:    "Create campaign",
+		Meta:    sourcesMeta(p.sources),
+		Rows:    []assistantkit.CardRow{{Kind: assistantkit.CardRowType, Value: cmp.Or(p.ct.Label, p.ct.Name)}},
+		Sources: cardSources(p.sources),
+	}
+	if p.start != nil || p.end != nil {
+		c.Rows = append(c.Rows, datesRow(p.start, p.end, strings.TrimSpace(in.DateReason)))
+	}
+	if len(p.sources) == 1 {
+		c.Footnote = "It becomes the campaign's source. No posts yet; a content plan can follow."
+	} else {
+		c.Footnote = fmt.Sprintf("The %d become its sources. No posts yet; a content plan can follow.", len(p.sources))
+	}
+	return c
+}
+
+// sourcesMeta is a card's headline meta: the one asset by its title, or how
+// many.
+func sourcesMeta(as []models.Asset) string {
+	if len(as) == 1 {
+		return "from " + as[0].Title
+	}
+	return "from " + plural(len(as), "asset", "assets")
+}
+
+func cardSources(as []models.Asset) []assistantkit.CardSource {
+	out := make([]assistantkit.CardSource, len(as))
+	for i, a := range as {
+		out[i] = assistantkit.CardSource{ID: a.ID, Title: a.Title, Type: deref(a.Type)}
+	}
+	return out
+}
+
+// datesRow is a card's dates, either of them open, and why those.
+func datesRow(start, end *time.Time, reason string) assistantkit.CardRow {
+	r := assistantkit.CardRow{Kind: assistantkit.CardRowDates, Note: reason}
+	var parts []string
+	if start != nil {
+		r.Start = start.Format(time.DateOnly)
+		parts = append(parts, "from "+start.Format("2 Jan 2006"))
+	}
+	if end != nil {
+		r.End = end.Format(time.DateOnly)
+		parts = append(parts, "to "+end.Format("2 Jan 2006"))
+	}
+	if start != nil && end != nil {
+		parts = []string{start.Format("2 Jan") + " – " + end.Format("2 Jan 2006")}
+	}
+	r.Value = strings.Join(parts, " ")
+	return r
 }

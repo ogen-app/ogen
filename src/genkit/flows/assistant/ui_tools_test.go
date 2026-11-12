@@ -107,21 +107,26 @@ func TestSetFilterAndSelect(t *testing.T) {
 func TestOpenSavedView(t *testing.T) {
 	h := newHarness(t)
 	ctx, st := onScreen(t, campaignIdeas)
-	if _, err := h.tools.openSavedView(ctx, OpenSavedViewInput{SavedViewID: "sv1"}); err != nil {
-		t.Fatal(err)
+	res, err := h.tools.openSavedView(ctx, OpenSavedViewInput{SavedViewID: "sv1"})
+	if err != nil || !strings.Contains(res.Note, "outside the campaign") {
+		t.Fatalf("open = %+v, %v; want the leaving said", res, err)
 	}
 	if _, err := h.tools.openSavedView(ctx, OpenSavedViewInput{SavedViewID: "private"}); err != nil {
 		t.Fatal(err)
 	}
 	// Someone else's private view reads as missing, as in the views list.
-	_, err := h.tools.openSavedView(ctx, OpenSavedViewInput{SavedViewID: "theirs"})
+	_, err = h.tools.openSavedView(ctx, OpenSavedViewInput{SavedViewID: "theirs"})
 	refusal(t, err, `no saved view "theirs"`)
 	_, err = h.tools.openSavedView(ctx, OpenSavedViewInput{SavedViewID: "nope"})
 	refusal(t, err, `no saved view "nope"`)
 
 	got := st.uiActions()
-	if len(got) != 2 || got[0].Screen != "campaign.ideas" || got[1].Screen != "campaign.assets" || got[1].CampaignID != "c1" {
-		t.Fatalf("actions = %+v; want each opened on the campaign's own list", got)
+	// Saved views live on the workspace's lists, so each opens there, named.
+	if len(got) != 2 || got[0].Screen != "ideas" || got[1].Screen != "assets" || got[1].CampaignID != "" || got[0].SavedViewName == "" {
+		t.Fatalf("actions = %+v; want each opened on the workspace's list, named", got)
+	}
+	if st.currentScreen() != "assets" || st.currentCampaign() != "" {
+		t.Fatalf("screen = %q in %q; follow-ups target the opened list", st.currentScreen(), st.currentCampaign())
 	}
 }
 
@@ -233,11 +238,12 @@ func TestListSavedViews(t *testing.T) {
 		t.Fatalf("note = %q; an invalid view is left out and said so", out.Note)
 	}
 
-	// Inside a campaign the view opens on the campaign's list, so the
-	// workspace count is left out.
+	// Inside a campaign the view still opens on the workspace's list, so
+	// it keeps the workspace count, and the note says where it opens.
 	ctx, _ = onScreen(t, campaignIdeas)
 	out, err = tools.listSavedViews(ctx, ListSavedViewsInput{List: "assets"})
-	if err != nil || lister.surface != "assets" || lister.counts != nil || out.Views[0].Count != nil {
+	if err != nil || lister.surface != "assets" || len(lister.counts) != 1 || *out.Views[0].Count != 12 ||
+		!strings.Contains(out.Note, "outside the campaign") {
 		t.Fatalf("campaign = %+v, %v (counts %v)", out, err, lister.counts)
 	}
 	if _, err := tools.listSavedViews(ctx, ListSavedViewsInput{}); err != nil || lister.surface != "ideas" {

@@ -34,7 +34,7 @@ func TestAssetsEnd(t *testing.T) {
 
 	// Each tool's last output is kept; an answer's passages lose their text.
 	recordAssets(ctx, func(r *AssetsResult) {
-		r.Ask = askCard(&AskAssetsOutput{Scope: scopeOpenAsset, Excerpts: []Excerpt{{AssetID: "a1", Title: "Brochure", Pages: "p. 12", Text: "six rooms"}}})
+		r.Ask = askCard(&AskAssetsOutput{Scope: scopeOpenAsset, Excerpts: []Excerpt{{AssetID: "a1", Title: "Brochure", Type: "PDF", Pages: "p. 12", Text: "six rooms"}}})
 	})
 	d := analysisDeps()
 	out, err := readAnalysis(ctx, d, ReadAnalysisInput{AssetID: "a1"})
@@ -47,7 +47,7 @@ func TestAssetsEnd(t *testing.T) {
 		t.Fatalf("end = %v, %v", res, err)
 	}
 	got := res.Value.(*AssetsResult)
-	if got.Ask.Scope != scopeOpenAsset || got.Ask.Excerpts[0] != (AskCardCite{AssetID: "a1", Title: "Brochure", Pages: "p. 12"}) {
+	if got.Ask.Scope != scopeOpenAsset || got.Ask.Excerpts[0] != (AskCardCite{AssetID: "a1", Title: "Brochure", Type: "PDF", Pages: "p. 12"}) {
 		t.Fatalf("ask = %+v", got.Ask)
 	}
 	if got.Analysis == nil || got.Analysis.AssetID != "a1" || got.Compare != nil || got.Campaign != nil {

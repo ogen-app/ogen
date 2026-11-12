@@ -118,3 +118,28 @@ type emptyAnalyses struct {
 func (emptyAnalyses) State(context.Context, *string, time.Time, int) (*repository.AnalysisState, error) {
 	return &repository.AnalysisState{Lenses: map[models.AssetAnalysisStatus]int{}}, nil
 }
+
+// readAssetsState reads the thread's scope and gives the state to the card.
+func TestReadAssetsState(t *testing.T) {
+	as, an := &stateAssets{}, &stateAnalyses{}
+	d := Deps{Assets: as, Analyses: an}
+
+	ctx, _ := turn(t, campaign1, nil)
+	ctx = withAssetsTurn(ctx)
+	out, err := readAssetsState(ctx, d)
+	if err != nil || out.State.Total != 64 || out.State.AnalysisFailed != 3 || len(out.State.FailedAssets) != 1 {
+		t.Fatalf("state = %+v, %v", out, err)
+	}
+	if as.scoped != "c1" || an.lens == nil || *an.lens != "c1" {
+		t.Fatalf("read scoped to %q / %v; want the thread's campaign", as.scoped, an.lens)
+	}
+
+	ctx, _ = turn(t, workspace, nil)
+	if _, err := readAssetsState(ctx, d); err != nil || as.scoped != "" || an.lens != nil {
+		t.Fatalf("workspace read scoped to %q / %v, %v", as.scoped, an.lens, err)
+	}
+	as.err = errors.New("db down")
+	if _, err := readAssetsState(ctx, d); err == nil {
+		t.Fatal("a failed read is an error")
+	}
+}

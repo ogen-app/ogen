@@ -10,6 +10,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -43,6 +44,21 @@ func (r assetIdeas) List(_ context.Context, f repository.IdeaListFilter) ([]mode
 	return out, nil
 }
 
+type assetFiles struct {
+	repository.AssetFileRepository
+	files map[string]*models.AssetFile
+}
+
+func (r assetFiles) ListByAssetIDs(_ context.Context, ids []string) (map[string]*models.AssetFile, error) {
+	out := map[string]*models.AssetFile{}
+	for _, id := range ids {
+		if f, ok := r.files[id]; ok {
+			out[id] = f
+		}
+	}
+	return out, nil
+}
+
 func analysisDeps() Deps {
 	read := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
 	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
@@ -51,7 +67,14 @@ func analysisDeps() Deps {
 			Verdict: verdict, RemindAt: remind, FitScore: new(fit)}
 	}
 	return Deps{
-		Assets: memAssets{all: []models.Asset{{ID: "a1", Title: "Villa Aurora brochure 2026"}, {ID: "a2", Title: "Founder interview"}}},
+		Assets: memAssets{all: []models.Asset{
+			{ID: "a1", Title: "Villa Aurora brochure 2026", Type: new(models.AssetTypePDF)},
+			{ID: "a2", Title: "Founder interview", Type: new(models.AssetTypeAudio)},
+		}},
+		Files: assetFiles{files: map[string]*models.AssetFile{
+			"a1": {AssetID: "a1", PageCount: new(14)},
+			"a2": {AssetID: "a2", DurationMs: 18 * 60_000},
+		}},
 		Analyses: lensRepo{lenses: []models.AssetAnalysis{
 			{ID: "ws", AssetID: "a1", Status: models.AssetAnalysisStatusReady, AnalyzedAt: &read,
 				Gist: "A place to slow down.", Summary: strings.Repeat("s", analysisSummaryRunes+50),
@@ -95,12 +118,19 @@ func TestReadAnalysis(t *testing.T) {
 	if len([]rune(out.Summary)) != analysisSummaryRunes || !strings.HasSuffix(out.Summary, "…") {
 		t.Fatalf("summary is %d runes", len([]rune(out.Summary)))
 	}
-	if len(out.OtherLenses) != 1 || out.OtherLenses[0].CampaignName != "Spring reopening" {
-		t.Fatalf("other lenses = %+v; the campaign lens is offered, not mixed in", out.OtherLenses)
+	if len(out.OtherLenses) != 1 || out.OtherLenses[0].CampaignName != "Spring reopening" || out.OtherLenses[0].IdeaCount != 1 {
+		t.Fatalf("other lenses = %+v; the campaign lens is offered with its idea count, not mixed in", out.OtherLenses)
+	}
+	if *out.Step != (assistantkit.Step{Workspace: true}) {
+		t.Fatalf("step = %+v; want the workspace lens", out.Step)
+	}
+	if out.Lens.IdeaCount != 6 || out.Type != models.AssetTypePDF || out.PageCount == nil || *out.PageCount != 14 || out.DurationMs != 0 {
+		t.Fatalf("lens ideas %d, asset %q, %v pages, %d ms; want 6 ideas and a 14-page PDF", out.Lens.IdeaCount, out.Type, out.PageCount, out.DurationMs)
 	}
 
 	// A lens named by campaign, and the thread's campaign by default.
-	if out, _ := readAnalysis(ctx, d, ReadAnalysisInput{AssetID: "a1", CampaignID: "c1"}); out.Lens.CampaignName != "Spring reopening" || out.Ideas.Undecided != 1 {
+	if out, _ := readAnalysis(ctx, d, ReadAnalysisInput{AssetID: "a1", CampaignID: "c1"}); out.Lens.CampaignName != "Spring reopening" || out.Ideas.Undecided != 1 ||
+		out.Step.Subject != "Spring reopening" || out.Step.Workspace {
 		t.Fatalf("named lens = %+v", out)
 	}
 	camp, _ := turn(t, campaign1, nil)
@@ -120,8 +150,8 @@ func TestReadAnalysis_NoReading(t *testing.T) {
 	if err != nil || out.Lens.Status != lensNotRead || out.Lens.CampaignID != "c1" || out.Summary != "" || out.Note == "" {
 		t.Fatalf("missing lens = %+v, %v; want not_read and nothing from another lens", out, err)
 	}
-	if len(out.OtherLenses) != 1 || out.OtherLenses[0].Status != "failed" {
-		t.Fatalf("other lenses = %+v", out.OtherLenses)
+	if len(out.OtherLenses) != 1 || out.OtherLenses[0].Status != "failed" || out.DurationMs != 18*60_000 || out.PageCount != nil {
+		t.Fatalf("other lenses = %+v, %d ms; want the recording's length", out.OtherLenses, out.DurationMs)
 	}
 	out, err = readAnalysis(ctx, d, ReadAnalysisInput{AssetID: "a2"})
 	if err != nil || out.Lens.Status != "failed" || out.FailureReason != "audio too short" || len(out.TopIdeas) != 0 {

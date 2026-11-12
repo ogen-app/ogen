@@ -37,6 +37,8 @@ type LensRef struct {
 	CampaignName string     `json:"campaignName,omitempty"`
 	Status       string     `json:"status"`
 	ReadAt       *time.Time `json:"readAt,omitempty"`
+	// IdeaCount is how many ideas the lens distilled from the asset.
+	IdeaCount int `json:"ideaCount"`
 }
 
 // IdeaCounts counts a lens's ideas by verdict; a later idea whose reminder
@@ -60,8 +62,13 @@ type AnalysisIdea struct {
 // ReadAnalysisOutput is what one lens found in an asset, and the asset's
 // other lenses, which are offered and never mixed in.
 type ReadAnalysisOutput struct {
-	AssetID       string         `json:"assetId"`
-	Title         string         `json:"title"`
+	AssetID string `json:"assetId"`
+	Title   string `json:"title"`
+	// Type is the asset's kind (PDF, DOC, IMG…); PageCount and DurationMs
+	// its length, when known.
+	Type          string         `json:"type,omitempty"`
+	PageCount     *int           `json:"pageCount,omitempty"`
+	DurationMs    int64          `json:"durationMs,omitzero"`
 	Lens          LensRef        `json:"lens"`
 	Gist          string         `json:"gist,omitempty"`
 	Summary       string         `json:"summary,omitempty"`
@@ -71,6 +78,8 @@ type ReadAnalysisOutput struct {
 	FailureReason string         `json:"failureReason,omitempty"`
 	OtherLenses   []LensRef      `json:"otherLenses"`
 	Note          string         `json:"note,omitempty"`
+	// Step is the lens read.
+	Step *assistantkit.Step `json:"step,omitempty"`
 }
 
 func readAnalysis(ctx context.Context, d Deps, in ReadAnalysisInput) (*ReadAnalysisOutput, error) {
@@ -93,24 +102,50 @@ func readAnalysis(ctx context.Context, d Deps, in ReadAnalysisInput) (*ReadAnaly
 	if err != nil {
 		return nil, err
 	}
-	out := &ReadAnalysisOutput{AssetID: assetID, Title: metas[0].Title, TopIdeas: []AnalysisIdea{}, OtherLenses: []LensRef{}}
+	out := &ReadAnalysisOutput{AssetID: assetID, Title: metas[0].Title, Type: deref(metas[0].Type), TopIdeas: []AnalysisIdea{}, OtherLenses: []LensRef{}}
+	if d.Files != nil {
+		files, err := d.Files.ListByAssetIDs(ctx, []string{assetID})
+		if err != nil {
+			return nil, err
+		}
+		if f := files[assetID]; f != nil {
+			out.PageCount, out.DurationMs = f.PageCount, f.DurationMs
+		}
+	}
+	var ideas []models.Idea
+	if len(lenses) > 0 {
+		if ideas, err = d.IdeaRepo.List(ctx, repository.IdeaListFilter{AssetID: assetID}); err != nil {
+			return nil, err
+		}
+	}
+	perLens := map[string]int{}
+	for _, idea := range ideas {
+		if idea.AssetAnalysisID != nil {
+			perLens[*idea.AssetAnalysisID]++
+		}
+	}
 	var lens *models.AssetAnalysis
 	for i := range lenses {
 		if sameLens(lenses[i].CampaignID, want) {
 			lens = &lenses[i]
 			continue
 		}
-		out.OtherLenses = append(out.OtherLenses, lensRef(&lenses[i]))
+		ref := lensRef(&lenses[i])
+		ref.IdeaCount = perLens[lenses[i].ID]
+		out.OtherLenses = append(out.OtherLenses, ref)
 	}
 	if lens == nil {
 		out.Lens = LensRef{Status: lensNotRead}
 		if want != nil {
 			out.Lens.CampaignID = *want
 		}
+		out.Step = lensStep(out.Lens)
 		out.Note = "this lens hasn't read the asset. Say so; offer a lens in otherLenses or analyseAsset, and never answer from another lens unasked"
 		return out, nil
 	}
 	out.Lens = lensRef(lens)
+	out.Lens.IdeaCount = perLens[lens.ID]
+	out.Step = lensStep(out.Lens)
 	switch lens.Status {
 	case models.AssetAnalysisStatusReady:
 	case models.AssetAnalysisStatusFailed, models.AssetAnalysisStatusSkipped:
@@ -123,10 +158,6 @@ func readAnalysis(ctx context.Context, d Deps, in ReadAnalysisInput) (*ReadAnaly
 	}
 	out.Gist, out.KeyPoints = lens.Gist, lens.Result.KeyPoints
 	out.Summary = clip(lens.Summary, analysisSummaryRunes)
-	ideas, err := d.IdeaRepo.List(ctx, repository.IdeaListFilter{AssetID: assetID})
-	if err != nil {
-		return nil, err
-	}
 	out.Ideas, out.TopIdeas = tallyIdeas(ideas, lens.ID, time.Now())
 	return out, nil
 }
@@ -161,6 +192,11 @@ func tallyIdeas(ideas []models.Idea, lensID string, now time.Time) (IdeaCounts, 
 		return cmp.Or(cmp.Compare(ideaRank(a), ideaRank(b)), cmp.Compare(fit(b), fit(a)))
 	})
 	return counts, top[:min(len(top), analysisTopIdeas)]
+}
+
+// lensStep is a read's step: the lens, whatever it held.
+func lensStep(l LensRef) *assistantkit.Step {
+	return &assistantkit.Step{Subject: l.CampaignName, Workspace: l.CampaignID == ""}
 }
 
 func sameLens(a, b *string) bool {
