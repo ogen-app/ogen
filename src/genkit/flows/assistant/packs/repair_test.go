@@ -379,9 +379,9 @@ func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 	}
 	var revised []string
 	versioned := true
-	d.Revise = func(_ context.Context, id, instruction, _ string) (bool, error) {
+	d.Revise = func(_ context.Context, id, instruction, _ string) (Revised, error) {
 		revised = append(revised, id+": "+instruction)
-		return versioned, nil
+		return Revised{Versioned: versioned}, nil
 	}
 	dismissals.keys["b3"] = true
 	sink := &offers{}
@@ -462,7 +462,7 @@ func TestDismissFinding_FollowsTheCampaign(t *testing.T) {
 // known.
 func TestRevisePost_KeepsThePostsGrounding(t *testing.T) {
 	d, posts, _ := repairDeps()
-	d.Revise = func(context.Context, string, string, string) (bool, error) { return true, nil }
+	d.Revise = func(context.Context, string, string, string) (Revised, error) { return Revised{Versioned: true}, nil }
 	d.Assets = memAssets{all: []models.Asset{{ID: "a1", Title: "Brochure"}}}
 	d.Analyses = gistAnalyses{}
 	posts.posts[0].GroundingMode, posts.posts[0].UsedAssetIDs = new(models.GroundingGrounded), models.StringSlice{"a1"}

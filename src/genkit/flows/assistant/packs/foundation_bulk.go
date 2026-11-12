@@ -137,6 +137,19 @@ func (in EditBrandInput) precheck() error {
 			return assistantkit.Refused("every update or removal needs its id from getBrand")
 		}
 	}
+	// A fact kept on purpose isn't also changed by the same edit.
+	changed := map[string]bool{}
+	for _, id := range in.RemoveFacts {
+		changed[strings.TrimSpace(id)] = true
+	}
+	for _, f := range in.UpdateFacts {
+		changed[strings.TrimSpace(f.FactID)] = true
+	}
+	for _, k := range in.Kept {
+		if changed[strings.TrimSpace(k.FactID)] {
+			return assistantkit.Refused("fact " + k.FactID + " is both kept and changed; leave it out of one")
+		}
+	}
 	return nil
 }
 
@@ -222,7 +235,11 @@ func editBrand(ctx context.Context, d Deps, facts *brandfacts.Service, lib *bran
 	if err := in.precheck(); err != nil {
 		return nil, err
 	}
-	out := &EditBrandOutput{UndoIDs: []string{}, Kept: keptFacts(ctx, d, in.Kept)}
+	kept, err := keptFacts(ctx, d, in.Kept)
+	if err != nil {
+		return nil, err
+	}
+	out := &EditBrandOutput{UndoIDs: []string{}, Kept: kept}
 	edits := in.edits(d, facts, lib)
 	for i, e := range edits {
 		undo, err := e.run(ctx)
@@ -270,14 +287,17 @@ func brandRetry(in EditBrandInput, out *EditBrandOutput) (EditBrandInput, []assi
 
 // keptFacts are the facts kept, with their statements; one that doesn't
 // exist is dropped.
-func keptFacts(ctx context.Context, d Deps, kept []KeptFact) []KeptFact {
+func keptFacts(ctx context.Context, d Deps, kept []KeptFact) ([]KeptFact, error) {
 	var out []KeptFact
 	for _, k := range kept {
 		f, err := d.Brand.GetFact(ctx, strings.TrimSpace(k.FactID))
-		if err != nil || f == nil {
+		if err != nil {
+			return nil, err
+		}
+		if f == nil {
 			continue
 		}
 		out = append(out, KeptFact{FactID: f.ID, Reason: strings.TrimSpace(k.Reason), Statement: f.Statement})
 	}
-	return out
+	return out, nil
 }

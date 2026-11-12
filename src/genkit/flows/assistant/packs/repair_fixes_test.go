@@ -281,7 +281,7 @@ func TestRepairPack_RegistersFixTools(t *testing.T) {
 	}
 	d, posts, _ := repairDeps()
 	d.Remove = &memRemover{posts: posts}
-	d.Revise = func(context.Context, string, string, string) (bool, error) { return true, nil }
+	d.Revise = func(context.Context, string, string, string) (Revised, error) { return Revised{Versioned: true}, nil }
 	got := tools(d)
 	for _, want := range []string{"applyCalendarMoves", "unschedulePosts", "changePostType", "deletePosts", "revisePost"} {
 		if !slices.Contains(got, want) {

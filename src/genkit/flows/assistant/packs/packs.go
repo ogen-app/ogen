@@ -30,6 +30,15 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/urlimport"
 )
 
+// Revised is what a rewrite wrote to a post, as committed, and whether it was
+// saved as a version: false for a rewrite on the post whose version couldn't
+// be saved.
+type Revised struct {
+	Content   string
+	Status    models.PostStatus
+	Versioned bool
+}
+
 // Deps are the services the packs work through. A pack whose service is nil
 // is left out.
 type Deps struct {
@@ -103,9 +112,9 @@ type Deps struct {
 	CheckBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	CheckPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
 	// Revise rewrites a post by an instruction with the post pack's writer,
-	// saving a version; versioned is false for a rewrite on the post whose
-	// version couldn't be saved. nil leaves revisePost out of the repair pack.
-	Revise func(ctx context.Context, postID, instruction, note string) (versioned bool, err error)
+	// saving a version, and returns what it wrote. nil leaves revisePost out
+	// of the repair pack.
+	Revise func(ctx context.Context, postID, instruction, note string) (Revised, error)
 	// CheckBrand checks posts against their voice and guardrails; nil leaves
 	// checkBrand out of the repair pack.
 	CheckBrand brand_check.Run

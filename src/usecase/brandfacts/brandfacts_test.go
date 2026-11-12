@@ -39,6 +39,12 @@ func TestRenewal(t *testing.T) {
 			t.Fatalf("%s: checked %v, expires %v; want 2026-11-12, %s", c.name, in.CheckedAt, in.ExpiresAt, c.want)
 		}
 	}
+	if _, err := s.Renewal(&models.BrandFact{}, day("2026-11-11")); !errors.Is(err, ErrRenewalInPast) {
+		t.Fatalf("renewal until yesterday: err = %v, want ErrRenewalInPast", err)
+	}
+	if _, err := s.Renewal(&models.BrandFact{}, day("2026-11-12")); err != nil {
+		t.Fatalf("renewal until today: %v", err)
+	}
 	for _, f := range []models.BrandFact{{}, {ExpiresAt: day("2026-05-31")}, {CheckedAt: day("2026-05-31"), ExpiresAt: day("2026-05-31")}} {
 		if _, err := s.Renewal(&f, nil); !IsRule(err) || !errors.Is(err, ErrNoRenewalSpan) {
 			t.Fatalf("renewal of %+v: err = %v, want ErrNoRenewalSpan", f, err)

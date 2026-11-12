@@ -66,8 +66,9 @@ func TestSeries_ToolsAndUndo(t *testing.T) {
 	}
 
 	edited, err := updateSeries(ctx, d, UpdateSeriesInput{SeriesID: id, Recipe: "A screenshot and two lines", Occasional: true})
-	if err != nil || edited.Series.Promise != "One tip a week" || edited.Series.DefaultRhythm != nil {
-		t.Fatalf("edited = %+v, %v", edited, err)
+	if err != nil || edited.Series.Promise != "One tip a week" || edited.Series.DefaultRhythm != nil ||
+		len(edited.Series.RunsIn) != 1 || edited.Series.RunsIn[0].CampaignName != "Launch" {
+		t.Fatalf("edited = %+v, %v; want it still running in Launch", edited, err)
 	}
 
 	// Removing it stops the campaign running it; undo brings both back.
@@ -115,6 +116,14 @@ func TestSeries_ToolsAndUndo(t *testing.T) {
 	}
 	if r, _ := repo.Run(ctx, "c1", both.Series.ID); r != nil {
 		t.Fatal("the campaign still runs an undone series")
+	}
+	// A rhythm it can't run at is refused before anything is made, even a
+	// campaign-local series that would run at its default.
+	before, _ := d.Series.List(ctx)
+	_, err = createSeries(ctx, d, SeriesInput{Name: "Local", CampaignID: "c1", RunIn: &RunInInput{Rhythm: &RhythmInput{Times: 99, Per: "week"}}})
+	refused(t, err)
+	if after, _ := d.Series.List(ctx); len(after) != len(before) {
+		t.Fatalf("series = %d, want %d: a refused run made one", len(after), len(before))
 	}
 	// A campaign that's gone still makes the series, and says why it isn't run.
 	orphan, err := createSeries(ctx, d, SeriesInput{Name: "Guest letters", RunIn: &RunInInput{CampaignID: "gone"}})

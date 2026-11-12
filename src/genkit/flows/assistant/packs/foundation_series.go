@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
@@ -14,6 +16,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/series"
 )
@@ -50,8 +53,9 @@ type SeriesOut struct {
 	// occasional.
 	Runs   bool                 `json:"runs,omitzero"`
 	Rhythm *models.SeriesRhythm `json:"rhythm,omitempty"`
-	// RunsIn is every live campaign that runs it, by name.
-	RunsIn []SeriesRunIn `json:"runsIn"`
+	// RunsIn is every live campaign that runs it, by name: empty when none
+	// does, unset when it wasn't read (a removed series).
+	RunsIn []SeriesRunIn `json:"runsIn,omitzero"`
 }
 
 // SeriesRunIn is a campaign running a series, and how often; Rhythm nil is
@@ -85,7 +89,7 @@ func withRunsIn(ctx context.Context, d Deps, list []SeriesOut) error {
 
 func seriesOut(s *models.Series) SeriesOut {
 	out := SeriesOut{ID: s.ID, Name: s.Name, Promise: s.Promise, Recipe: s.Recipe, Supply: string(s.Supply),
-		DefaultRhythm: s.DefaultRhythm, Usage: s.Usage, RunsIn: []SeriesRunIn{}}
+		DefaultRhythm: s.DefaultRhythm, Usage: s.Usage}
 	if s.ContentFormat != nil {
 		out.ContentFormat = string(*s.ContentFormat)
 	}
@@ -251,6 +255,11 @@ func createSeries(ctx context.Context, d Deps, in SeriesInput) (*SeriesChangeOut
 		if runIn, err = campaignOf(ctx, cmp.Or(in.RunIn.CampaignID, in.CampaignID)); err != nil {
 			return nil, err
 		}
+		// Checked before anything is made: a campaign-local series already
+		// runs at its default once created.
+		if r := in.RunIn.Rhythm.rhythm(); r != nil && !in.RunIn.Occasional && !r.Valid() {
+			return nil, assistantkit.Refused(fmt.Sprintf("a rhythm is 1 to %d times a week or month", models.MaxRhythmTimes))
+		}
 	}
 	s, err := d.Series.Create(ctx, si)
 	if err != nil {
@@ -269,24 +278,34 @@ func createSeries(ctx context.Context, d Deps, in SeriesInput) (*SeriesChangeOut
 		case in.RunIn.Rhythm != nil:
 			want.Rhythm = in.RunIn.Rhythm.rhythm()
 		}
+		// The series is made and undoable whatever happens to its run, so a
+		// run that fails is reported on the result, not as the call's error.
 		if _, err := d.Series.SetRun(ctx, runIn, s.ID, want); err != nil {
-			r, ok := errors.AsType[*assistantkit.Refusal](seriesErr(err))
-			if !ok {
-				return nil, err
+			if r, ok := errors.AsType[*assistantkit.Refusal](seriesErr(err)); ok {
+				out.NotRun = r.Reason
+			} else {
+				slog.WarnContext(ctx, "run new series in campaign failed", logging.AttrComponent, "assistant.packs", "series_id", s.ID, "campaign_id", runIn, logging.AttrError, err)
+				out.NotRun = "running it in the campaign failed; run it with runSeries"
 			}
-			out.NotRun = r.Reason
 		} else {
 			assistantkit.Touch(ctx, "campaign", runIn)
 			out.Run = &RunOut{CampaignID: runIn, CampaignName: campaignName(ctx, d, runIn), SeriesID: s.ID, SeriesName: s.Name,
 				Running: true, Rhythm: want.Rhythm}
 		}
 	}
-	list := []SeriesOut{out.Series}
-	if err := withRunsIn(ctx, d, list); err != nil {
-		return nil, err
-	}
-	out.Series = list[0]
+	out.Series = placed(ctx, d, out.Series)
 	return out, nil
+}
+
+// placed is s with where it runs. After a write, a failed read leaves runsIn
+// unset rather than lose the write's result.
+func placed(ctx context.Context, d Deps, s SeriesOut) SeriesOut {
+	list := []SeriesOut{s}
+	if err := withRunsIn(ctx, d, list); err != nil {
+		slog.WarnContext(ctx, "read where a series runs failed", logging.AttrComponent, "assistant.packs", "series_id", s.ID, logging.AttrError, err)
+		return s
+	}
+	return list[0]
 }
 
 // campaignName is the campaign's name; "" when it can't be read.
@@ -328,7 +347,7 @@ func updateSeries(ctx context.Context, d Deps, in UpdateSeriesInput) (*SeriesCha
 	}
 	assistantkit.Touch(ctx, "series", after.ID)
 	undo := recordUndo(ctx, d, models.AssistantActionSeries, after.ID, assistantundo.Series(cur, nil), assistantundo.Series(after, nil))
-	return &SeriesChangeOut{Series: seriesOut(after), UndoID: undo}, nil
+	return &SeriesChangeOut{Series: placed(ctx, d, seriesOut(after)), UndoID: undo}, nil
 }
 
 func removeSeries(ctx context.Context, d Deps, in SeriesRef) (*SeriesChangeOut, error) {

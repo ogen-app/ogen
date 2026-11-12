@@ -774,20 +774,23 @@ func revisePost(ctx context.Context, d Deps, in RevisePostInput) (*RevisePostOut
 		return nil, assistantkit.Refused("the post is " + string(posts[0].Status) + ", so its copy is locked; unschedule it first")
 	}
 	was := posts[0]
-	versioned, err := d.Revise(ctx, in.PostID, in.Instruction, "Rewritten by the campaign's assistant")
+	rev, err := d.Revise(ctx, in.PostID, in.Instruction, "Rewritten by the campaign's assistant")
 	if err != nil {
 		return nil, fmt.Errorf("rewrite post: %w", err)
 	}
-	out := &RevisePostOutput{PostID: in.PostID, CampaignID: c.ID, Title: was.Title, Revised: true, Versioned: versioned,
-		Note:      "saved as a new version; it can be undone",
+	out := &RevisePostOutput{PostID: in.PostID, CampaignID: c.ID, Title: was.Title, Revised: true, Versioned: rev.Versioned,
+		Note:      "saved as a new version",
 		Grounding: postGrounding(ctx, d, c.ID, was)}
-	if !versioned {
-		out.Note = "the post is rewritten, but saving the rewrite as a version failed, so its history has no copy of it; it can be undone"
+	if !rev.Versioned {
+		out.Note = "the post is rewritten, but saving the rewrite as a version failed, so its history has no copy of it"
 	}
-	if d.Actions != nil {
-		if now, err := d.Posts.GetByID(ctx, in.PostID); err == nil {
-			out.UndoID = recordUndo(ctx, d, models.AssistantActionPostRewritten, in.PostID, assistantundo.PostContent(&was), assistantundo.PostContent(now))
-		}
+	// The undo holds what this rewrite wrote, so it refuses once anyone
+	// edits the post after it.
+	written := was
+	written.Content, written.Status = rev.Content, rev.Status
+	out.UndoID = recordUndo(ctx, d, models.AssistantActionPostRewritten, in.PostID, assistantundo.PostContent(&was), assistantundo.PostContent(&written))
+	if out.UndoID != "" {
+		out.Note += "; it can be undone"
 	}
 	if d.Brand != nil {
 		if r, err := brandresolve.Resolve(ctx, d.Brand, c, &was); err == nil && r.Voice != nil {
