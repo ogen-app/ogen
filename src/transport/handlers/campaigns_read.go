@@ -38,6 +38,8 @@ func (h *CampaignReadHandler) Register(app *fiber.App) {
 	app.Get("/api/campaigns/summaries", h.auth, h.Summaries)
 	app.Get("/api/campaigns/:id/overview", h.auth, h.Overview)
 	app.Post("/api/campaigns/:id/findings/:key/dismiss", h.auth, h.DismissFinding)
+	app.Delete("/api/campaigns/:id/findings/:key/dismiss", h.auth, h.RestoreFinding)
+	app.Get("/api/campaigns/:id/findings/dismissed", h.auth, h.DismissedFindings)
 }
 
 // Overview godoc
@@ -93,15 +95,80 @@ func (h *CampaignReadHandler) DismissFinding(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "a finding key is required")
 	}
 	err := h.overview.Dismiss(reqCtx(c), c.Params("id"), key, cmp.Or(actorID(c), models.ActorSystem))
+	if err := problemsError(err); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// RestoreFinding godoc
+// @Summary      Restore a dismissed campaign problem
+// @Description  Takes a dismissal of the campaign back by the finding's key, so the
+// @Description  overview and the campaign's assistant raise the finding again while a
+// @Description  check gives that key. Restoring a key that isn't dismissed is a no-op.
+// @Tags         campaigns
+// @Security     CookieAuth
+// @Param        id   path  string  true  "Campaign Sqid"
+// @Param        key  path  string  true  "The problem's key"
+// @Success      204
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      503  {object}  map[string]string
+// @Router       /api/campaigns/{id}/findings/{key}/dismiss [delete]
+func (h *CampaignReadHandler) RestoreFinding(c *fiber.Ctx) error {
+	if h.overview == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "campaign problems are not available")
+	}
+	key := strings.TrimSpace(c.Params("key"))
+	if key == "" || len(key) > maxFindingKey {
+		return fiber.NewError(fiber.StatusBadRequest, "a finding key is required")
+	}
+	if err := problemsError(h.overview.Restore(reqCtx(c), c.Params("id"), key)); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// DismissedFindingsResponse is a campaign's dismissed findings.
+type DismissedFindingsResponse struct {
+	Dismissed []overview.Dismissal `json:"dismissed"`
+}
+
+// DismissedFindings godoc
+// @Summary      List a campaign's dismissed problems
+// @Description  Returns the keys of the campaign's dismissed findings, the latest first,
+// @Description  with when and by whom, so a reloaded assistant thread can show the
+// @Description  findings dismissed since it checked as dismissed.
+// @Tags         campaigns
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id   path      string  true  "Campaign Sqid"
+// @Success      200  {object}  DismissedFindingsResponse
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      503  {object}  map[string]string
+// @Router       /api/campaigns/{id}/findings/dismissed [get]
+func (h *CampaignReadHandler) DismissedFindings(c *fiber.Ctx) error {
+	if h.overview == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "campaign problems are not available")
+	}
+	list, err := h.overview.Dismissed(reqCtx(c), c.Params("id"))
+	if err := problemsError(err); err != nil {
+		return err
+	}
+	return c.JSON(DismissedFindingsResponse{Dismissed: list})
+}
+
+// problemsError maps the overview's dismissal errors to HTTP ones.
+func problemsError(err error) error {
 	switch {
 	case errors.Is(err, overview.ErrNotFound):
 		return fiber.NewError(fiber.StatusNotFound, "campaign not found")
 	case errors.Is(err, overview.ErrNoProblems):
 		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
-	case err != nil:
-		return err
 	}
-	return c.SendStatus(fiber.StatusNoContent)
+	return err
 }
 
 // maxFindingKey bounds a finding key: a code and a 12-character hash.

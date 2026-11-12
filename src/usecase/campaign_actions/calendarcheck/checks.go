@@ -6,6 +6,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/campaignphase"
@@ -118,32 +119,46 @@ func postTypes(c *models.Campaign, posts []models.Post) []Finding {
 	}) {
 		platform, postType := g[0], g[1]
 		var ids, onCalendar []string
+		var first *time.Time
 		thread := postType == models.PostTypeThread
 		for _, p := range groups[g] {
 			ids = append(ids, p.ID)
 			if p.ScheduledAt != nil {
 				onCalendar = append(onCalendar, p.ID)
+				if first == nil || p.ScheduledAt.Before(*first) {
+					first = p.ScheduledAt
+				}
 			}
 		}
 		ids, name := sorted(ids), platformName(c, platform)
-		fixes := []Fix{{Kind: FixEnablePostType, Title: fmt.Sprintf("Allow %s on %s again", postType, name), PlatformID: platform, PostType: postType}}
+		allowed := state.AllowedPostTypes(c, platform)
+		// Converting keeps the campaign as it is, so it leads; allowing the
+		// type again changes the campaign.
+		var fixes []Fix
 		// A thread's segments and a link post's link don't carry over to
 		// another type, so those are converted by hand.
 		converts := 0
-		for _, t := range state.AllowedPostTypes(c, platform) {
+		for _, t := range allowed {
 			if thread || t == models.PostTypeThread || t == models.PostTypeLinkPost || converts == ConvertTypes {
 				continue
 			}
 			fixes = append(fixes, Fix{Kind: FixConvertPostType, Title: "Make them " + t, PostIDs: ids, PostType: t})
 			converts++
 		}
+		fixes = append(fixes, Fix{Kind: FixEnablePostType, Title: fmt.Sprintf("Allow %s on %s again", postType, name), PlatformID: platform, PostType: postType})
 		if len(onCalendar) > 0 {
 			fixes = append(fixes, Fix{Kind: FixUnschedule, Title: "Take them off the calendar", PostIDs: sorted(onCalendar)})
 		}
 		fixes = append(fixes, Fix{Kind: FixDelete, Title: "Delete them", PostIDs: ids})
+		detail := fmt.Sprintf("%s on this campaign runs %s.", name, list(allowed))
+		if first != nil {
+			detail += fmt.Sprintf(" It publishes %s and will be refused.", first.In(Location(c)).Format("Mon 2 Jan"))
+		}
 		out = append(out, Finding{Code: CodePostTypeNotAllowed, Severity: SeverityWarning, PostIDs: ids,
-			Message: fmt.Sprintf("%d %s post(s) on %s use a post type the campaign no longer includes there", len(ids), postType, name),
-			Fixes:   fixes})
+			Message:          fmt.Sprintf("%d %s post(s) on %s use a post type the campaign no longer includes there", len(ids), postType, name),
+			Detail:           detail,
+			BlocksPublishing: first != nil,
+			Fixes:            fixes})
 	}
 	return out
 }
@@ -184,7 +199,9 @@ func (k *calendar) closeTogether(ideas map[string][]string) []Finding {
 				seen[pair] = true
 				f := Finding{Code: r.code, Severity: SeverityWarning, PostIDs: sorted(pair[:]), Fixes: []Fix{},
 					Message: fmt.Sprintf("%q and %q %s and publish %s on %s", a.Title, b.Title, r.what,
-						apart(days(a.day, b.day)), cmp.Or(platformName(k.c, a.PlatformID), "no platform"))}
+						apart(days(a.day, b.day)), cmp.Or(platformName(k.c, a.PlatformID), "no platform")),
+					Detail: fmt.Sprintf("%s; posts that %s go out at least %s apart on one platform.",
+						dayList([]time.Time{a.day, b.day}), r.what, plural(r.days, "day", "days"))}
 				for _, p := range []dated{b, a} {
 					fix, ok := k.move(p, func(d time.Time) bool { return k.farFrom(p, d, r) })
 					if ok {
@@ -250,7 +267,8 @@ func (k *calendar) crowdedSlots() []Finding {
 		}
 		f := Finding{Code: CodeCrowdedSlot, Severity: SeverityWarning, PostIDs: sorted(ids), Fixes: []Fix{},
 			Message: fmt.Sprintf("%d posts go to the same %s account within %d minutes of each other around %s", len(run),
-				cmp.Or(platformName(k.c, run[0].PlatformID), "no platform"), int(slot.Minutes()), run[0].ScheduledAt.In(Location(k.c)).Format("Mon 2 Jan 15:04"))}
+				cmp.Or(platformName(k.c, run[0].PlatformID), "no platform"), int(slot.Minutes()), run[0].ScheduledAt.In(Location(k.c)).Format("Mon 2 Jan 15:04")),
+			Detail: fmt.Sprintf("Posts to one account go out at least %d minutes apart, or one buries the other.", int(slot.Minutes()))}
 		for _, p := range slices.Backward(run) {
 			if fix, ok := k.move(p, func(time.Time) bool { return true }); ok {
 				f.Fixes = append(f.Fixes, fix)
@@ -275,6 +293,7 @@ func (k *calendar) goal() []Finding {
 		return nil
 	}
 	cadence := cmp.Or(c.GoalCadence, campaigngoal.DefaultCadence)
+	rule := fmt.Sprintf("The goal is %d a %s.", *c.EstimatedPostCount, cadence)
 	var out []Finding
 	// The campaign's dates are calendar dates, so the periods are too.
 	for _, w := range campaigngoal.Windows(cadence, &k.start, &k.end, time.UTC) {
@@ -288,7 +307,7 @@ func (k *calendar) goal() []Finding {
 		switch {
 		case n < target:
 			f := Finding{Code: CodeGoalShort, Severity: SeverityInfo, scope: scope, Fixes: []Fix{},
-				Message: fmt.Sprintf("%s has %d of the %d posts the goal asks for", w.Label, n, target)}
+				Message: fmt.Sprintf("%s has %d of the %d posts the goal asks for", w.Label, n, target), Detail: rule}
 			if first := later(from, k.today); first.Before(until) {
 				f.Fixes = append(f.Fixes, Fix{Kind: FixPlanWindow, Title: fmt.Sprintf("Plan %d more for %s", target-n, w.Label),
 					From: first.Format(time.DateOnly), To: until.AddDate(0, 0, -1).Format(time.DateOnly), Count: target - n})
@@ -296,7 +315,8 @@ func (k *calendar) goal() []Finding {
 			out = append(out, f)
 		case n > target+target/2:
 			out = append(out, Finding{Code: CodeGoalOver, Severity: SeverityInfo, scope: scope, Fixes: []Fix{},
-				Message: fmt.Sprintf("%s has %d posts, well over the goal's %d", w.Label, n, target)})
+				Message: fmt.Sprintf("%s has %d posts, well over the goal's %d", w.Label, n, target),
+				Detail:  rule + " Fine to keep; ignore it to stop hearing about it."})
 		}
 	}
 	return out
@@ -383,6 +403,22 @@ func apart(n int) string {
 	return fmt.Sprintf("%d days apart", n)
 }
 
+// plural is n with its noun, e.g. "1 day", "7 days".
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// list joins names as "a", "a and b", "a, b and c".
+func list(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
 // platformName is the platform's name on the campaign, else its id.
 func platformName(c *models.Campaign, id string) string {
 	if i := slices.IndexFunc(c.Platforms, func(p models.Platform) bool { return p.ID == id }); i >= 0 {
@@ -411,6 +447,10 @@ func offPlatform(c *models.Campaign, posts []models.Post) []Finding {
 		}
 		groups[p.PlatformID] = append(groups[p.PlatformID], p)
 	}
+	var targeted []string
+	for _, tp := range c.TargetPlatforms {
+		targeted = append(targeted, platformName(c, tp.ID))
+	}
 	var out []Finding
 	for _, platform := range slices.Sorted(maps.Keys(groups)) {
 		var ids, onCalendar []string
@@ -432,6 +472,7 @@ func offPlatform(c *models.Campaign, posts []models.Post) []Finding {
 		fixes = append(fixes, Fix{Kind: FixDelete, Title: "Delete them", PostIDs: ids})
 		out = append(out, Finding{Code: CodePlatformNotTargeted, Severity: SeverityWarning, PostIDs: ids,
 			Message: fmt.Sprintf("%d unpublished post(s) on %s, which the campaign no longer targets", len(ids), name),
+			Detail:  fmt.Sprintf("The campaign targets %s now.", list(targeted)),
 			Fixes:   fixes})
 	}
 	return out

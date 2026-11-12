@@ -27,6 +27,11 @@ type AssistantDismissalRepository interface {
 	Dismiss(ctx context.Context, kind models.AssistantScopeKind, scopeID, key, by string) error
 	// Keys returns the thread's dismissed finding keys.
 	Keys(ctx context.Context, kind models.AssistantScopeKind, scopeID string) (map[string]bool, error)
+	// List returns the thread's dismissals, the latest first.
+	List(ctx context.Context, kind models.AssistantScopeKind, scopeID string) ([]AssistantDismissal, error)
+	// Restore takes a dismissal back, so checks raise the finding again;
+	// false when it wasn't dismissed there.
+	Restore(ctx context.Context, kind models.AssistantScopeKind, scopeID, key string) (bool, error)
 }
 
 type assistantDismissalRepository struct {
@@ -56,4 +61,22 @@ func (r *assistantDismissalRepository) Keys(ctx context.Context, kind models.Ass
 		out[k] = true
 	}
 	return out, nil
+}
+
+func (r *assistantDismissalRepository) List(ctx context.Context, kind models.AssistantScopeKind, scopeID string) ([]AssistantDismissal, error) {
+	out := []AssistantDismissal{}
+	err := r.db.NewSelect().Model(&out).
+		Where("adm.scope_kind = ?", kind).Where("adm.scope_id = ?", scopeID).
+		OrderExpr("adm.created_at DESC, adm.finding_key").Scan(ctx)
+	return out, err
+}
+
+func (r *assistantDismissalRepository) Restore(ctx context.Context, kind models.AssistantScopeKind, scopeID, key string) (bool, error) {
+	res, err := r.db.NewDelete().Model((*AssistantDismissal)(nil)).
+		Where("scope_kind = ?", kind).Where("scope_id = ?", scopeID).Where("finding_key = ?", key).Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
