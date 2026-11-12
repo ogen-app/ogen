@@ -346,3 +346,64 @@ func TestGetBrand_FullRead(t *testing.T) {
 		t.Fatalf("templates = %+v", out.Templates)
 	}
 }
+
+// getBrand's client result names what each voice is read from and counts
+// every fact, and carries the look and templates.
+func TestGetBrand_ClientResult(t *testing.T) {
+	expired := models.BrandFact{ID: "f1", ExpiresAt: new(models.CalendarDateOf(time.Now().AddDate(0, 0, -1)))}
+	b := &BrandOut{
+		Voices: []BrandVoiceOut{{ID: "v1", Name: "Warm host", IsDefault: true,
+			Rules:   models.VoiceRules{Formality: "casual", Emoji: " ", Length: "short"},
+			Samples: []string{"a", "b", "c"}, ChannelNotes: map[string]string{"instagram": "emoji ok"}}},
+		Facts: []models.BrandFact{{ID: "f2"}, {ID: "f3"}}, ExpiredFacts: []models.BrandFact{expired},
+		Look: &BrandLookOut{Palette: []models.BrandColor{{Hex: "#112233"}}}, Templates: []BrandTemplateOut{{ID: "t1"}},
+	}
+	got := brandResult(b).(BrandResult)
+	want := VoiceBrief{ID: "v1", Name: "Warm host", IsDefault: true, Rules: 2, Samples: 3, ChannelNotes: 1}
+	if len(got.Voices) != 1 || got.Voices[0] != want {
+		t.Fatalf("voices = %+v, want %+v", got.Voices, want)
+	}
+	if got.FactsTotal != 3 || len(got.ExpiredFacts) != 1 || got.Look == nil || len(got.Templates) != 1 {
+		t.Fatalf("result = %+v", got)
+	}
+}
+
+// renewFact checks a fact today and carries its span over, or takes the
+// date given; it can be undone, and a fact with no span asks for a date.
+func TestFacts_Renew(t *testing.T) {
+	day := func(s string) *models.CalendarDate { d, _ := models.ParseCalendarDate(s); return &d }
+	brand := &memBrand{facts: map[string]*models.BrandFact{
+		"f1": {ID: "f1", Statement: "Spring rates from €90", Kind: models.FactKindDocumented, Subject: models.FactSubjectUs,
+			CheckedAt: day("2026-03-01"), ExpiresAt: day("2026-05-31")},
+		"f2": {ID: "f2", Statement: "Open daily", Kind: models.FactKindDocumented, Subject: models.FactSubjectUs},
+	}}
+	db, actions := undoStore(t)
+	d := Deps{Brand: brand, Actions: actions}
+	facts := brandfacts.New(brand)
+	ctx, _ := turn(t, workspace, nil)
+	today := models.CalendarDateOf(time.Now())
+
+	got, err := renewFact(ctx, d, facts, RenewFactInput{FactID: "f1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Fact.CheckedAt.String() != today.String() || got.Fact.ExpiresAt.String() != today.AddDate(0, 0, 91).Format(models.CalendarDateLayout) ||
+		got.Fact.Statement != "Spring rates from €90" || got.UndoID == "" {
+		t.Fatalf("renewed = %+v", got.Fact)
+	}
+	if _, err := assistantundo.New(db, actions, nil).WithBrand(brand).Undo(ctx, got.UndoID, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if f := brand.facts["f1"]; f.ExpiresAt.String() != "2026-05-31" || f.CheckedAt.String() != "2026-03-01" {
+		t.Fatalf("after undo = %+v", f)
+	}
+
+	_, err = renewFact(ctx, d, facts, RenewFactInput{FactID: "f2"})
+	refused(t, err)
+	got, err = renewFact(ctx, d, facts, RenewFactInput{FactID: "f2", ExpiresAt: "2027-01-31"})
+	if err != nil || got.Fact.ExpiresAt.String() != "2027-01-31" {
+		t.Fatalf("renewed with a date = %+v, %v", got, err)
+	}
+	_, err = renewFact(ctx, d, facts, RenewFactInput{FactID: "nope"})
+	refused(t, err)
+}

@@ -43,16 +43,19 @@ func foundationPack(d Deps) assistant.Pack {
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			get := genkit.DefineTool(g, "getBrand",
 				"Returns the brand foundation: its voices (when to use each, our summary, rules, samples, per-channel notes), audiences, guardrails (may and never claim, banned words), the facts still current and those expired, the look (logo jobs, palette, typefaces) and the templates.",
-				assistantkit.Wrap(recorded(foundationPackName, "getBrand", expiredOnly, func(ctx context.Context, _ struct{}) (*BrandOut, error) { return getBrand(ctx, d, facts) })), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(foundationPackName, "getBrand", brandResult, func(ctx context.Context, _ struct{}) (*BrandOut, error) { return getBrand(ctx, d, facts) })), ai.WithStrictSchema(false))
 			add := genkit.DefineTool(g, "addFact",
 				"Adds a fact to the ledger: a claim posts may make, with its kind and source. Returns an undo id.",
-				assistantkit.Wrap(func(ctx context.Context, in FactInput) (*FactOut, error) { return addFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(foundationPackName, "addFact", nil, func(ctx context.Context, in FactInput) (*FactOut, error) { return addFact(ctx, d, facts, in) })), ai.WithStrictSchema(false))
 			edit := genkit.DefineTool(g, "updateFact",
 				"Corrects a fact in the ledger: only the fields passed change. Returns an undo id.",
 				assistantkit.Wrap(recorded(foundationPackName, "updateFact", nil, func(ctx context.Context, in UpdateFactInput) (*FactOut, error) { return updateFact(ctx, d, facts, in) })), ai.WithStrictSchema(false))
 			remove := genkit.DefineTool(g, "removeFact",
 				"Removes a fact from the ledger, so no post claims it any more. Returns an undo id.",
-				assistantkit.Wrap(func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(foundationPackName, "removeFact", nil, func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) })), ai.WithStrictSchema(false))
+			renew := genkit.DefineTool(g, "renewFact",
+				"Confirms an expired or expiring fact is still true: checked today and good until a new expiry, by default as long again as before. Returns an undo id.",
+				assistantkit.Wrap(recorded(foundationPackName, "renewFact", nil, func(ctx context.Context, in RenewFactInput) (*FactOut, error) { return renewFact(ctx, d, facts, in) })), ai.WithStrictSchema(false))
 			bulk := genkit.DefineTool(g, "editBrand",
 				"Makes several brand changes at once: facts, voices and audiences added, updated or removed. Above a few changes it is offered for the user to confirm first. Each change made returns its own undo id.",
 				assistantkit.GatedRetry("editBrand", assistantkit.Gate[EditBrandInput]{
@@ -70,7 +73,9 @@ func foundationPack(d Deps) assistant.Pack {
 				spec(foundationPackName, add, assistantkit.TierReversible,
 					`Call this when the user gives a fact to remember — "we have 4,000 customers", "our NPS is 62 as of March". kind is measured, documented (default), commitment or judgement; subject is us (default), problem or opportunity. Pass expiresAt (YYYY-MM-DD) for anything that goes stale. It can be undone.`),
 				spec(foundationPackName, edit, assistantkit.TierReversible,
-					`Call this when the user corrects a fact or confirms it is still true (checkedAt today). To renew an expired fact, pass checkedAt today and a new expiresAt, or clearExpiry when it no longer goes stale. Pass factId from getBrand. It can be undone.`),
+					`Call this when the user corrects a fact, or says it no longer goes stale (clearExpiry). Pass factId from getBrand. It can be undone.`),
+				spec(foundationPackName, renew, assistantkit.TierReversible,
+					`Call this when the user renews a fact or confirms it is still true — "renew the spring rates", "Renew fact <id>". Pass expiresAt only when they say until when; otherwise it holds as long again as before. It can be undone.`),
 				spec(foundationPackName, remove, assistantkit.TierReversible,
 					`Call this when the user says a fact is no longer true or shouldn't be claimed. It can be undone.`),
 			}, lspecs...), nil
@@ -91,13 +96,50 @@ type BrandOut struct {
 	Templates    []BrandTemplateOut `json:"templates"`
 }
 
-// BrandResult is what getBrand reports to the client: the expired facts, to
-// renew; the rest of the brand stays with the model.
+// BrandResult is what getBrand reports to the client: what each voice is
+// read from, the expired facts to renew out of all of them, the look and the
+// templates. The voices' rules and samples and the audiences stay with the
+// model.
 type BrandResult struct {
+	Voices []VoiceBrief `json:"voices"`
+	// FactsTotal counts every fact, current and expired.
+	FactsTotal   int                `json:"factsTotal"`
 	ExpiredFacts []models.BrandFact `json:"expiredFacts"`
+	Look         *BrandLookOut      `json:"look,omitempty"`
+	Templates    []BrandTemplateOut `json:"templates"`
 }
 
-func expiredOnly(b *BrandOut) any { return BrandResult{ExpiredFacts: b.ExpiredFacts} }
+// VoiceBrief is a voice as a summary of it is read from: how many of its
+// rules are set, its samples and its per-channel notes.
+type VoiceBrief struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	IsDefault    bool   `json:"isDefault,omitzero"`
+	Rules        int    `json:"rules"`
+	Samples      int    `json:"samples"`
+	ChannelNotes int    `json:"channelNotes"`
+}
+
+func brandResult(b *BrandOut) any {
+	out := BrandResult{Voices: make([]VoiceBrief, len(b.Voices)), FactsTotal: len(b.Facts) + len(b.ExpiredFacts),
+		ExpiredFacts: b.ExpiredFacts, Look: b.Look, Templates: b.Templates}
+	for i, v := range b.Voices {
+		out.Voices[i] = VoiceBrief{ID: v.ID, Name: v.Name, IsDefault: v.IsDefault, Rules: rulesSet(v.Rules),
+			Samples: len(v.Samples), ChannelNotes: len(v.ChannelNotes)}
+	}
+	return out
+}
+
+// rulesSet counts a voice's rules that say something.
+func rulesSet(r models.VoiceRules) int {
+	n := 0
+	for _, s := range []string{r.Emoji, r.Hashtags, r.Formality, r.Person, r.Length, r.Opening, r.Closing} {
+		if strings.TrimSpace(s) != "" {
+			n++
+		}
+	}
+	return n
+}
 
 // BrandVoiceOut is a voice: when to use it, our summary of its samples, its
 // rules, samples and per-channel notes.
@@ -299,6 +341,39 @@ func updateFact(ctx context.Context, d Deps, facts *brandfacts.Service, in Updat
 	}
 	// The fields not passed were merged from cur: write only while the fact
 	// still holds it, so a correction made since isn't reverted.
+	before, after, err := facts.UpdateIf(ctx, cur.ID, fi, cur)
+	if err != nil {
+		return nil, factErr(err)
+	}
+	assistantkit.Touch(ctx, "fact", after.ID)
+	undo := recordUndo(ctx, d, models.AssistantActionBrandFact, after.ID, assistantundo.BrandFact(before), assistantundo.BrandFact(after))
+	return &FactOut{Fact: after, UndoID: undo}, nil
+}
+
+// RenewFactInput confirms a fact is still true.
+type RenewFactInput struct {
+	FactID    string `json:"factId"`
+	ExpiresAt string `json:"expiresAt,omitempty" jsonschema:"description=Until when it holds now, YYYY-MM-DD; as long again as before when omitted"`
+}
+
+// renewFact marks a fact checked today and good until a new expiry, written
+// only while the fact is as read, so a correction made since isn't lost.
+func renewFact(ctx context.Context, d Deps, facts *brandfacts.Service, in RenewFactInput) (*FactOut, error) {
+	cur, err := d.Brand.GetFact(ctx, strings.TrimSpace(in.FactID))
+	if err != nil {
+		return nil, factErr(err)
+	}
+	if cur == nil {
+		return nil, assistantkit.Refused(noFact)
+	}
+	until, err := calendarDate(in.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := facts.Renewal(cur, until)
+	if err != nil {
+		return nil, factErr(err)
+	}
 	before, after, err := facts.UpdateIf(ctx, cur.ID, fi, cur)
 	if err != nil {
 		return nil, factErr(err)

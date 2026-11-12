@@ -4,6 +4,7 @@
 package brandfacts
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strings"
@@ -145,6 +146,34 @@ func (s *Service) Split(facts []models.BrandFact) (current, expired []models.Bra
 		}
 	}
 	return current, expired
+}
+
+// ErrNoRenewalSpan is a fact renewed without a new expiry when it never had
+// a span to carry over: no expiry, or none it was checked or added before.
+var ErrNoRenewalSpan = errors.New("the fact has no expiry span to carry over; say until when it holds")
+
+// Renewal is f confirmed today: checked today and good until expiresAt, or,
+// when that is nil, for as long again as it was good before, counted from
+// when it was last checked or else added. The other fields are f's.
+func (s *Service) Renewal(f *models.BrandFact, expiresAt *models.CalendarDate) (Input, error) {
+	today := models.CalendarDateOf(s.now())
+	in := InputOf(f)
+	in.CheckedAt = &today
+	if expiresAt != nil {
+		in.ExpiresAt = expiresAt
+		return in, nil
+	}
+	from := cmp.Or(f.CheckedAt, f.AddedAt)
+	if f.ExpiresAt == nil || from == nil {
+		return Input{}, &RuleError{Err: ErrNoRenewalSpan}
+	}
+	days := int(f.ExpiresAt.Sub(from.Time).Hours() / 24)
+	if days < 1 {
+		return Input{}, &RuleError{Err: ErrNoRenewalSpan}
+	}
+	until := models.CalendarDateOf(today.AddDate(0, 0, days))
+	in.ExpiresAt = &until
+	return in, nil
 }
 
 // InputOf is a fact's editable fields, to restore it.
