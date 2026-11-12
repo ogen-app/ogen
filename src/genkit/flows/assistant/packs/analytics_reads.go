@@ -183,9 +183,11 @@ func decayRead(ctx context.Context, d Deps, in InsightInput) (*AnalyticsResult, 
 // FrequencySummary is how often the workspace posts, from the posts
 // published through Ogen.
 type FrequencySummary struct {
+	// Cadence is nil when Unavailable says why.
 	Cadence *analytics.PostingCadence `json:"cadence"`
 	// Note says what the cadence counts.
-	Note string `json:"note"`
+	Note        string `json:"note"`
+	Unavailable string `json:"unavailable,omitempty"`
 }
 
 // frequencyRead is the publisher's rate at each cadence, with the cadence
@@ -205,9 +207,7 @@ func frequencyRead(ctx context.Context, d Deps, in InsightInput, now time.Time) 
 	if err != nil {
 		return nil, err
 	}
-	if reason == "" {
-		out.Summary = &FrequencySummary{Cadence: cadence, Note: "posts published through Ogen, by week starting Monday, UTC"}
-	}
+	out.Summary = &FrequencySummary{Cadence: cadence, Note: "posts published through Ogen, by week starting Monday, UTC", Unavailable: reason}
 	return out, nil
 }
 

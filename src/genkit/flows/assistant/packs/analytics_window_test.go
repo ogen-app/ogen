@@ -51,6 +51,10 @@ func TestSetAnalyticsWindow(t *testing.T) {
 	if over, err := analyticsOverview(ctx, d, AnalyticsQuery{}); err != nil || over.Applied.Preset != "90d" {
 		t.Fatalf("a later read = %+v, %v", over, err)
 	}
+	// The preset is kept as the screen will send it back.
+	if out, err = setAnalyticsWindow(ctx, d, SetWindowInput{Window: "0007d"}); err != nil || out.Applied.Preset != "7d" {
+		t.Fatalf("padded span = %+v, %v", out, err)
+	}
 	if out, err = setAnalyticsWindow(ctx, d, SetWindowInput{Window: "7d", From: "2026-05-01", To: "2026-05-31"}); err != nil || out.Applied.Preset != "" {
 		t.Fatalf("dates = %+v, %v", out, err)
 	}

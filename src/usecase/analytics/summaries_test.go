@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -154,5 +155,40 @@ func TestFollowerHistory_BiggestDay(t *testing.T) {
 	}
 	if got.PostID != "p2" || got.PostTitle != "Thermal pool reel" || repo.from.Format(time.DateOnly) != "2026-04-14" || repo.to.Format(time.DateOnly) != "2026-04-16" {
 		t.Fatalf("post = %+v, read %v to %v", got, repo.from, repo.to)
+	}
+}
+
+type seriesOnly struct {
+	repository.FollowerStatsRepository
+	points []repository.FollowerSeriesPoint
+}
+
+func (s seriesOnly) Summary(context.Context, string) ([]repository.FollowerAccountSummary, error) {
+	return nil, nil
+}
+
+func (s seriesOnly) Series(context.Context, repository.FollowerSeriesOptions) ([]repository.FollowerSeriesPoint, error) {
+	return s.points, nil
+}
+
+type downPublished struct {
+	repository.PostAnalyticsRepository
+}
+
+func (downPublished) PublishedBetween(context.Context, time.Time, time.Time) ([]models.PostAnalytics, error) {
+	return nil, errors.New("analytics db down")
+}
+
+// The biggest day's post is a detail: a failed read leaves it out and
+// keeps the history.
+func TestFollowerHistory_PostUnreadable(t *testing.T) {
+	day := func(s string) time.Time { t, _ := time.Parse(time.DateOnly, s); return t }
+	s := &Service{Repo: downPublished{}, Followers: seriesOnly{points: []repository.FollowerSeriesPoint{
+		{SocialAccountID: "a", PointDate: day("2026-04-14"), Followers: 100},
+		{SocialAccountID: "a", PointDate: day("2026-04-15"), Followers: 140},
+	}}}
+	h, reason, err := s.FollowerHistory(t.Context(), FollowerHistoryOptions{})
+	if err != nil || reason != "" || len(h.Series["a"]) != 2 || h.BiggestDay == nil || h.BiggestDay.Gain != 40 || h.BiggestDay.PostID != "" {
+		t.Fatalf("history = %+v, %q, %v", h, reason, err)
 	}
 }

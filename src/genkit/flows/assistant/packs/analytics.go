@@ -131,7 +131,7 @@ func presetOf(ctx context.Context, in AnalyticsQuery) string {
 	case in.From != "" || in.To != "":
 		return ""
 	case in.Window != "":
-		return in.Window
+		return viewcontext.CanonicalPreset(in.Window)
 	}
 	if w := assistant.Window(ctx); w != nil && (w.From != "" || w.To != "") {
 		return w.Preset

@@ -3,6 +3,7 @@ package packs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/url"
 	"slices"
 	"testing"
@@ -67,6 +68,27 @@ func (postFigures) GetByPostID(_ context.Context, id string) (*models.PostAnalyt
 		return nil, nil
 	}
 	return &models.PostAnalytics{PostID: id, EngagementRate: 4.2}, nil
+}
+
+// downFigures fails every figures read.
+type downFigures struct {
+	repository.PostAnalyticsRepository
+}
+
+func (downFigures) GetByPostID(context.Context, string) (*models.PostAnalytics, error) {
+	return nil, errors.New("analytics db down")
+}
+
+// The rate is optional: a failed figures read leaves it out and the ideas
+// are still written.
+func TestMoreLikeThese_RateUnreadable(t *testing.T) {
+	d, _, got := moreDeps([]more_like_these.Idea{{Title: "One"}})
+	d.Analytics = &analytics.Service{Repo: downFigures{}}
+	ctx, _ := turn(t, workspace, nil)
+	out, err := moreLikeThese(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1"}, Count: 1})
+	if err != nil || out.Trail[0].Rate != nil || len(got.Examples) != 1 || len(out.Ideas) != 1 {
+		t.Fatalf("out = %+v, %v", out, err)
+	}
 }
 
 // moreDeps is two example posts — one made from an idea read off an asset

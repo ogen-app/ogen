@@ -55,6 +55,16 @@ func TestWindowChanges(t *testing.T) {
 	}
 }
 
+// A preset keeps one form: no leading zeros, and only what ValidPreset
+// accepts.
+func TestCanonicalPreset(t *testing.T) {
+	for in, want := range map[string]string{"30d": "30d", "0007d": "7d", "012w": "12w", "6mo": "6mo", "0d": "", "1000d": "", "30 days": "", "": ""} {
+		if got := CanonicalPreset(in); got != want {
+			t.Errorf("%q = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestParse_AllMatching(t *testing.T) {
 	v, err := Parse([]byte(`{"version":1,"screen":"ideas","scope":{"kind":"workspace"},"selection":{"kind":"idea","allMatching":true,"count":412},"filter":"lens:pricing"}`))
 	if err != nil || !v.Selection.AllMatching {
