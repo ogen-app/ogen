@@ -51,6 +51,10 @@ func TestLibrary_VoiceEdits(t *testing.T) {
 		v.Rules.Emoji != "never" || v.Rules.Length != "short" || v.ChannelNotes["linkedin"] != "No hashtags" {
 		t.Fatalf("edited = %+v", v)
 	}
+	if want := []FieldChange{{Field: "length", After: "short"}, {Field: "samples", Added: []string{"Done is better."}, Removed: []string{"We shipped."}},
+		{Field: "channelNotes.linkedin", After: "No hashtags"}}; !slices.EqualFunc(edited.Changes, want, sameChange) {
+		t.Fatalf("changes = %+v, want %+v", edited.Changes, want)
+	}
 	_, err = updateVoice(ctx, d, lib, UpdateVoiceInput{Name: "x"})
 	refused(t, err)
 
@@ -90,6 +94,9 @@ func TestLibrary_AudienceAndGuardrails(t *testing.T) {
 	if err != nil || edited.Audience.Who != "Engineering leads" || edited.Audience.BelievesWhen != "They see numbers" {
 		t.Fatalf("edited = %+v, %v", edited, err)
 	}
+	if want := []FieldChange{{Field: "believesWhen", After: "They see numbers"}}; !slices.EqualFunc(edited.Changes, want, sameChange) {
+		t.Fatalf("changes = %+v", edited.Changes)
+	}
 	if _, err := removeAudience(ctx, d, lib, AudienceRef{AudienceID: a.Audience.ID}); err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +108,10 @@ func TestLibrary_AudienceAndGuardrails(t *testing.T) {
 	g, err = updateGuardrails(ctx, d, lib, GuardrailsInput{RemoveBannedWords: []string{"SYNERGY"}, Disclaimer: "Not financial advice."})
 	if err != nil || len(g.Guardrails.BannedWords) != 0 || g.Guardrails.Disclaimer != "Not financial advice." {
 		t.Fatalf("guardrails = %+v, %v", g, err)
+	}
+	// Only the change, not the never-claim line already there.
+	if want := []FieldChange{{Field: "bannedWords", Removed: []string{"synergy"}}, {Field: "disclaimer", After: "Not financial advice."}}; !slices.EqualFunc(g.Changes, want, sameChange) {
+		t.Fatalf("changes = %+v", g.Changes)
 	}
 	// Nothing changes: no write, no undo.
 	if same, err := updateGuardrails(ctx, d, lib, GuardrailsInput{AddNeverClaim: []string{"best in class"}}); err != nil || same.UndoID != "" {
@@ -133,6 +144,7 @@ func TestEditBrand(t *testing.T) {
 		AddFacts:     []FactInput{{Statement: "Founded in 2019"}, {Statement: "Founded in 2019"}, {Statement: "Offices in Kyiv and Lisbon"}},
 		AddAudiences: []AudienceInput{{Name: "CTOs"}},
 		RemoveVoices: []string{"gone"},
+		Kept:         []KeptFact{{FactID: "missing", Reason: "dropped"}},
 	}
 	if in.size() != 5 || !overN(d, in.size()) || in.summary() != "Add 3 facts, remove 1 voice, add 1 audience" {
 		t.Fatalf("size = %d, summary = %q", in.size(), in.summary())
@@ -145,6 +157,22 @@ func TestEditBrand(t *testing.T) {
 	// made, each undoable on its own.
 	if out.Done != 3 || len(out.UndoIDs) != 3 || len(out.Failed) != 2 {
 		t.Fatalf("out = %+v", out)
+	}
+	if want := (BrandEditCounts{Facts: EditCounts{Added: 2}, Audiences: EditCounts{Added: 1}}); out.Made != want || out.Kept != nil {
+		t.Fatalf("made = %+v, kept = %+v", out.Made, out.Kept)
+	}
+
+	// Removing facts counts as removed; a kept fact is reported with its
+	// statement and isn't touched.
+	all, _ := facts.Current(ctx)
+	removed, err := editBrand(ctx, d, facts, lib, EditBrandInput{RemoveFacts: []string{all[0].ID},
+		Kept: []KeptFact{{FactID: all[1].ID, Reason: "a 2026 document also states it"}}})
+	if err != nil || removed.Made != (BrandEditCounts{Facts: EditCounts{Removed: 1}}) ||
+		len(removed.Kept) != 1 || removed.Kept[0].Statement != all[1].Statement || removed.Kept[0].Reason != "a 2026 document also states it" {
+		t.Fatalf("removed = %+v, %v", removed, err)
+	}
+	if left, _ := facts.Current(ctx); len(left) != 1 || left[0].ID != all[1].ID {
+		t.Fatalf("left = %+v", left)
 	}
 	if err := (EditBrandInput{}).precheck(); err == nil {
 		t.Fatal("an empty edit passed")
@@ -162,11 +190,39 @@ func TestBrandRetry(t *testing.T) {
 	}
 	edits := in.edits(Deps{}, nil, nil)
 	out := &EditBrandOutput{Done: 1, Failed: []BrandEditFailure{{What: "x", Reason: "already there"}}, Stopped: "remove voice v1 failed: timeout", left: edits[1:]}
+	in.Kept = []KeptFact{{FactID: "f1", Reason: "still true"}}
 	retry, notMade, ok := brandRetry(in, out)
-	if !ok || len(retry.AddFacts) != 0 || !slices.Equal(retry.RemoveVoices, []string{"v1"}) || len(retry.AddAudiences) != 1 || len(notMade) != 3 {
+	if !ok || len(retry.Kept) != 1 || len(retry.AddFacts) != 0 || !slices.Equal(retry.RemoveVoices, []string{"v1"}) || len(retry.AddAudiences) != 1 || len(notMade) != 3 {
 		t.Fatalf("retry = %+v, notMade = %+v", retry, notMade)
 	}
 	if _, _, ok := brandRetry(in, &EditBrandOutput{Done: 3}); ok {
 		t.Fatal("a whole edit offered a retry")
+	}
+}
+
+func sameChange(a, b FieldChange) bool {
+	return a.Field == b.Field && a.Before == b.Before && a.After == b.After && slices.Equal(a.Added, b.Added) && slices.Equal(a.Removed, b.Removed)
+}
+
+// A voice's changes name each field that moved, with its old and new value,
+// and the lines a list gained and lost; nothing for what stayed.
+func TestVoiceChanges(t *testing.T) {
+	before := &models.BrandVoice{Name: "Warm host", Rules: models.VoiceRules{Formality: "neutral"}, Samples: models.StringSlice{"A", "B"},
+		ChannelNotes: models.StringMap{"instagram": "emoji ok", "x": "short"}}
+	after := &models.BrandVoice{Name: "Warm host", IsDefault: true, Rules: models.VoiceRules{Formality: "casual"}, Samples: models.StringSlice{"a", "C"},
+		ChannelNotes: models.StringMap{"instagram": "emoji ok", "linkedin": "no emoji"}}
+	want := []FieldChange{
+		{Field: "isDefault", Before: "false", After: "true"},
+		{Field: "formality", Before: "neutral", After: "casual"},
+		{Field: "samples", Added: []string{"C"}, Removed: []string{"B"}},
+		{Field: "channelNotes.linkedin", After: "no emoji"},
+		{Field: "channelNotes.x", Before: "short"},
+	}
+	if got := voiceChanges(before, after); !slices.EqualFunc(got, want, sameChange) {
+		t.Fatalf("changes = %+v\nwant %+v", got, want)
+	}
+	if got := guardrailsChanges(nil, &models.BrandGuardrails{BannedWords: models.StringSlice{"luxury"}}); !slices.EqualFunc(got,
+		[]FieldChange{{Field: "bannedWords", Added: []string{"luxury"}}}, sameChange) {
+		t.Fatalf("guardrails from none = %+v", got)
 	}
 }

@@ -22,12 +22,24 @@ type EditBrandInput struct {
 	AddAudiences    []AudienceInput       `json:"addAudiences,omitempty"`
 	UpdateAudiences []UpdateAudienceInput `json:"updateAudiences,omitempty"`
 	RemoveAudiences []string              `json:"removeAudiences,omitempty" jsonschema:"description=Audience ids"`
+	// Kept is reported, not changed.
+	Kept []KeptFact `json:"kept,omitempty" jsonschema:"description=Facts the request would have changed but you keep, each with why, e.g. a newer document still states it"`
+}
+
+// KeptFact is a fact a bulk edit left alone on purpose, and why.
+type KeptFact struct {
+	FactID string `json:"factId"`
+	Reason string `json:"reason"`
+	// Statement is filled in on the result.
+	Statement string `json:"statement,omitempty"`
 }
 
 // brandEdit is one change of a bulk edit: what it is, for the report, and
 // how to make it, returning its undo id.
 type brandEdit struct {
 	what string
+	// kind is fact, voice or audience; action add, update or remove.
+	kind, action string
 	// keep adds the edit to a call that makes it again.
 	keep func(*EditBrandInput)
 	run  func(ctx context.Context) (string, error)
@@ -36,7 +48,9 @@ type brandEdit struct {
 func (in EditBrandInput) edits(d Deps, facts *brandfacts.Service, lib *brandlib.Service) []brandEdit {
 	var out []brandEdit
 	add := func(what string, keep func(*EditBrandInput), run func(ctx context.Context) (string, error)) {
-		out = append(out, brandEdit{what: what, keep: keep, run: run})
+		action, rest, _ := strings.Cut(what, " ")
+		kind, _, _ := strings.Cut(rest, " ")
+		out = append(out, brandEdit{what: what, kind: kind, action: action, keep: keep, run: run})
 	}
 	for _, f := range in.AddFacts {
 		add("add fact “"+f.Statement+"”", func(r *EditBrandInput) { r.AddFacts = append(r.AddFacts, f) }, func(ctx context.Context) (string, error) {
@@ -150,12 +164,52 @@ type BrandEditFailure struct {
 	Reason string `json:"reason"`
 }
 
+// EditCounts counts the changes made to one kind of item.
+type EditCounts struct {
+	Added   int `json:"added,omitzero"`
+	Updated int `json:"updated,omitzero"`
+	Removed int `json:"removed,omitzero"`
+}
+
+func (c *EditCounts) count(action string) {
+	switch action {
+	case "add":
+		c.Added++
+	case "update":
+		c.Updated++
+	case "remove":
+		c.Removed++
+	}
+}
+
+// BrandEditCounts is what a bulk edit made, by kind of item.
+type BrandEditCounts struct {
+	Facts     EditCounts `json:"facts,omitzero"`
+	Voices    EditCounts `json:"voices,omitzero"`
+	Audiences EditCounts `json:"audiences,omitzero"`
+}
+
+func (c *BrandEditCounts) count(e brandEdit) {
+	switch e.kind {
+	case "fact":
+		c.Facts.count(e.action)
+	case "voice":
+		c.Voices.count(e.action)
+	case "audience":
+		c.Audiences.count(e.action)
+	}
+}
+
 // EditBrandOutput is what a bulk edit did: each change made has its own
 // undo id.
 type EditBrandOutput struct {
-	Done    int                `json:"done"`
-	UndoIDs []string           `json:"undoIds"`
-	Failed  []BrandEditFailure `json:"failed,omitempty"`
+	Done int `json:"done"`
+	// Made counts the changes made by kind and action, e.g. 6 facts removed.
+	Made    BrandEditCounts `json:"made"`
+	UndoIDs []string        `json:"undoIds"`
+	// Kept is the facts left alone on purpose.
+	Kept   []KeptFact         `json:"kept,omitempty"`
+	Failed []BrandEditFailure `json:"failed,omitempty"`
 	// Stopped is why the edit stopped part way; the changes after it were
 	// not made.
 	Stopped string `json:"stopped,omitempty"`
@@ -168,7 +222,7 @@ func editBrand(ctx context.Context, d Deps, facts *brandfacts.Service, lib *bran
 	if err := in.precheck(); err != nil {
 		return nil, err
 	}
-	out := &EditBrandOutput{UndoIDs: []string{}}
+	out := &EditBrandOutput{UndoIDs: []string{}, Kept: keptFacts(ctx, d, in.Kept)}
 	edits := in.edits(d, facts, lib)
 	for i, e := range edits {
 		undo, err := e.run(ctx)
@@ -185,6 +239,7 @@ func editBrand(ctx context.Context, d Deps, facts *brandfacts.Service, lib *bran
 			return out, nil
 		}
 		out.Done++
+		out.Made.count(e)
 		if undo != "" {
 			out.UndoIDs = append(out.UndoIDs, undo)
 		}
@@ -200,15 +255,29 @@ func (in EditBrandInput) size() int {
 
 // brandRetry reads a bulk edit: the changes refused, and the ones a stop
 // left, which the retried call makes again.
-func brandRetry(_ EditBrandInput, out *EditBrandOutput) (EditBrandInput, []assistantkit.NotMade, bool) {
+func brandRetry(in EditBrandInput, out *EditBrandOutput) (EditBrandInput, []assistantkit.NotMade, bool) {
 	var notMade []assistantkit.NotMade
 	for _, f := range out.Failed {
 		notMade = append(notMade, assistantkit.NotMade{ID: f.What, Title: f.What, Reason: f.Reason})
 	}
-	var retry EditBrandInput
+	retry := EditBrandInput{Kept: in.Kept}
 	for _, e := range out.left {
 		notMade = append(notMade, assistantkit.NotMade{ID: e.what, Title: e.what, Reason: out.Stopped})
 		e.keep(&retry)
 	}
 	return retry, notMade, len(out.left) > 0
+}
+
+// keptFacts are the facts kept, with their statements; one that doesn't
+// exist is dropped.
+func keptFacts(ctx context.Context, d Deps, kept []KeptFact) []KeptFact {
+	var out []KeptFact
+	for _, k := range kept {
+		f, err := d.Brand.GetFact(ctx, strings.TrimSpace(k.FactID))
+		if err != nil || f == nil {
+			continue
+		}
+		out = append(out, KeptFact{FactID: f.ID, Reason: strings.TrimSpace(k.Reason), Statement: f.Statement})
+	}
+	return out
 }

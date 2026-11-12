@@ -66,7 +66,7 @@ func foundationPack(d Deps) assistant.Pack {
 					return editBrand(ctx, d, facts, lib, in)
 				}))), ai.WithStrictSchema(false))
 			lspecs := append(slices.Concat(librarySpecs(g, d, lib), seriesSpecs(g, d), distillSpecs(g, d)), spec(foundationPackName, bulk, assistantkit.TierProposal,
-				`Call this when one message asks for several brand changes — "add these five facts", "remove every fact about pricing", "delete the three old voices". Read the ids with getBrand first. For a single change use the one-item tool.`))
+				`Call this when one message asks for several brand changes — "add these five facts", "remove every fact about pricing", "delete the three old voices". Read the ids with getBrand first. When a request sweeps up facts you keep on purpose — "remove every 2025 price" but a 2026 document still states one — list those in kept, each with why. For a single change use the one-item tool.`))
 			return append([]assistantkit.Spec{
 				spec(foundationPackName, get, assistantkit.TierRead,
 					`Call this when the user asks about their brand — "what's our voice for LinkedIn?", "summarise our formal voice", "which facts have expired?", "what colours do we use?" — or before editing it.`),
