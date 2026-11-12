@@ -105,6 +105,12 @@ func (s *Service) List(ctx context.Context) ([]models.Series, error) {
 	return list, nil
 }
 
+// Placements returns where each of the series runs: the live, unarchived
+// campaigns running it, by name, oldest attach first.
+func (s *Service) Placements(ctx context.Context, seriesIDs []string) ([]repository.SeriesPlacement, error) {
+	return s.repo.Placements(ctx, seriesIDs)
+}
+
 // Get returns one live series with usage, or ErrNotFound.
 func (s *Service) Get(ctx context.Context, id string) (*models.Series, error) {
 	series, err := s.repo.GetByID(ctx, id)

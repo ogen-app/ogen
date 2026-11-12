@@ -28,7 +28,7 @@ func TestSeries_ToolsAndUndo(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := repository.NewSeriesRepository(db)
-	d := Deps{Series: series.New(repo), Actions: actions}
+	d := Deps{Series: series.New(repo), Actions: actions, Campaigns: campaigns}
 	undo := assistantundo.New(db, actions, nil).WithSeries(repo)
 
 	made, err := createSeries(ctx, d, SeriesInput{Name: "Tip Tuesday", Promise: "One tip a week", DefaultRhythm: &RhythmInput{Times: 1, Per: "Week"}})
@@ -41,7 +41,8 @@ func TestSeries_ToolsAndUndo(t *testing.T) {
 
 	// The thread's campaign runs it at its default rhythm, then twice a month.
 	ran, err := runSeries(ctx, d, RunSeriesInput{SeriesID: id})
-	if err != nil || !ran.Running || ran.Rhythm == nil || ran.Rhythm.Times != 1 || ran.UndoID == "" {
+	if err != nil || !ran.Running || ran.Rhythm == nil || ran.Rhythm.Times != 1 || ran.UndoID == "" ||
+		ran.CampaignName != "Launch" || ran.SeriesName != "Tip Tuesday" {
 		t.Fatalf("run = %+v, %v", ran, err)
 	}
 	again, err := runSeries(ctx, d, RunSeriesInput{SeriesID: id, Rhythm: &RhythmInput{Times: 2, Per: "month"}})
@@ -51,6 +52,10 @@ func TestSeries_ToolsAndUndo(t *testing.T) {
 	list, err := listSeries(ctx, d, ListSeriesInput{})
 	if err != nil || len(list.Series) != 1 || !list.Series[0].Runs || list.Series[0].Rhythm.Times != 2 {
 		t.Fatalf("list = %+v, %v", list, err)
+	}
+	// Each series says where it runs, by campaign name.
+	if in := list.Series[0].RunsIn; len(in) != 1 || in[0].CampaignName != "Launch" || in[0].Rhythm.Times != 2 {
+		t.Fatalf("runs in = %+v", in)
 	}
 	// Undo the rhythm change: once a week again.
 	if _, err := undo.Undo(ctx, again.UndoID, "u1"); err != nil {
@@ -96,5 +101,24 @@ func TestSeries_ToolsAndUndo(t *testing.T) {
 	}
 	if _, err := d.Series.Get(ctx, id); !errors.Is(err, series.ErrNotFound) {
 		t.Fatalf("get after undo create: %v", err)
+	}
+
+	// Made and run in one step: one result, one undo that takes both away.
+	both, err := createSeries(ctx, d, SeriesInput{Name: "People of the house", Recipe: "A person who works here",
+		RunIn: &RunInInput{Rhythm: &RhythmInput{Times: 2, Per: "month"}}})
+	if err != nil || both.Run == nil || both.Run.CampaignName != "Launch" || both.Run.Rhythm.Times != 2 || both.Run.UndoID != "" ||
+		len(both.Series.RunsIn) != 1 || both.UndoID == "" {
+		t.Fatalf("made and run = %+v, %v", both, err)
+	}
+	if _, err := undo.Undo(ctx, both.UndoID, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := repo.Run(ctx, "c1", both.Series.ID); r != nil {
+		t.Fatal("the campaign still runs an undone series")
+	}
+	// A campaign that's gone still makes the series, and says why it isn't run.
+	orphan, err := createSeries(ctx, d, SeriesInput{Name: "Guest letters", RunIn: &RunInInput{CampaignID: "gone"}})
+	if err != nil || orphan.Run != nil || orphan.NotRun == "" || orphan.UndoID == "" {
+		t.Fatalf("not run = %+v, %v", orphan, err)
 	}
 }

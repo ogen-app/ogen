@@ -53,6 +53,28 @@ type DistillOut struct {
 	Items     []DistillItem                     `json:"items,omitempty"`
 	Questions []models.DistillQuestion          `json:"questions,omitempty"`
 	Coverage  map[string]models.DistillCoverage `json:"coverage,omitempty"`
+	// Sources is what the run reads.
+	Sources DistillSources `json:"sources"`
+	// Answered is the questions an answerDistillQuestions call answered, with
+	// where each answer came from; Grounding names the assets they cite.
+	Answered  []DistillAnswered       `json:"answered,omitempty"`
+	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
+}
+
+// DistillSources is what a run reads: a website, by its address, with the
+// pages read off it, and assets.
+type DistillSources struct {
+	Website string `json:"website,omitempty"`
+	Pages   int    `json:"pages,omitzero"`
+	Assets  int    `json:"assets"`
+}
+
+// DistillAnswered is a question answered, and where the answer came from.
+type DistillAnswered struct {
+	QuestionID string `json:"questionId"`
+	Question   string `json:"question"`
+	Answer     string `json:"answer"`
+	From       string `json:"from,omitempty"`
 }
 
 // StartDistillInput starts a run.
@@ -65,6 +87,9 @@ type StartDistillInput struct {
 type DistillAnswerInput struct {
 	QuestionID string `json:"questionId"`
 	Answer     string `json:"answer"`
+	// From and AssetIDs are reported, not sent to the reading.
+	From     string   `json:"from,omitempty"     jsonschema:"description=Where the answer came from, e.g. the brochure, p. 2 or the guardrails; empty when the user said it"`
+	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=The assets the answer came from"`
 }
 
 // AnswerDistillInput answers a ready run's questions.
@@ -146,7 +171,8 @@ func latestRun(ctx context.Context, d Deps, id string) (*models.BrandDistillRun,
 }
 
 func distillOut(run *models.BrandDistillRun) *DistillOut {
-	out := &DistillOut{RunID: run.ID, Status: string(run.Status), Failure: branddistill.FailureOf(run), Counts: branddistill.CountsOf(run.Proposal)}
+	out := &DistillOut{RunID: run.ID, Status: string(run.Status), Failure: branddistill.FailureOf(run), Counts: branddistill.CountsOf(run.Proposal),
+		Sources: distillSources(run)}
 	if run.ChildRunID != nil {
 		out.RefinedBy = *run.ChildRunID
 	}
@@ -228,7 +254,39 @@ func answerDistill(ctx context.Context, d Deps, in AnswerDistillInput) (*Distill
 		return nil, distillErr(err)
 	}
 	assistantkit.Touch(ctx, "brand_distill", child.ID)
-	return distillOut(child), nil
+	out := distillOut(child)
+	var cited []string
+	for i, a := range in.Answers {
+		out.Answered = append(out.Answered, DistillAnswered{QuestionID: a.QuestionID, Question: answers[i].Question,
+			Answer: a.Answer, From: strings.TrimSpace(a.From)})
+		for _, id := range trimAll(a.AssetIDs) {
+			if !slices.Contains(cited, id) {
+				cited = append(cited, id)
+			}
+		}
+	}
+	out.Grounding = new(newAssetTitles(d).grounding(ctx, fromIdeas(cited, nil)))
+	return out, nil
+}
+
+// distillSources counts what run reads. A website's address is the one
+// asked for, or the one mapped.
+func distillSources(run *models.BrandDistillRun) DistillSources {
+	var out DistillSources
+	if run.WebsiteURL != nil {
+		out.Website = *run.WebsiteURL
+	} else if run.Website != nil {
+		out.Website = run.Website.URL
+	}
+	for _, src := range run.Sources {
+		switch src.Role {
+		case models.DistillRoleWebsite:
+			out.Pages++
+		case models.DistillRoleAsset:
+			out.Assets++
+		}
+	}
+	return out
 }
 
 // keeps reports whether item id is saved.
@@ -369,7 +427,7 @@ func distillSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		spec(foundationPackName, start, assistantkit.TierProposal,
 			`Call this when the user asks to read their brand off their website or documents — "fill in our brand from acme.com", "learn our voice from these assets". It runs in the background; check it with getBrandDistill.`),
 		spec(foundationPackName, answer, assistantkit.TierProposal,
-			`Call this when the user answers the reading's questions. Pass each answer with its questionId from getBrandDistill; use the user's words.`),
+			`Call this when the user answers the reading's questions, or asks you to answer what you can from what the workspace has. Pass each answer with its questionId from getBrandDistill; use the user's words. For an answer you found, say where in from and pass the assets in assetIds; leave a question nothing answers out and name it, never guess.`),
 		spec(foundationPackName, commit, assistantkit.TierProposal,
 			`Call this when the user wants to keep what the reading proposes — all of it, or the items they name (by id from getBrandDistill).`),
 	}

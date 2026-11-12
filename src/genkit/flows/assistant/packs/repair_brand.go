@@ -162,32 +162,45 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 		return nil, assistantkit.Refused("couldn't check the posts: " + err.Error())
 	}
 	out.Checked = res.Checked
+	if err := out.addFindings(ctx, d, res.Findings, byID); err != nil {
+		return nil, err
+	}
+	slices.SortStableFunc(out.Findings, func(a, b BrandFinding) int { return cmp.Compare(severityRank(a.Severity), severityRank(b.Severity)) })
+	return out, nil
+}
+
+// addFindings keys the check's findings and offers their fixes, leaving out
+// those dismissed in the post's campaign, and counts the posts left clean.
+func (out *CheckBrandOutput) addFindings(ctx context.Context, d Deps, found []brand_check.Finding, byID map[string]*models.Post) error {
 	dismissed := map[string]map[string]bool{}
 	flagged := map[string]bool{}
-	for _, f := range res.Findings {
+	for _, f := range found {
 		p, ok := byID[f.PostID]
 		if !ok {
 			continue
 		}
 		if _, ok := dismissed[p.CampaignID]; !ok {
-			if dismissed[p.CampaignID], err = d.dismissedKeys(ctx, p.CampaignID); err != nil {
-				return nil, err
+			keys, err := d.dismissedKeys(ctx, p.CampaignID)
+			if err != nil {
+				return err
 			}
+			dismissed[p.CampaignID] = keys
 		}
 		bf := BrandFinding{Finding: f, Key: brandFindingKey(p, f), CampaignID: p.CampaignID, Title: p.Title}
 		if dismissed[p.CampaignID][bf.Key] {
 			out.Dismissed++
 			continue
 		}
-		if bf.Fixes, err = brandFixes(ctx, d, p, f); err != nil {
-			return nil, err
+		fixes, err := brandFixes(ctx, d, p, f)
+		if err != nil {
+			return err
 		}
+		bf.Fixes = fixes
 		flagged[p.ID] = true
 		out.Findings = append(out.Findings, bf)
 	}
 	out.Clean = max(out.Checked-len(flagged), 0)
-	slices.SortStableFunc(out.Findings, func(a, b BrandFinding) int { return cmp.Compare(severityRank(a.Severity), severityRank(b.Severity)) })
-	return out, nil
+	return nil
 }
 
 // brandFindingKey keys a finding by its post's text, so it holds while the

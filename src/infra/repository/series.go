@@ -42,6 +42,9 @@ type SeriesRepository interface {
 
 	// Runs returns the campaign's runs, oldest attach first. Never nil.
 	Runs(ctx context.Context, campaignID string) ([]models.CampaignSeriesRun, error)
+	// Placements returns the runs of the series ids by live, unarchived
+	// campaigns, with each campaign's name, oldest attach first.
+	Placements(ctx context.Context, seriesIDs []string) ([]SeriesPlacement, error)
 	// Attach share-locks the live campaign and series rows, hands the series to
 	// build, and inserts the run build returns, leaving an existing one (and
 	// its rhythm) as it is. The locks order it against a concurrent soft
@@ -202,6 +205,34 @@ func (r *seriesRepository) Runs(ctx context.Context, campaignID string) ([]model
 		return nil, err
 	}
 	return runs, nil
+}
+
+// SeriesPlacement is a campaign's run of a series, with the campaign's name.
+type SeriesPlacement struct {
+	SeriesID     string               `bun:"series_id"`
+	CampaignID   string               `bun:"campaign_id"`
+	CampaignName string               `bun:"campaign_name"`
+	Rhythm       *models.SeriesRhythm `bun:"rhythm,type:jsonb"`
+}
+
+func (r *seriesRepository) Placements(ctx context.Context, seriesIDs []string) ([]SeriesPlacement, error) {
+	out := []SeriesPlacement{}
+	if len(seriesIDs) == 0 {
+		return out, nil
+	}
+	err := r.db.NewSelect().
+		Model((*models.CampaignSeriesRun)(nil)).
+		ColumnExpr("cs.series_id, cs.campaign_id, cs.rhythm, c.name AS campaign_name").
+		Join("JOIN campaigns AS c ON c.id = cs.campaign_id").
+		Where("cs.series_id IN (?)", bun.List(seriesIDs)).
+		Where("c.deleted_at IS NULL").
+		Where("c.archived_at IS NULL").
+		OrderExpr("cs.created_at ASC, cs.campaign_id ASC").
+		Scan(ctx, &out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *seriesRepository) Attach(ctx context.Context, campaignID, seriesID string, build func(*models.Series) (*models.CampaignSeriesRun, error)) error {
