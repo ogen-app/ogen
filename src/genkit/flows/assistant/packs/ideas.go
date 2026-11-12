@@ -184,10 +184,13 @@ type IdeaRef struct {
 	Posts int `json:"posts"`
 }
 
-// FindIdeasOutput is one page of matches.
+// FindIdeasOutput is one page of matches. PileTotal counts the pile the
+// filter names with no other filter, for "6 of 14 undecided"; it is absent
+// for a filter that names no pile.
 type FindIdeasOutput struct {
-	Ideas []IdeaRef `json:"ideas"`
-	Total int       `json:"total"`
+	Ideas     []IdeaRef `json:"ideas"`
+	Total     int       `json:"total"`
+	PileTotal *int      `json:"pileTotal,omitempty"`
 }
 
 func findIdeas(ctx context.Context, d Deps, in FindIdeasInput) (*FindIdeasOutput, error) {
@@ -214,6 +217,13 @@ func findIdeas(ctx context.Context, d Deps, in FindIdeasInput) (*FindIdeasOutput
 	out := &FindIdeasOutput{Ideas: make([]IdeaRef, len(res.Ideas)), Total: res.Total}
 	for i, idea := range res.Ideas {
 		out.Ideas[i] = ideaRef(idea)
+	}
+	if q.Pile.Active() {
+		pile, err := d.Ideas.Query(ctx, models.IdeaQuery{Pile: q.Pile, ScopeCampaign: q.ScopeCampaign, Now: q.Now, Location: q.Location, Limit: 1})
+		if err != nil {
+			return nil, err
+		}
+		out.PileTotal = &pile.Total
 	}
 	return out, nil
 }

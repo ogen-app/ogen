@@ -82,6 +82,34 @@ func TestSetIdeaVerdicts_SaysWhatChanged(t *testing.T) {
 	}
 }
 
+// A filter naming a pile also counts that pile alone, for "6 of 14
+// undecided"; one naming none counts nothing more.
+func TestFindIdeas_PileTotal(t *testing.T) {
+	d, repo, _ := ideaDeps()
+	d.Ideas = ideas.New(pileRepo{repo}, nil)
+	ctx, _ := turn(t, workspace, nil)
+	out, err := findIdeas(ctx, d, FindIdeasInput{Filter: "pile=waiting&text=spa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 6 || out.PileTotal == nil || *out.PileTotal != 14 {
+		t.Fatalf("find = total %d, pile %v", out.Total, out.PileTotal)
+	}
+	if out, _ = findIdeas(ctx, d, FindIdeasInput{Filter: "text=spa"}); out.PileTotal != nil {
+		t.Fatalf("no pile, pile total %d", *out.PileTotal)
+	}
+}
+
+// pileRepo matches 6 ideas to a text filter and 14 without one.
+type pileRepo struct{ *memIdeaRepo }
+
+func (pileRepo) Query(_ context.Context, q models.IdeaQuery) (*models.IdeaQueryResult, error) {
+	if q.Text != "" {
+		return &models.IdeaQueryResult{Total: 6}, nil
+	}
+	return &models.IdeaQueryResult{Total: 14}, nil
+}
+
 // similarIdeas reads the ideas like one, each with why.
 func TestSimilarIdeas(t *testing.T) {
 	d, repo, _ := ideaDeps()

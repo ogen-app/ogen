@@ -12,6 +12,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/ideafit"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/ideas_common"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 )
@@ -31,7 +32,7 @@ func defineReadTools(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 				return getIdea(ctx, d, in)
 			}))), ai.WithStrictSchema(false))
 	common := genkit.DefineTool(g, "ideasInCommon",
-		"Works out what several ideas share: the assets they came from, their campaign, origin, the lens that scored them, their planned platform, type and phase, and the words their titles and angles have in common.",
+		"Works out what several ideas share: the assets they came from, their campaign, origin, the lens that scored them, their planned platform, type and phase, the words their titles and angles have in common, the theme and angle they share, and where they split.",
 		onScreen(func(ctx context.Context, in *IdeasInCommonInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
 			assistantkit.Wrap(recorded(ideasPackName, "ideasInCommon", nil, func(ctx context.Context, in IdeasInCommonInput) (*IdeasInCommonOutput, error) {
 				return ideasInCommon(ctx, d, in)
@@ -40,7 +41,7 @@ func defineReadTools(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		spec(ideasPackName, get, assistantkit.TierRead,
 			`Call this when the user asks about one idea — "why does this fit?", "why did it score 80?", "where does this come from?", "has it been used?". ideaId defaults to the idea open on screen, else the one selected. Explain a fit from its criteria's reasons; never invent one.`),
 		spec(ideasPackName, common, assistantkit.TierRead,
-			`Call this when the user asks what several ideas have in common, or what ties them together — "what do the selected ideas share?". ideaIds default to the selected ideas; 2 to 50. Describe the shared themes from what it returns, and say when they share little.`),
+			`Call this when the user asks what several ideas have in common, or what ties them together — "what do the selected ideas share?". ideaIds default to the selected ideas; 2 to 50. Describe the shared themes from what it returns — theme and angle word the thread they share, splits are where they differ — and say when they share little.`),
 	}
 }
 
@@ -195,10 +196,15 @@ type IdeasInCommonInput struct {
 }
 
 // IdeasInCommonOutput is what the ideas share; each list holds what two or
-// more of them have, the most shared first, with which ideas.
+// more of them have, the most shared first, with which ideas. Theme and
+// Angle word the thread they share; both are empty when they share none or
+// it couldn't be worded. Splits are where they differ.
 type IdeasInCommonOutput struct {
 	Ideas     []CommonIdea  `json:"ideas"`
 	Missing   []string      `json:"missing,omitempty"`
+	Theme     string        `json:"theme,omitempty"`
+	Angle     string        `json:"angle,omitempty"`
+	Splits    []SplitField  `json:"splits,omitempty"`
 	Assets    []SharedValue `json:"assets,omitempty"`
 	Campaigns []SharedValue `json:"campaigns,omitempty"`
 	Origins   []SharedValue `json:"origins,omitempty"`
@@ -214,6 +220,13 @@ type CommonIdea struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	Angle string `json:"angle,omitempty"`
+}
+
+// SplitField is a field the ideas differ on — campaign, lens, platform,
+// postType or phase — and every value they hold of it.
+type SplitField struct {
+	Field  string        `json:"field"`
+	Values []SharedValue `json:"values"`
 }
 
 // SharedValue is one shared value, labelled where it is an id.
@@ -279,5 +292,31 @@ func ideasInCommon(ctx context.Context, d Deps, in IdeasInCommonInput) (*IdeasIn
 	plain := label(nil)
 	out.Assets, out.Campaigns, out.Lenses = label(assetTitles)(c.Assets), label(names)(c.Campaigns), label(names)(c.Lenses)
 	out.Origins, out.Platforms, out.PostTypes, out.Phases, out.Terms = plain(c.Origins), plain(c.Platforms), plain(c.PostTypes), plain(c.Phases), plain(c.Terms)
+	for _, s := range c.Splits {
+		values := plain(s.Values)
+		if s.Field == ideas.FieldCampaign || s.Field == ideas.FieldLens {
+			values = label(names)(s.Values)
+		}
+		out.Splits = append(out.Splits, SplitField{Field: s.Field, Values: values})
+	}
+	out.Theme, out.Angle = commonThread(ctx, d, list)
 	return out, nil
+}
+
+// commonThread words the thread list shares; empty when nothing words it.
+// A failed call leaves the card without a headline, not the tool without a
+// result.
+func commonThread(ctx context.Context, d Deps, list []models.Idea) (theme, angle string) {
+	if d.CommonThread == nil {
+		return "", ""
+	}
+	req := ideas_common.Request{Ideas: make([]ideas_common.Idea, len(list))}
+	for i, idea := range list {
+		req.Ideas[i] = ideas_common.Idea{Title: idea.Title, Angle: deref(idea.Angle), Note: idea.Note}
+	}
+	res, err := d.CommonThread(ctx, req)
+	if err != nil {
+		return "", ""
+	}
+	return res.Theme, res.Angle
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_check"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
+	"github.com/ogen-app/ogen/src/genkit/flows/ideas_common"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/more_like_these"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
@@ -124,6 +125,9 @@ type Deps struct {
 	// MoreLike writes ideas like posts that performed well; nil leaves
 	// moreLikeThese out of the analytics pack.
 	MoreLike more_like_these.Run
+	// CommonThread names the theme and angle ideas share; nil leaves
+	// ideasInCommon without them.
+	CommonThread ideas_common.Run
 
 	// Hub announces committed changes to the workspace's other sessions;
 	// nil publishes nothing.

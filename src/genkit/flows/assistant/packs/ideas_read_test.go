@@ -2,12 +2,14 @@ package packs
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/ideafit"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/ideas_common"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -90,8 +92,43 @@ func TestIdeasInCommon(t *testing.T) {
 	if len(out.Terms) != 1 || out.Terms[0].Value != "founder" {
 		t.Fatalf("terms = %+v; founders and Founder share a word", out.Terms)
 	}
+	if out.Theme != "" || out.Angle != "" || len(out.Splits) != 0 {
+		t.Fatalf("without a namer or a split = %+v", out)
+	}
 	for _, in := range [][]string{{"i1"}, {"i1", "gone"}} {
 		_, err := ideasInCommon(ctx, d, IdeasInCommonInput{IdeaIDs: in})
 		refused(t, err)
+	}
+}
+
+// The thread the ideas share is worded by the namer, and where they split
+// is named by field; a namer that fails leaves the rest of the result.
+func TestIdeasInCommon_ThreadAndSplits(t *testing.T) {
+	d := readDeps()
+	repo := d.IdeaRepo.(*memIdeaRepo)
+	repo.byID["i1"].Plan.PlatformID, repo.byID["i2"].Plan.PlatformID = new("linkedin"), new("instagram")
+	var asked []ideas_common.Idea
+	d.CommonThread = func(_ context.Context, req ideas_common.Request) (*ideas_common.Result, error) {
+		asked = req.Ideas
+		return &ideas_common.Result{Theme: "founder pricing", Angle: "Both take apart what founders get wrong about price."}, nil
+	}
+	ctx, _ := turn(t, workspace, nil)
+	out, err := ideasInCommon(ctx, d, IdeasInCommonInput{IdeaIDs: []string{"i1", "i2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Theme != "founder pricing" || out.Angle == "" || len(asked) != 2 || asked[0].Angle != "myth-busting" {
+		t.Fatalf("thread = %q / %q, asked %+v", out.Theme, out.Angle, asked)
+	}
+	if len(out.Splits) != 1 || out.Splits[0].Field != "platform" || len(out.Splits[0].Values) != 2 {
+		t.Fatalf("splits = %+v", out.Splits)
+	}
+
+	d.CommonThread = func(context.Context, ideas_common.Request) (*ideas_common.Result, error) {
+		return nil, errors.New("model down")
+	}
+	out, err = ideasInCommon(ctx, d, IdeasInCommonInput{IdeaIDs: []string{"i1", "i2"}})
+	if err != nil || out.Theme != "" || len(out.Splits) != 1 {
+		t.Fatalf("with the namer down = %+v, %v", out, err)
 	}
 }
