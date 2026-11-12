@@ -50,11 +50,42 @@ type SeriesOut struct {
 	// occasional.
 	Runs   bool                 `json:"runs,omitzero"`
 	Rhythm *models.SeriesRhythm `json:"rhythm,omitempty"`
+	// RunsIn is every live campaign that runs it, by name.
+	RunsIn []SeriesRunIn `json:"runsIn"`
+}
+
+// SeriesRunIn is a campaign running a series, and how often; Rhythm nil is
+// occasional.
+type SeriesRunIn struct {
+	CampaignID   string               `json:"campaignId"`
+	CampaignName string               `json:"campaignName"`
+	Rhythm       *models.SeriesRhythm `json:"rhythm,omitempty"`
+}
+
+// withRunsIn fills in where each series runs.
+func withRunsIn(ctx context.Context, d Deps, list []SeriesOut) error {
+	ids := make([]string, len(list))
+	for i, s := range list {
+		ids[i] = s.ID
+	}
+	placed, err := d.Series.Placements(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for i := range list {
+		list[i].RunsIn = []SeriesRunIn{}
+		for _, p := range placed {
+			if p.SeriesID == list[i].ID {
+				list[i].RunsIn = append(list[i].RunsIn, SeriesRunIn{CampaignID: p.CampaignID, CampaignName: p.CampaignName, Rhythm: p.Rhythm})
+			}
+		}
+	}
+	return nil
 }
 
 func seriesOut(s *models.Series) SeriesOut {
 	out := SeriesOut{ID: s.ID, Name: s.Name, Promise: s.Promise, Recipe: s.Recipe, Supply: string(s.Supply),
-		DefaultRhythm: s.DefaultRhythm, Usage: s.Usage}
+		DefaultRhythm: s.DefaultRhythm, Usage: s.Usage, RunsIn: []SeriesRunIn{}}
 	if s.ContentFormat != nil {
 		out.ContentFormat = string(*s.ContentFormat)
 	}
@@ -84,6 +115,15 @@ type SeriesInput struct {
 	ContentFormat string       `json:"contentFormat,omitempty"`
 	DefaultRhythm *RhythmInput `json:"defaultRhythm,omitempty"`
 	CampaignID    string       `json:"campaignId,omitempty"    jsonschema:"description=Keep it inside this campaign instead of the workspace library"`
+	// RunIn makes it run in a campaign in the same step.
+	RunIn *RunInInput `json:"runIn,omitempty" jsonschema:"description=Also run it in a campaign, in the same step and under the same undo"`
+}
+
+// RunInInput is the campaign a new series runs in, and how often.
+type RunInInput struct {
+	CampaignID string       `json:"campaignId,omitempty" jsonschema:"description=The campaign; the thread's when omitted"`
+	Rhythm     *RhythmInput `json:"rhythm,omitempty"     jsonschema:"description=How often; the series' default when omitted"`
+	Occasional bool         `json:"occasional,omitempty" jsonschema:"description=Run it with no set rhythm"`
 }
 
 // UpdateSeriesInput edits a series; empty fields keep their value.
@@ -104,9 +144,13 @@ type SeriesRef struct {
 	SeriesID string `json:"seriesId,omitempty" jsonschema:"description=The series; the open one when omitted"`
 }
 
-// SeriesChangeOut is a series changed and the undo handle.
+// SeriesChangeOut is a series changed and the undo handle. A series made
+// to run in a campaign has the run too, undone with the series; NotRun is
+// why it was made but couldn't be run.
 type SeriesChangeOut struct {
 	Series SeriesOut `json:"series"`
+	Run    *RunOut   `json:"run,omitempty"`
+	NotRun string    `json:"notRun,omitempty"`
 	UndoID string    `json:"undoId,omitempty"`
 }
 
@@ -127,11 +171,13 @@ type StopSeriesInput struct {
 // RunOut is a campaign's run of a series after a change; Running false is
 // stopped, and Rhythm nil occasional.
 type RunOut struct {
-	CampaignID string               `json:"campaignId"`
-	SeriesID   string               `json:"seriesId"`
-	Running    bool                 `json:"running"`
-	Rhythm     *models.SeriesRhythm `json:"rhythm,omitempty"`
-	UndoID     string               `json:"undoId,omitempty"`
+	CampaignID   string               `json:"campaignId"`
+	CampaignName string               `json:"campaignName,omitempty"`
+	SeriesID     string               `json:"seriesId"`
+	SeriesName   string               `json:"seriesName,omitempty"`
+	Running      bool                 `json:"running"`
+	Rhythm       *models.SeriesRhythm `json:"rhythm,omitempty"`
+	UndoID       string               `json:"undoId,omitempty"`
 }
 
 func seriesErr(err error) error {
@@ -178,6 +224,9 @@ func listSeries(ctx context.Context, d Deps, in ListSeriesInput) (*ListSeriesOut
 		}
 		out.Series = append(out.Series, o)
 	}
+	if err := withRunsIn(ctx, d, out.Series); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -196,13 +245,60 @@ func createSeries(ctx context.Context, d Deps, in SeriesInput) (*SeriesChangeOut
 	if id := strings.TrimSpace(in.CampaignID); id != "" {
 		si.CampaignID = &id
 	}
+	runIn := ""
+	if in.RunIn != nil {
+		var err error
+		if runIn, err = campaignOf(ctx, cmp.Or(in.RunIn.CampaignID, in.CampaignID)); err != nil {
+			return nil, err
+		}
+	}
 	s, err := d.Series.Create(ctx, si)
 	if err != nil {
 		return nil, seriesErr(err)
 	}
 	assistantkit.Touch(ctx, "series", s.ID)
+	// Undoing the series takes its runs with it, so the run logs no undo of
+	// its own: the card has one.
 	undo := recordUndo(ctx, d, models.AssistantActionSeries, s.ID, assistantundo.Series(nil, nil), assistantundo.Series(s, nil))
-	return &SeriesChangeOut{Series: seriesOut(s), UndoID: undo}, nil
+	out := &SeriesChangeOut{Series: seriesOut(s), UndoID: undo}
+	if runIn != "" {
+		want := &models.CampaignSeriesRun{Rhythm: s.DefaultRhythm}
+		switch {
+		case in.RunIn.Occasional:
+			want.Rhythm = nil
+		case in.RunIn.Rhythm != nil:
+			want.Rhythm = in.RunIn.Rhythm.rhythm()
+		}
+		if _, err := d.Series.SetRun(ctx, runIn, s.ID, want); err != nil {
+			r, ok := errors.AsType[*assistantkit.Refusal](seriesErr(err))
+			if !ok {
+				return nil, err
+			}
+			out.NotRun = r.Reason
+		} else {
+			assistantkit.Touch(ctx, "campaign", runIn)
+			out.Run = &RunOut{CampaignID: runIn, CampaignName: campaignName(ctx, d, runIn), SeriesID: s.ID, SeriesName: s.Name,
+				Running: true, Rhythm: want.Rhythm}
+		}
+	}
+	list := []SeriesOut{out.Series}
+	if err := withRunsIn(ctx, d, list); err != nil {
+		return nil, err
+	}
+	out.Series = list[0]
+	return out, nil
+}
+
+// campaignName is the campaign's name; "" when it can't be read.
+func campaignName(ctx context.Context, d Deps, id string) string {
+	if d.Campaigns == nil {
+		return ""
+	}
+	c, err := d.Campaigns.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return ""
+	}
+	return c.Name
 }
 
 func updateSeries(ctx context.Context, d Deps, in UpdateSeriesInput) (*SeriesChangeOut, error) {
@@ -286,7 +382,10 @@ func setRun(ctx context.Context, d Deps, campaignID, seriesID string, want *mode
 	if err != nil {
 		return nil, seriesErr(err)
 	}
-	out := &RunOut{CampaignID: campaignID, SeriesID: seriesID, Running: want != nil}
+	out := &RunOut{CampaignID: campaignID, CampaignName: campaignName(ctx, d, campaignID), SeriesID: seriesID, Running: want != nil}
+	if s, err := d.Series.Get(ctx, seriesID); err == nil {
+		out.SeriesName = s.Name
+	}
 	if want != nil {
 		out.Rhythm = want.Rhythm
 	}
@@ -325,7 +424,7 @@ func seriesSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		spec(foundationPackName, list, assistantkit.TierRead,
 			`Call this when the user asks about series — "which series do we have?", "what does this campaign run?" — or before changing one.`),
 		spec(foundationPackName, create, assistantkit.TierReversible,
-			`Call this when the user asks for a new recurring kind of post — "start a weekly 'Tip Tuesday' series". It goes in the workspace library unless they want it in one campaign only. It can be undone.`),
+			`Call this when the user asks for a new recurring kind of post — "start a weekly 'Tip Tuesday' series". It goes in the workspace library unless they want it in one campaign only. When they also want a campaign to run it — "make a new one and run it in Spring reopening" — pass runIn rather than calling runSeries after. It can be undone, run and all.`),
 		spec(foundationPackName, update, assistantkit.TierReversible,
 			`Call this to change a series itself — its name, promise, recipe, format or default rhythm. To change how often one campaign runs it, use runSeries. It can be undone.`),
 		spec(foundationPackName, remove, assistantkit.TierReversible,

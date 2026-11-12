@@ -69,9 +69,15 @@ func TestDistill(t *testing.T) {
 		t.Fatalf("start = %+v, %v", m.requested, err)
 	}
 
-	if _, err := answerDistill(ctx, d, AnswerDistillInput{Answers: []DistillAnswerInput{{QuestionID: "q1", Answer: "Families"}}}); err != nil ||
-		len(m.refined) != 1 || m.refined[0].Question != "Who books most?" {
+	answered, err := answerDistill(ctx, d, AnswerDistillInput{Answers: []DistillAnswerInput{
+		{QuestionID: "q1", Answer: "Families", From: " the brochure, p. 2 ", AssetIDs: []string{"a1", " a1"}}}})
+	if err != nil || len(m.refined) != 1 || m.refined[0].Question != "Who books most?" {
 		t.Fatalf("refined = %+v, %v", m.refined, err)
+	}
+	// The result says what was answered and from what, citing each asset once.
+	if want := []DistillAnswered{{QuestionID: "q1", Question: "Who books most?", Answer: "Families", From: "the brochure, p. 2"}}; !slices.Equal(answered.Answered, want) ||
+		answered.Grounding == nil || len(answered.Grounding.Sources) != 1 || answered.Grounding.Sources[0].ID != "a1" {
+		t.Fatalf("answered = %+v, grounding %+v", answered.Answered, answered.Grounding)
 	}
 	_, err = answerDistill(ctx, d, AnswerDistillInput{Answers: []DistillAnswerInput{{QuestionID: "nope", Answer: "x"}}})
 	refused(t, err)
@@ -89,5 +95,19 @@ func TestDistill(t *testing.T) {
 	// Naming it saves it.
 	if _, err := commitDistill(ctx, d, CommitDistillInput{Keep: []string{"pd1"}}); err != nil || m.committed.Disclaimer == nil || len(m.committed.Voices) != 0 {
 		t.Fatalf("commit = %+v, %v", m.committed, err)
+	}
+}
+
+// A run counts what it reads: the website by its address and the pages read
+// off it, and the assets.
+func TestDistillSources(t *testing.T) {
+	run := &models.BrandDistillRun{WebsiteURL: new("villa-aurora.example"), Sources: []models.DistillSource{
+		{Role: models.DistillRoleWebsite}, {Role: models.DistillRoleWebsite}, {Role: models.DistillRoleAsset}}}
+	if got := distillSources(run); got != (DistillSources{Website: "villa-aurora.example", Pages: 2, Assets: 1}) {
+		t.Fatalf("sources = %+v", got)
+	}
+	mapped := &models.BrandDistillRun{Website: &models.DistillWebsite{URL: "https://villa-aurora.example"}}
+	if got := distillOut(mapped).Sources; got != (DistillSources{Website: "https://villa-aurora.example"}) {
+		t.Fatalf("mapped = %+v", got)
 	}
 }
