@@ -212,6 +212,9 @@ type CampaignAssistantRepos struct {
 	// Links maps the campaign's posts to their ideas, for the calendar
 	// check's "same idea close together"; nil skips that check.
 	Links repository.PostIdeaRepository
+	// Dismissals leaves the findings the user dismissed out of the brief
+	// and posts reviews; nil leaves them all in.
+	Dismissals repository.AssistantDismissalRepository
 }
 
 // CampaignAssistantFlowConfig holds the campaign pack's services and limits.

@@ -66,8 +66,14 @@ func TestCheck(t *testing.T) {
 	if f := find(got, CodeOutsideWindow); !slices.Equal(f.PostIDs, []string{"late"}) || f.Fixes[0].Kind != FixRedistribute {
 		t.Fatalf("outside = %+v", f)
 	}
-	if f := find(got, CodeDisabledDay); !slices.Equal(f.PostIDs, []string{"sat"}) {
+	if f := find(got, CodeOutsideWindow); f.Detail != "Set for Mon 4 Jan; the campaign runs 1 Dec to 31 Dec." {
+		t.Fatalf("outside detail = %q", f.Detail)
+	}
+	if f := find(got, CodeDisabledDay); !slices.Equal(f.PostIDs, []string{"sat"}) || f.Detail != "The campaign doesn't publish on Saturdays." {
 		t.Fatalf("disabled day = %+v", f)
+	}
+	if f := find(got, CodeGap); f.Detail != "23 days with nothing on the calendar; the longest quiet the check lets pass is 7 days." {
+		t.Fatalf("gap detail = %q", f.Detail)
 	}
 	if f := find(got, CodeCrowdedDay); !slices.Equal(f.PostIDs, []string{"c1", "c2", "c3"}) {
 		t.Fatalf("crowded = %+v", f)

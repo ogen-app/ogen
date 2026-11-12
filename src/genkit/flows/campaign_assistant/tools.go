@@ -554,8 +554,8 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	checkBrief := genkit.DefineTool(g, "checkBrief",
 		"Reviews the campaign brief for internal consistency and completeness (goal alignment, persona, key messages, tone) and returns specific findings with suggestions. "+
 			"Read-only — it does NOT change the brief. Call it when the user asks to check/review the brief or whether it's consistent. Takes no arguments. "+
-			"After reporting the findings, OFFER to improve the brief with enrichBrief when there are issues, but do NOT call enrichBrief in the same turn unless the user asks.",
-		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*consistency.BriefReview, error) {
+			"Each finding comes with its brief edit already offered (proposalId) for the user to confirm; don't call enrichBrief yourself. Findings the user dismissed are left out and counted.",
+		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*ReviewOutput, error) {
 			return toolCheckBrief(ctx)
 		}, consistencyInvalid),
 		ai.WithStrictSchema(false),
@@ -563,8 +563,9 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 
 	checkPostsConsistency := genkit.DefineTool(g, "checkPostsConsistency",
 		"Checks whether the campaign's non-published posts follow the brief (persona, key messages, tone) and returns per-post findings for the ones that drift. "+
-			"Read-only — it does NOT change any post. Call it when the user asks whether the posts match/follow the brief. Only the first N posts are checked (report the cap when it applies).",
-		assistantkit.Wrap(func(ctx context.Context, in CheckPostsInput) (*consistency.PostsReview, error) {
+			"Read-only — it does NOT change any post. Call it when the user asks whether the posts match/follow the brief. Only the first N posts are checked (report the cap when it applies). "+
+			"Each finding comes with its fixes: a rewrite already offered (proposalId), and opening the post. Findings the user dismissed are left out and counted.",
+		assistantkit.Wrap(func(ctx context.Context, in CheckPostsInput) (*ReviewOutput, error) {
 			return toolCheckPostsConsistency(ctx, in)
 		}, consistencyInvalid),
 		ai.WithStrictSchema(false),
@@ -1898,10 +1899,14 @@ func dateOnly(t time.Time) time.Time {
 	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
 }
 
-func toolCheckBrief(ctx context.Context) (*consistency.BriefReview, error) {
+// toolCheckBrief reviews the brief and offers each open finding its fix,
+// as reviewCampaign does, so the card's rows carry keys, fixes and IGNORE.
+func toolCheckBrief(ctx context.Context) (*ReviewOutput, error) {
 	st := getRequestState(ctx)
+	out := NewReview(st.campaignID)
 	if !st.reserveHeavy(ctx) {
-		return &consistency.BriefReview{Summary: heavySkipNote}, nil
+		out.Note = heavySkipNote
+		return out, nil
 	}
 	if st.checkBrief == nil {
 		return nil, fmt.Errorf("brief review is not available")
@@ -1913,13 +1918,24 @@ func toolCheckBrief(ctx context.Context) (*consistency.BriefReview, error) {
 		return nil, err
 	}
 	st.briefReviewResult = review
-	return review, nil
+	dismissed, err := DismissedKeys(ctx, st.repos.Dismissals, st.campaignID)
+	if err != nil {
+		return nil, err
+	}
+	if err := out.AddBrief(ctx, review, dismissed, reviewOffers()); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
-func toolCheckPostsConsistency(ctx context.Context, in CheckPostsInput) (*consistency.PostsReview, error) {
+// toolCheckPostsConsistency reviews the posts against the brief and offers
+// each drifting post its fixes, as reviewCampaign does.
+func toolCheckPostsConsistency(ctx context.Context, in CheckPostsInput) (*ReviewOutput, error) {
 	st := getRequestState(ctx)
+	out := NewReview(st.campaignID)
 	if !st.reserveHeavy(ctx) {
-		return &consistency.PostsReview{Summary: heavySkipNote}, nil
+		out.Note = heavySkipNote
+		return out, nil
 	}
 	if st.checkPosts == nil {
 		return nil, fmt.Errorf("posts review is not available")
@@ -1931,5 +1947,19 @@ func toolCheckPostsConsistency(ctx context.Context, in CheckPostsInput) (*consis
 		return nil, err
 	}
 	st.postsReviewResult = review
-	return review, nil
+	dismissed, err := DismissedKeys(ctx, st.repos.Dismissals, st.campaignID)
+	if err != nil {
+		return nil, err
+	}
+	if err := out.AddPosts(ctx, review, dismissed, reviewOffers()); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// reviewOffers are the fixes this pack's reviews offer: the brief through
+// its own enrichBrief, a post through the repair pack's revisePost when
+// that is registered.
+func reviewOffers() ReviewOffers {
+	return ReviewOffers{Brief: true, Revise: assistantkit.IsGated("revisePost")}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
 	"slices"
 	"testing"
 
@@ -54,6 +55,20 @@ func (d *dismissals) Dismiss(_ context.Context, _ models.AssistantScopeKind, _, 
 	return nil
 }
 
+func (d *dismissals) Restore(_ context.Context, _ models.AssistantScopeKind, _, key string) (bool, error) {
+	was := d.keys[key]
+	delete(d.keys, key)
+	return was, nil
+}
+
+func (d *dismissals) List(context.Context, models.AssistantScopeKind, string) ([]repository.AssistantDismissal, error) {
+	var out []repository.AssistantDismissal
+	for _, k := range slices.Sorted(maps.Keys(d.keys)) {
+		out = append(out, repository.AssistantDismissal{FindingKey: k, CreatedBy: "u1"})
+	}
+	return out, nil
+}
+
 // The overview carries the calendar's problems with their fixes; one
 // dismissed from the overview is left out after, and counted.
 func TestOverview_Problems(t *testing.T) {
@@ -82,6 +97,19 @@ func TestOverview_Problems(t *testing.T) {
 	}
 	if again.ProblemsDismissed != 1 || len(again.Problems) != len(ov.Problems)-1 {
 		t.Fatalf("after dismissing: %d problems, %d dismissed", len(again.Problems), again.ProblemsDismissed)
+	}
+	if len(again.DismissedProblems) != 1 || again.DismissedProblems[0].Key != ov.Problems[i].Key {
+		t.Fatalf("dismissed problems = %+v", again.DismissedProblems)
+	}
+	if list, err := svc.Dismissed(t.Context(), "camp-1"); err != nil || len(list) != 1 || list[0].Key != ov.Problems[i].Key {
+		t.Fatalf("dismissed = %+v, %v", list, err)
+	}
+	// Restored, it is a problem again.
+	if err := svc.Restore(t.Context(), "camp-1", ov.Problems[i].Key); err != nil {
+		t.Fatal(err)
+	}
+	if back, err := svc.Overview(t.Context(), "camp-1"); err != nil || len(back.Problems) != len(ov.Problems) || len(back.DismissedProblems) != 0 {
+		t.Fatalf("after restoring: %+v, %v", back, err)
 	}
 	if err := svc.Dismiss(t.Context(), "nope", "k", "u1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown campaign = %v", err)

@@ -36,6 +36,9 @@ type Overview struct {
 	// the campaign's dismissed ones are left out and counted.
 	Problems          []calendarcheck.Finding `json:"problems"`
 	ProblemsDismissed int                     `json:"problemsDismissed"`
+	// DismissedProblems are the dismissed ones the calendar still has, for
+	// the card to show and restore.
+	DismissedProblems []calendarcheck.Finding `json:"dismissedProblems"`
 	GeneratedAt       time.Time               `json:"generatedAt"`
 }
 

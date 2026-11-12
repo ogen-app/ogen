@@ -1431,6 +1431,30 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				for _, p := range after.Problems {
 					Expect(p.Key).NotTo(Equal(slot))
 				}
+				Expect(after.DismissedProblems).To(HaveLen(1))
+				Expect(after.DismissedProblems[0].Key).To(Equal(slot))
+
+				// The dismissed keys list for a reloaded thread.
+				req := httptest.NewRequest("GET", "/api/campaigns/"+camp.ID+"/findings/dismissed", nil)
+				req.AddCookie(ck)
+				resp, err := a.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(200))
+				var listed handlers.DismissedFindingsResponse
+				Expect(json.NewDecoder(resp.Body).Decode(&listed)).To(Succeed())
+				Expect(listed.Dismissed).To(HaveLen(1))
+				Expect(listed.Dismissed[0].Key).To(Equal(slot))
+				Expect(listed.Dismissed[0].DismissedAt).NotTo(BeZero())
+
+				// Restored, it is a problem again.
+				req = httptest.NewRequest("DELETE", "/api/campaigns/"+camp.ID+"/findings/"+slot+"/dismiss", nil)
+				req.AddCookie(ck)
+				resp, err = a.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(204))
+				restored := read()
+				Expect(restored.ProblemsDismissed).To(BeZero())
+				Expect(restored.Problems).To(ContainElement(HaveField("Key", slot)))
 			})
 		})
 	})

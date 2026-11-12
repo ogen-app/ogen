@@ -88,6 +88,13 @@ func (r *memDismissals) Keys(_ context.Context, kind models.AssistantScopeKind, 
 	return r.scope(kind, id), nil
 }
 
+func (r *memDismissals) Restore(_ context.Context, kind models.AssistantScopeKind, id, key string) (bool, error) {
+	keys := r.scope(kind, id)
+	was := keys[key]
+	delete(keys, key)
+	return was, nil
+}
+
 func day(s string) *time.Time {
 	t, _ := time.Parse(time.DateOnly, s)
 	return &t
@@ -156,6 +163,21 @@ func TestCheckCalendar_OffersFixes(t *testing.T) {
 	out, _ = checkCalendar(ctx, d, CampaignRef{})
 	if out.Dismissed != 1 || slices.ContainsFunc(out.Findings, func(f FindingOut) bool { return f.Code == "gap" }) {
 		t.Fatalf("after dismissing: %+v", out)
+	}
+	// It is set aside with its message and no fixes, to show and restore.
+	if len(out.DismissedFindings) != 1 || out.DismissedFindings[0].Key != gap.Key || out.DismissedFindings[0].Message == "" ||
+		len(out.DismissedFindings[0].Fixes) != 0 || out.CheckedAt.IsZero() {
+		t.Fatalf("dismissed findings = %+v", out.DismissedFindings)
+	}
+	// Restored, it is a finding again; restoring twice finds nothing.
+	for i, want := range []bool{true, false} {
+		if r, err := restoreFinding(ctx, d, DismissFindingInput{Key: gap.Key}); err != nil || r.Restored != want {
+			t.Fatalf("restore %d = %+v, %v", i, r, err)
+		}
+	}
+	out, _ = checkCalendar(ctx, d, CampaignRef{})
+	if out.Dismissed != 0 || !slices.ContainsFunc(out.Findings, func(f FindingOut) bool { return f.Key == gap.Key }) {
+		t.Fatalf("after restoring: %+v", out)
 	}
 }
 
@@ -366,8 +388,8 @@ func TestCheckCalendar_DismissesOneFindingOfACode(t *testing.T) {
 	}
 }
 
-// Each brief finding gets its own brief edit and one shared by all of them;
-// a post finding gets a rewrite and an open; a dismissed finding is left out.
+// Each brief finding gets its own brief edit; a post finding gets a rewrite
+// and an open; a dismissed finding is set aside, without its fixes.
 func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 	d, posts, dismissals := repairDeps()
 	posts.posts[1].Content = "twelve chars"
@@ -403,9 +425,14 @@ func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 	if len(out.Findings) != 3 || out.Dismissed != 1 {
 		t.Fatalf("findings = %+v, dismissed %d", out.Findings, out.Dismissed)
 	}
+	if len(out.DismissedFindings) != 1 || out.DismissedFindings[0].Key != "b3" || len(out.DismissedFindings[0].Fixes) != 0 {
+		t.Fatalf("dismissed findings = %+v", out.DismissedFindings)
+	}
+	if !slices.Equal(out.ReadFrom, []string{"brief", "posts"}) || out.CheckedAt.IsZero() {
+		t.Fatalf("read from %v at %v", out.ReadFrom, out.CheckedAt)
+	}
 	persona, tone, post := out.Findings[0], out.Findings[1], out.Findings[2]
-	if persona.Key != "b1" || len(persona.Fixes) != 2 || len(tone.Fixes) != 2 || persona.Fixes[1].ProposalID != tone.Fixes[1].ProposalID ||
-		persona.Fixes[0].ProposalID == tone.Fixes[0].ProposalID {
+	if persona.Key != "b1" || len(persona.Fixes) != 1 || len(tone.Fixes) != 1 || persona.Fixes[0].ProposalID == tone.Fixes[0].ProposalID {
 		t.Fatalf("brief fixes = %+v / %+v", persona.Fixes, tone.Fixes)
 	}
 	own := sink.got[slices.IndexFunc(sink.got, func(p assistantkit.Proposal) bool { return p.Summary == "Improve the brief's persona" })]
