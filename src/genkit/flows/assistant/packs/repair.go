@@ -23,6 +23,8 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/assistantundo"
+	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/platforms"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
@@ -97,7 +99,7 @@ func repairPack(d Deps) assistant.Pack {
 					}))),
 					ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, revise, assistantkit.TierProposal,
-					`Call this when the user, in a campaign's thread, asks to rewrite one of its posts by an instruction; pass the post's id and the instruction verbatim. It is offered for the user to confirm. A review finding's "rewrite it" fix is already this offer. In the post's own thread, use editPost instead.`))
+					`Call this when the user, in a campaign's thread, asks to rewrite one of its posts by an instruction; pass the post's id and the instruction verbatim. It is offered for the user to confirm. A review or brand-check finding's "rewrite it" fix is already this offer. In the post's own thread, use editPost instead.`))
 			}
 			if d.CheckBrand != nil {
 				brand := genkit.DefineTool(g, "checkBrand",
@@ -106,7 +108,7 @@ func repairPack(d Deps) assistant.Pack {
 						return checkBrand(ctx, d, in)
 					})), ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, brand, assistantkit.TierRead,
-					`Call this when the user asks whether posts are on brand, in the voice, or within the guardrails — "are these on brand?", "check the selected posts against our voice". Pass the selected posts' ids when there is a selection. Relay the findings, most serious first, with the quoted words; each one's fix opens the post. In the post's own thread, offer to fix it with editPost.`))
+					`Call this when the user asks whether posts are on brand, in the voice, or within the guardrails — "are these on brand?", "check the selected posts against our voice". Pass the selected posts' ids when there is a selection. Relay the findings, most serious first, with the quoted words, and say how many posts were clean. A finding's "rewrite it" fix is already offered for the user to confirm; don't offer it again. In the post's own thread, offer to fix it with editPost instead.`))
 			}
 			return specs, nil
 		},
@@ -738,7 +740,14 @@ type RevisePostInput struct {
 // RevisePostOutput confirms the rewrite, and whether it was saved as a
 // version.
 type RevisePostOutput struct {
-	PostID    string `json:"postId"`
+	PostID string `json:"postId"`
+	// CampaignID is the post's campaign, which opening it needs.
+	CampaignID string `json:"campaignId"`
+	Title      string `json:"title,omitempty"`
+	// VoiceName is the voice the rewrite was written in.
+	VoiceName string `json:"voiceName,omitempty"`
+	// UndoID puts the copy it replaced back.
+	UndoID    string `json:"undoId,omitempty"`
 	Revised   bool   `json:"revised"`
 	Versioned bool   `json:"versioned"`
 	Note      string `json:"note"`
@@ -764,15 +773,26 @@ func revisePost(ctx context.Context, d Deps, in RevisePostInput) (*RevisePostOut
 	if posts[0].Status.IsSubmitted() {
 		return nil, assistantkit.Refused("the post is " + string(posts[0].Status) + ", so its copy is locked; unschedule it first")
 	}
+	was := posts[0]
 	versioned, err := d.Revise(ctx, in.PostID, in.Instruction, "Rewritten by the campaign's assistant")
 	if err != nil {
 		return nil, fmt.Errorf("rewrite post: %w", err)
 	}
-	out := &RevisePostOutput{PostID: in.PostID, Revised: true, Versioned: versioned,
-		Note:      "saved as a new version; restoring the previous version from the post's history undoes it",
-		Grounding: postGrounding(ctx, d, c.ID, posts[0])}
+	out := &RevisePostOutput{PostID: in.PostID, CampaignID: c.ID, Title: was.Title, Revised: true, Versioned: versioned,
+		Note:      "saved as a new version; it can be undone",
+		Grounding: postGrounding(ctx, d, c.ID, was)}
 	if !versioned {
-		out.Note = "the post is rewritten, but saving the rewrite as a version failed, so its history has no copy of it"
+		out.Note = "the post is rewritten, but saving the rewrite as a version failed, so its history has no copy of it; it can be undone"
+	}
+	if d.Actions != nil {
+		if now, err := d.Posts.GetByID(ctx, in.PostID); err == nil {
+			out.UndoID = recordUndo(ctx, d, models.AssistantActionPostRewritten, in.PostID, assistantundo.PostContent(&was), assistantundo.PostContent(now))
+		}
+	}
+	if d.Brand != nil {
+		if r, err := brandresolve.Resolve(ctx, d.Brand, c, &was); err == nil && r.Voice != nil {
+			out.VoiceName = r.Voice.Name
+		}
 	}
 	return out, nil
 }

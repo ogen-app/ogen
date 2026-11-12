@@ -61,6 +61,8 @@ const (
 	AssistantActionCampaignGoal AssistantActionKind = "campaign_goal"
 	// AssistantActionAssetTags is tags added to or removed from assets.
 	AssistantActionAssetTags AssistantActionKind = "asset_tags"
+	// AssistantActionPostRewritten is a post's copy rewritten by a fix.
+	AssistantActionPostRewritten AssistantActionKind = "post_rewritten"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's

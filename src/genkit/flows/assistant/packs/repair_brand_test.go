@@ -5,11 +5,15 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_check"
+	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 )
 
 // brandPosts serves memPosts' posts by id too.
@@ -55,10 +59,49 @@ func TestCheckBrand(t *testing.T) {
 		!slices.Equal(got.Groups[0].BannedWords, []string{"cheap"}) {
 		t.Fatalf("request = %+v", got)
 	}
-	if len(out.Findings) != 2 || out.Findings[0].PostID != "p1" || out.Findings[0].Title != "Rooms" ||
-		out.Findings[0].Fix.PostID != "p1" || out.Findings[0].Fix.Kind != "open_post" || out.Findings[0].CampaignID != "c1" {
+	if len(out.Findings) != 2 || out.Findings[0].PostID != "p1" || out.Findings[0].Title != "Rooms" || len(out.Findings[0].Fixes) != 1 ||
+		out.Findings[0].Fixes[0].PostID != "p1" || out.Findings[0].Fixes[0].Kind != "open_post" || out.Findings[0].CampaignID != "c1" {
 		t.Fatalf("findings = %+v; want the high one first, opening its post", out.Findings)
 	}
+	if want := []BrandRef{{ID: "v1", Name: "Plain"}, {ID: "v2", Name: "Formal"}}; out.Clean != 0 ||
+		!slices.Equal(out.CheckedAgainst.Voices, want) || !out.CheckedAgainst.Guardrails {
+		t.Fatalf("clean = %d, against = %+v", out.Clean, out.CheckedAgainst)
+	}
+	if k := out.Findings[0].Key; !strings.HasPrefix(k, "brand_banned_word:") || k == out.Findings[1].Key {
+		t.Fatalf("keys = %q, %q", k, out.Findings[1].Key)
+	}
+
+	// With the writer, a finding offers a rewrite first; a dismissed one is
+	// left out and its post counts as clean.
+	dismissals := &memDismissals{keys: map[string]bool{out.Findings[1].Key: true}}
+	d.Dismissals, d.Actions = dismissals, &memActions{}
+	var revised []string
+	d.Revise = func(_ context.Context, id, instruction, _ string) (bool, error) {
+		revised = append(revised, id+": "+instruction)
+		return true, nil
+	}
+	sink := &offers{}
+	out, err = checkBrand(assistantkit.WithProposalSink(ctx, sink), d, CheckBrandInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Findings) != 1 || out.Dismissed != 1 || out.Clean != 1 {
+		t.Fatalf("findings = %+v, dismissed %d, clean %d", out.Findings, out.Dismissed, out.Clean)
+	}
+	fixes := out.Findings[0].Fixes
+	if len(fixes) != 2 || fixes[0].Kind != consistency.FixRevisePost || fixes[0].ProposalID == "" || fixes[1].Kind != calendarcheck.FixOpenPost {
+		t.Fatalf("fixes = %+v", fixes)
+	}
+	rewrite := sink.got[0].Args.(RevisePostInput)
+	done, err := revisePost(ctx, d, rewrite)
+	if err != nil || !slices.Equal(revised, []string{"p1: Bring the post in line with the brand. The issue: Banned."}) {
+		t.Fatalf("revised = %v, %v", revised, err)
+	}
+	// The rewrite names its post and voice and can be undone.
+	if done.Title != "Rooms" || done.VoiceName != "Plain" || done.CampaignID != "c1" || done.UndoID == "" {
+		t.Fatalf("rewrite = %+v", done)
+	}
+	d.Revise, d.Dismissals = nil, nil
 
 	// Named posts; in a post's thread, that post.
 	if _, err := checkBrand(ctx, d, CheckBrandInput{PostIDs: []string{"p2", "p2"}}); err != nil || len(got.Groups) != 1 || len(got.Groups[0].Posts) != 1 {
