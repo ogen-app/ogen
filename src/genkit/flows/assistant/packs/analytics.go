@@ -144,6 +144,9 @@ type AnalyticsResult struct {
 	Applied Applied `json:"applied"`
 	// Data is the read, or Unavailable when it has none.
 	Data any `json:"data"`
+	// Summary is what the read's card leads with, worked out from Data and
+	// beside it, so Data keeps the dashboard endpoint's shape.
+	Summary any `json:"summary,omitempty"`
 }
 
 // Applied is what a read was narrowed to, which its card cites: the days

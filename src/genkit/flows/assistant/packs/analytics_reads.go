@@ -5,6 +5,8 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -12,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/analytics"
 )
@@ -49,19 +52,19 @@ var postSorts = []string{"engagement", "impressions", "reach", "likes", "comment
 // follower history, and the posts list.
 func analyticsReadSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 	bestTimes := genkit.DefineTool(g, "bestTimes",
-		"Returns the publisher's best times to post: engagement by day of week and hour across the workspace's connected accounts, including posts published outside Ogen.",
+		"Returns the publisher's best times to post: average interactions per post by day of week and hour (UTC) across the workspace's connected accounts, including posts published outside Ogen, with the best slot, the best on another day and the weakest.",
 		assistantkit.Wrap(recorded(analyticsPackName, "bestTimes", nil, func(ctx context.Context, in InsightInput) (*AnalyticsResult, error) {
-			return insightRead(ctx, d, in, d.Analytics.BestTimes)
+			return bestTimesRead(ctx, d, in)
 		})), ai.WithStrictSchema(false))
 	decay := genkit.DefineTool(g, "contentDecay",
-		"Returns how a post's engagement accrues over time from the publisher: what share of its final engagement it has reached by each age.",
+		"Returns how a post's engagement accrues over time from the publisher: what share of its final engagement it has reached by each age, and how many hours it takes to reach half, overall and per connected platform.",
 		assistantkit.Wrap(recorded(analyticsPackName, "contentDecay", nil, func(ctx context.Context, in InsightInput) (*AnalyticsResult, error) {
-			return insightRead(ctx, d, in, d.Analytics.ContentDecay)
+			return decayRead(ctx, d, in)
 		})), ai.WithStrictSchema(false))
 	frequency := genkit.DefineTool(g, "postingFrequency",
-		"Returns the engagement rate at each posting cadence (posts per week), per platform, from the publisher.",
+		"Returns how often the workspace actually posts — posts each week for the last 12 weeks, the weekly average, last month's count and each platform's average, from the posts published through Ogen — and the publisher's engagement rate at each posting cadence (posts per week), per platform.",
 		assistantkit.Wrap(recorded(analyticsPackName, "postingFrequency", nil, func(ctx context.Context, in InsightInput) (*AnalyticsResult, error) {
-			return insightRead(ctx, d, in, d.Analytics.PostingFrequency)
+			return frequencyRead(ctx, d, in, time.Now())
 		})), ai.WithStrictSchema(false))
 	followers := genkit.DefineTool(g, "followerHistory",
 		"Returns each connected account's follower count over a window, with its growth, from the daily snapshots.",
@@ -77,11 +80,11 @@ func analyticsReadSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		ai.WithStrictSchema(false))
 	return []assistantkit.Spec{
 		spec(analyticsPackName, bestTimes, assistantkit.TierRead,
-			`Call this for when to post by the publisher's data — "what's the best time to post on Instagram?". It spans every connected account, posts from outside Ogen too; analyticsLessons' heatmap is Ogen's own history. A result marked unavailable (addon_required, not_configured): say so.`),
+			`Call this for when to post by the publisher's data — "what's the best time to post on Instagram?". It spans every connected account, posts from outside Ogen too; analyticsLessons' heatmap is Ogen's own history. Lead with summary.best, then summary.runnerUp; the figures are average interactions per post, not a rate. summary.tooFew: say there are too few posts to say yet. A result marked unavailable (addon_required, not_configured): say so.`),
 		spec(analyticsPackName, decay, assistantkit.TierRead,
-			`Call this for how fast posts gain their engagement — "how quickly do our posts peak?", "is a post done after a day?".`),
+			`Call this for how fast posts gain their engagement — "how quickly do our posts peak?", "is a post done after a day?". Quote summary.halfLife and each platform's as given.`),
 		spec(analyticsPackName, frequency, assistantkit.TierRead,
-			`Call this for how often to post — "do we post too much?", "what cadence works on LinkedIn?". Quote the cadence and rates as given.`),
+			`Call this for how often the workspace posts and how often to post — "how often do we post?", "do we post too much?", "what cadence works on LinkedIn?". summary.cadence is what was published through Ogen; the rows are the publisher's rate at each cadence. Quote the cadence and rates as given.`),
 		spec(analyticsPackName, followers, assistantkit.TierRead,
 			`Call this for follower growth over time — "how have followers grown since March?", "which account grew most?". The overview has only the current count.`),
 		spec(analyticsPackName, posts, assistantkit.TierRead,
@@ -108,6 +111,106 @@ func insightPlatform(ctx context.Context, d Deps, slug string) (string, error) {
 	return slug, nil
 }
 
+// insightNote is what a live insight read can't be narrowed by.
+const insightNote = "the publisher's figures over every connected account and all time; not narrowed by dates or campaign"
+
+func bestTimesRead(ctx context.Context, d Deps, in InsightInput) (*AnalyticsResult, error) {
+	out, err := insightRead(ctx, d, in, d.Analytics.BestTimes)
+	if err != nil {
+		return nil, err
+	}
+	if slots, ok := out.Data.([]zernio.BestTimeSlot); ok {
+		out.Summary = analytics.SummarizeBestTimes(slots)
+	}
+	return out, nil
+}
+
+// DecaySummary is the half-life overall and, when the read spans several
+// connected platforms, on each.
+type DecaySummary struct {
+	HalfLife  *analytics.HalfLife `json:"halfLife,omitempty"`
+	Platforms []PlatformDecay     `json:"platforms,omitempty"`
+}
+
+// PlatformDecay is one platform's decay curve and half-life, by its slug.
+type PlatformDecay struct {
+	Platform string                      `json:"platform"`
+	HalfLife *analytics.HalfLife         `json:"halfLife,omitempty"`
+	Buckets  []zernio.ContentDecayBucket `json:"buckets"`
+}
+
+// decayRead is the decay curve with its half-life, and, unless narrowed to
+// one platform or account, each connected platform's. A platform the
+// publisher fails on is left out.
+func decayRead(ctx context.Context, d Deps, in InsightInput) (*AnalyticsResult, error) {
+	out, err := insightRead(ctx, d, in, d.Analytics.ContentDecay)
+	if err != nil {
+		return nil, err
+	}
+	buckets, ok := out.Data.([]zernio.ContentDecayBucket)
+	if !ok {
+		return out, nil
+	}
+	sum := DecaySummary{HalfLife: analytics.DecayHalfLife(buckets)}
+	out.Summary = &sum
+	if len(out.Applied.Platforms) > 0 || in.AccountID != "" {
+		return out, nil
+	}
+	slugs, err := d.Analytics.ConnectedPlatforms(ctx)
+	if err != nil || len(slugs) < 2 {
+		return out, err
+	}
+	per := make([]*PlatformDecay, len(slugs))
+	var wg sync.WaitGroup
+	for i, slug := range slugs {
+		wg.Go(func() {
+			b, reason, err := d.Analytics.ContentDecay(ctx, analytics.InsightFilter{Platform: slug, Source: in.Source})
+			if err != nil || reason != "" || len(b) == 0 {
+				return
+			}
+			per[i] = &PlatformDecay{Platform: slug, HalfLife: analytics.DecayHalfLife(b), Buckets: b}
+		})
+	}
+	wg.Wait()
+	for _, p := range per {
+		if p != nil {
+			sum.Platforms = append(sum.Platforms, *p)
+		}
+	}
+	return out, nil
+}
+
+// FrequencySummary is how often the workspace posts, from the posts
+// published through Ogen.
+type FrequencySummary struct {
+	Cadence *analytics.PostingCadence `json:"cadence"`
+	// Note says what the cadence counts.
+	Note string `json:"note"`
+}
+
+// frequencyRead is the publisher's rate at each cadence, with the cadence
+// the workspace keeps, as of now, on the same platform.
+func frequencyRead(ctx context.Context, d Deps, in InsightInput, now time.Time) (*AnalyticsResult, error) {
+	out, err := insightRead(ctx, d, in, d.Analytics.PostingFrequency)
+	if err != nil {
+		return nil, err
+	}
+	name := ""
+	if len(out.Applied.Platforms) == 1 {
+		if name, err = d.Analytics.PlatformName(ctx, out.Applied.Platforms[0]); err != nil {
+			return nil, err
+		}
+	}
+	cadence, reason, err := d.Analytics.PostingCadence(ctx, name, now)
+	if err != nil {
+		return nil, err
+	}
+	if reason == "" {
+		out.Summary = &FrequencySummary{Cadence: cadence, Note: "posts published through Ogen, by week starting Monday, UTC"}
+	}
+	return out, nil
+}
+
 func insightRead[T any](ctx context.Context, d Deps, in InsightInput, read func(context.Context, analytics.InsightFilter) (T, string, error)) (*AnalyticsResult, error) {
 	if in.Source != "" && in.Source != "all" && in.Source != "late" && in.Source != "external" {
 		return nil, assistantkit.Refused("source is all, late or external")
@@ -116,7 +219,7 @@ func insightRead[T any](ctx context.Context, d Deps, in InsightInput, read func(
 	if err != nil {
 		return nil, err
 	}
-	a := Applied{Note: "the publisher's figures over every connected account and all time; not narrowed by dates or campaign"}
+	a := Applied{Note: insightNote}
 	if platform != "" {
 		a.Platforms = []string{platform}
 	}
