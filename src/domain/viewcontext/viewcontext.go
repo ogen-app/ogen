@@ -160,6 +160,51 @@ type Window struct {
 	// CampaignID is the campaign the dashboard is narrowed to; empty for
 	// the whole workspace.
 	CampaignID string `json:"campaignId,omitempty"`
+	// Preset is the relative span the dates resolve, e.g. 30d, 12w or 6mo,
+	// when the period picker shows one; empty for dates picked by hand.
+	Preset string `json:"preset,omitempty"`
+}
+
+// What a window change can change.
+const (
+	WindowPeriod    = "period"
+	WindowPlatforms = "platforms"
+	WindowCampaign  = "campaign"
+)
+
+// Clone is w with its own platforms.
+func (w Window) Clone() Window {
+	w.Platforms = slices.Clone(w.Platforms)
+	return w
+}
+
+// Changes names what differs from before, in WindowPeriod, WindowPlatforms,
+// WindowCampaign order; a nil before is no window, every field empty.
+// Platforms compare as a set.
+func (w Window) Changes(before *Window) []string {
+	var b Window
+	if before != nil {
+		b = *before
+	}
+	var out []string
+	if w.From != b.From || w.To != b.To || w.Preset != b.Preset {
+		out = append(out, WindowPeriod)
+	}
+	if !slices.Equal(slices.Sorted(slices.Values(w.Platforms)), slices.Sorted(slices.Values(b.Platforms))) {
+		out = append(out, WindowPlatforms)
+	}
+	if w.CampaignID != b.CampaignID {
+		out = append(out, WindowCampaign)
+	}
+	return out
+}
+
+// ValidPreset reports whether s is a relative span: 1 to 3 digits, then d,
+// w or mo.
+func ValidPreset(s string) bool {
+	unit := strings.TrimLeft(s, "0123456789")
+	digits := len(s) - len(unit)
+	return digits >= 1 && digits <= 3 && (unit == "d" || unit == "w" || unit == "mo")
 }
 
 // Visible lists the first items on screen, so "the third one" resolves.
@@ -313,6 +358,9 @@ func (w *Window) validate() error {
 	}
 	if err := checkIDs("window.platforms", w.Platforms); err != nil {
 		return err
+	}
+	if w.Preset != "" && !ValidPreset(w.Preset) {
+		return invalid("window.preset", "not a relative span like 30d, 12w or 6mo")
 	}
 	if w.CampaignID != "" {
 		return checkID("window.campaignId", w.CampaignID)

@@ -244,7 +244,8 @@ func followerHistory(ctx context.Context, d Deps, in FollowerHistoryInput) (*Ana
 	if !analytics.ValidGranularity(granularity) {
 		return nil, assistantkit.Refused("granularity is daily, weekly or monthly")
 	}
-	rng, _, err := rangeAndScope(ctx, d, AnalyticsQuery{Window: in.Window, From: in.From, To: in.To, CampaignID: "all"}, "")
+	q := AnalyticsQuery{Window: in.Window, From: in.From, To: in.To, CampaignID: "all"}
+	rng, _, err := rangeAndScope(ctx, d, q, "")
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +255,7 @@ func followerHistory(ctx context.Context, d Deps, in FollowerHistoryInput) (*Ana
 	if err != nil {
 		return nil, err
 	}
-	return result(windowApplied(rng, nil, "followers belong to accounts, so this is workspace-wide"), res, reason), nil
+	return result(appliedFor(ctx, q, rng, nil, "followers belong to accounts, so this is workspace-wide"), res, reason), nil
 }
 
 func listPostAnalytics(ctx context.Context, d Deps, in ListPostAnalyticsInput) (*AnalyticsResult, error) {

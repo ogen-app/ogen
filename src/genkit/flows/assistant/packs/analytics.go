@@ -120,6 +120,33 @@ func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity s
 	return rng, sc, err
 }
 
+// defaultPreset is the span a read with no dates and no window covers.
+const defaultPreset = "28d"
+
+// presetOf is the relative span the read's dates resolve, as rangeAndScope
+// picks them: the call's dates are none, its window that span, the
+// screen's dates its preset, and none at all the default.
+func presetOf(ctx context.Context, in AnalyticsQuery) string {
+	switch {
+	case in.From != "" || in.To != "":
+		return ""
+	case in.Window != "":
+		return in.Window
+	}
+	if w := assistant.Window(ctx); w != nil && (w.From != "" || w.To != "") {
+		return w.Preset
+	}
+	return defaultPreset
+}
+
+// appliedFor is a windowed read's filters, with the span its dates
+// resolve.
+func appliedFor(ctx context.Context, in AnalyticsQuery, rng timeframe.Range, sc *analytics.Scope, note string) Applied {
+	a := windowApplied(rng, sc, note)
+	a.Preset = presetOf(ctx, in)
+	return a
+}
+
 // resolveScope narrows a read to platforms and a campaign, refusing unknown
 // ones.
 func resolveScope(ctx context.Context, d Deps, platforms []string, campaign string) (*analytics.Scope, error) {
@@ -158,6 +185,9 @@ type Applied struct {
 	Platforms []string         `json:"platforms,omitempty"`
 	Campaign  *AppliedCampaign `json:"campaign,omitempty"`
 	PostID    string           `json:"postId,omitempty"`
+	// Preset is the relative span the dates resolve, e.g. 30d, so a card
+	// says "Last 30 days" as the period picker does; empty for dates.
+	Preset string `json:"preset,omitempty"`
 	// Note says what the read can't be narrowed by.
 	Note string `json:"note,omitempty"`
 }
@@ -195,7 +225,7 @@ func analyticsOverview(ctx context.Context, d Deps, in AnalyticsQuery) (*Analyti
 	if err != nil {
 		return nil, err
 	}
-	return result(windowApplied(rng, sc, ""), resp, reason), nil
+	return result(appliedFor(ctx, in, rng, sc, ""), resp, reason), nil
 }
 
 // TopPostsInput ranks a window's posts.
@@ -225,7 +255,7 @@ func topPosts(ctx context.Context, d Deps, in TopPostsInput) (*AnalyticsResult, 
 	if err != nil {
 		return nil, err
 	}
-	return result(windowApplied(rng, sc, ""), res, reason), nil
+	return result(appliedFor(ctx, in.AnalyticsQuery, rng, sc, ""), res, reason), nil
 }
 
 // LessonsInput shapes the lessons read.

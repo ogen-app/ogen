@@ -70,11 +70,16 @@ func SetWindow(ctx context.Context, merge func(cur *viewcontext.Window) (viewcon
 	if screen != "analytics" && screen != "campaign.analytics" {
 		return "", viewcontext.Window{}, ErrNoAnalyticsScreen
 	}
-	w, err := merge(st.currentWindow())
+	cur := st.currentWindow()
+	w, err := merge(cur)
 	if err != nil {
 		return "", viewcontext.Window{}, err
 	}
-	st.addUI(UIAction{Type: UISetWindow, Screen: screen, CampaignID: st.currentCampaign(), Window: &w})
+	var before *viewcontext.Window
+	if cur != nil {
+		before = new(cur.Clone())
+	}
+	st.addUI(UIAction{Type: UISetWindow, Screen: screen, CampaignID: st.currentCampaign(), Window: &w, Before: before, Changed: w.Changes(cur)})
 	return screen, w, nil
 }
 

@@ -15,7 +15,7 @@ func TestParse_Valid(t *testing.T) {
 		"scope": {"kind": "campaign", "id": "c1"},
 		"selection": {"kind": "idea", "ids": ["i1", "i2", "i1"], "count": 2},
 		"filter": "verdict:undecided fit>=70",
-		"window": {"from": "2026-04-01", "to": "2026-04-30", "platforms": ["pl1"]},
+		"window": {"from": "2026-04-01", "to": "2026-04-30", "platforms": ["pl1"], "preset": "30d"},
 		"visible": {"kind": "idea", "ids": ["i1", "i2", "i3"]},
 		"futureField": "ignored"
 	}`
@@ -23,7 +23,7 @@ func TestParse_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Screen != "campaign.ideas" || v.Scope.ID != "c1" || !slices.Equal(v.Selection.IDs, []string{"i1", "i2"}) {
+	if v.Screen != "campaign.ideas" || v.Scope.ID != "c1" || !slices.Equal(v.Selection.IDs, []string{"i1", "i2"}) || v.Window.Preset != "30d" {
 		t.Fatalf("parsed = %+v", v)
 	}
 	m, err := v.Stored()
@@ -32,6 +32,26 @@ func TestParse_Valid(t *testing.T) {
 	}
 	if m["screen"] != "campaign.ideas" || m["version"] != float64(1) {
 		t.Fatalf("stored = %v", m)
+	}
+}
+
+// A window's changes name the period, the platforms as a set and the
+// campaign; from no window, whatever is set changed.
+func TestWindowChanges(t *testing.T) {
+	before := &Window{From: "2026-03-01", To: "2026-03-31", Platforms: []string{"li", "ig"}}
+	if got := (Window{From: "2026-03-01", To: "2026-03-31", Platforms: []string{"ig", "li"}}).Changes(before); got != nil {
+		t.Fatalf("same = %v", got)
+	}
+	if got := (Window{From: "2026-03-01", To: "2026-03-31", Preset: "30d", CampaignID: "c1"}).Changes(before); !slices.Equal(got, []string{WindowPeriod, WindowPlatforms, WindowCampaign}) {
+		t.Fatalf("all = %v", got)
+	}
+	if got := (Window{Platforms: []string{"li"}}).Changes(nil); !slices.Equal(got, []string{WindowPlatforms}) {
+		t.Fatalf("from none = %v", got)
+	}
+	c := before.Clone()
+	c.Platforms[0] = "x"
+	if before.Platforms[0] != "li" {
+		t.Fatal("the clone shares platforms")
 	}
 }
 
@@ -121,6 +141,8 @@ func TestParse_Invalid(t *testing.T) {
 		"bad to date":            {base + `"window":{"to":"2026-13-01"}}`, "window.to"},
 		"too many platforms":     {base + `"window":{"platforms":[` + ids(MaxPlatforms+1) + `]}}`, "window.platforms"},
 		"blank platform":         {base + `"window":{"platforms":["pl1",""]}}`, "window.platforms[1]"},
+		"bad preset":             {base + `"window":{"preset":"30 days"}}`, "window.preset"},
+		"long preset":            {base + `"window":{"preset":"3000d"}}`, "window.preset"},
 		"unknown visible kind":   {base + `"visible":{"kind":"task","ids":["t1"]}}`, "visible.kind"},
 		"too many visible ids":   {base + `"visible":{"kind":"idea","ids":[` + ids(MaxVisibleIDs+1) + `]}}`, "visible.ids"},
 		"blank visible id":       {base + `"visible":{"kind":"idea","ids":[""]}}`, "visible.ids[0]"},
