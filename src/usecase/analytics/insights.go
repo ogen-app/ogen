@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -144,9 +145,14 @@ func (s *Service) FollowerHistory(ctx context.Context, opt FollowerHistoryOption
 	if summary == nil {
 		summary = []repository.FollowerAccountSummary{}
 	}
+	// The day's post is a detail: a failed read leaves it out rather than
+	// lose the history, unless the request itself is over.
 	day := biggestDay(points)
 	if err := s.postOfDay(ctx, day); err != nil {
-		return nil, "", err
+		if ctx.Err() != nil {
+			return nil, "", err
+		}
+		slog.WarnContext(ctx, "read the biggest day's post failed", "error", err, "date", day.Date)
 	}
 	return &FollowerHistory{Accounts: summary, Series: series, Granularity: opt.Granularity, BiggestDay: day}, "", nil
 }

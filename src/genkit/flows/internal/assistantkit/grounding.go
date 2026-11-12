@@ -243,6 +243,10 @@ func (c *citations) cites(key string, v map[string]any) bool {
 		c.add(Source{ID: str(v["assetId"]), Title: str(v["title"])})
 	case "grounding":
 		for _, s := range objects(v["sources"]) {
+			// A post names where output came from but isn't an asset drawn on.
+			if str(s["kind"]) != "" {
+				continue
+			}
 			c.add(Source{ID: str(s["id"]), Title: str(s["title"]), AnalysisID: str(s["analysisId"]), IdeaID: str(s["ideaId"])})
 		}
 	default:

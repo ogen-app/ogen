@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"slices"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/more_like_these"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
 // maxGrounding caps the campaign's other sources offered to the writer.
@@ -326,14 +328,23 @@ func trailOf(ctx context.Context, t *trailSources, p *models.Post) (TrailStep, e
 	return step, nil
 }
 
-// rate is the post's engagement rate, nil when it has no figures.
+// rate is the post's engagement rate, nil when it has no figures. The
+// rate is optional: a failed read leaves it out rather than stop the
+// ideas, unless the turn itself is over.
 func (t *trailSources) rate(ctx context.Context, postID string) (*float64, error) {
 	if t.d.Analytics == nil || t.d.Analytics.Repo == nil {
 		return nil, nil
 	}
 	figures, err := t.d.Analytics.Repo.GetByPostID(ctx, postID)
-	if err != nil || figures == nil {
-		return nil, err
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		slog.WarnContext(ctx, "read an example's figures failed", logging.AttrComponent, "assistant.packs", "post_id", postID, logging.AttrError, err)
+		return nil, nil
+	}
+	if figures == nil {
+		return nil, nil
 	}
 	return &figures.EngagementRate, nil
 }

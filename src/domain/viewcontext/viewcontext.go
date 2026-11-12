@@ -199,6 +199,18 @@ func (w Window) Changes(before *Window) []string {
 	return out
 }
 
+// CanonicalPreset is the relative span s as a window keeps it, its count
+// without leading zeros ("0007d" is "7d"); "" when s isn't one that
+// ValidPreset accepts that way.
+func CanonicalPreset(s string) string {
+	unit := strings.TrimLeft(s, "0123456789")
+	digits := strings.TrimLeft(s[:len(s)-len(unit)], "0")
+	if p := digits + unit; ValidPreset(p) {
+		return p
+	}
+	return ""
+}
+
 // ValidPreset reports whether s is a relative span: 1 to 3 digits, then d,
 // w or mo.
 func ValidPreset(s string) bool {

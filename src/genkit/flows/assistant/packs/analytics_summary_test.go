@@ -117,4 +117,10 @@ func TestFrequencyRead_Cadence(t *testing.T) {
 	if u, ok := out.Data.(Unavailable); !ok || u.Reason != analytics.ReasonNotConfigured {
 		t.Fatalf("data = %#v", out.Data)
 	}
+
+	// Without the analytics database the cadence says why it's missing.
+	out, err = frequencyRead(ctx, Deps{Analytics: &analytics.Service{Platforms: namedPlatforms{}}}, InsightInput{}, time.Now())
+	if s, ok := out.Summary.(*FrequencySummary); err != nil || !ok || s.Cadence != nil || s.Unavailable != analytics.ReasonNotConfigured {
+		t.Fatalf("no database = %#v, %v", out.Summary, err)
+	}
 }

@@ -100,7 +100,7 @@ func mergeWindow(cur *viewcontext.Window, in SetWindowInput) (viewcontext.Window
 		// picker shows it as a preset.
 		w.Preset = ""
 		if in.From == "" && in.To == "" {
-			w.Preset = in.Window
+			w.Preset = viewcontext.CanonicalPreset(in.Window)
 		}
 	}
 	switch {
