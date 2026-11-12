@@ -95,6 +95,12 @@ type PostRepository interface {
 	// post that is overdue but not yet published would still auto-publish,
 	// so it must be converted too.
 	ListScheduledByPlatform(ctx context.Context, platformID string) ([]models.Post, error)
+	// NextScheduled is the first post waiting to go out after after, in
+	// campaignID when set; nil when none is.
+	NextScheduled(ctx context.Context, after time.Time, campaignID string) (*models.Post, error)
+	// ScheduledCounts counts the posts waiting to go out by platform,
+	// account and route.
+	ScheduledCounts(ctx context.Context) ([]ScheduledCount, error)
 	// Reconciliation sweeper helpers.
 	ListStuckScheduled(ctx context.Context, cutoff time.Time, limit int) ([]models.Post, error)
 	UpdateStatusAndReason(ctx context.Context, postID string, status models.PostStatus, reason string) error

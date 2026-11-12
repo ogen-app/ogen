@@ -206,6 +206,12 @@ func (r *fakePostRepo) remove(id string) {
 func (r *fakePostRepo) ListStuckScheduled(context.Context, time.Time, int) ([]models.Post, error) {
 	return nil, nil
 }
+func (r *fakePostRepo) NextScheduled(context.Context, time.Time, string) (*models.Post, error) {
+	return nil, nil
+}
+func (r *fakePostRepo) ScheduledCounts(context.Context) ([]repository.ScheduledCount, error) {
+	return nil, nil
+}
 func (r *fakePostRepo) ListScheduledByPlatform(_ context.Context, platformID string) ([]models.Post, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

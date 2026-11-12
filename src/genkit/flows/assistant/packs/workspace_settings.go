@@ -12,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 )
 
@@ -33,10 +34,11 @@ func autoPublishSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			Summary: func(in AutoPublishInput) string {
 				label, _ := d.ConnectPlatform(slug(in.Platform))
 				if in.On {
-					return "Auto-publish scheduled " + label + " posts"
+					return "Auto-publish " + label + " posts scheduled from now on"
 				}
-				return "Stop auto-publishing " + label + " posts; they'll wait to be published by hand"
+				return "Stop auto-publishing " + label + " posts scheduled from now on; they'll wait to be published by hand"
 			},
+			Card: func(ctx context.Context, in AutoPublishInput) *assistantkit.Card { return autoPublishCard(ctx, d, in) },
 		}, assistantkit.Wrap(recorded(workspacePackName, "setAutoPublish", nil, func(ctx context.Context, in AutoPublishInput) (*AutoPublishOutput, error) {
 			return setAutoPublish(ctx, d, in)
 		}))), ai.WithStrictSchema(false))
@@ -50,11 +52,20 @@ type AutoPublishInput struct {
 	On       bool   `json:"on"       jsonschema:"description=true to auto-publish, false to publish by hand"`
 }
 
-// AutoPublishOutput is the allowlist after the change.
+// AutoPublishOutput is what changed, and the allowlist after it.
 type AutoPublishOutput struct {
-	Done        string   `json:"done"`
-	AutoPublish []string `json:"autoPublish"`
-	UndoID      string   `json:"undoId,omitempty"`
+	Done string `json:"done"`
+	// Platform and On are the change: the platform's slug and label, and
+	// whether it now auto-publishes.
+	Platform      string `json:"platform"`
+	PlatformLabel string `json:"platformLabel"`
+	On            bool   `json:"on"`
+	// ScheduledUnaffected counts the platform's posts already scheduled the
+	// other way, which keep how they were scheduled.
+	ScheduledUnaffected int                `json:"scheduledUnaffected"`
+	AutoPublish         []string           `json:"autoPublish"`
+	UndoID              string             `json:"undoId,omitempty"`
+	Step                *assistantkit.Step `json:"step,omitempty"`
 }
 
 type allowlistChange struct{ before, after []string }
@@ -103,13 +114,71 @@ func setAutoPublish(ctx context.Context, d Deps, in AutoPublishInput) (*AutoPubl
 		return nil, assistantkit.Refused("auto-publishing was changed meanwhile; check workspaceSetup and ask again")
 	}
 	assistantkit.Touch(ctx, "auto_publish", "")
-	label, _ := d.ConnectPlatform(slug(in.Platform))
-	done := "scheduled " + label + " posts now go out on their own"
-	if !in.On {
-		done = "scheduled " + label + " posts now wait to be published by hand"
+	p := slug(in.Platform)
+	label, _ := d.ConnectPlatform(p)
+	unaffected, err := scheduledOtherWay(ctx, d, p, in.On)
+	if err != nil {
+		return nil, err
 	}
-	return &AutoPublishOutput{Done: done, AutoPublish: append([]string{}, c.after...),
+	done := label + " posts scheduled from now on go out on their own"
+	if !in.On {
+		done = label + " posts scheduled from now on wait to be published by hand"
+	}
+	if unaffected > 0 {
+		done += fmt.Sprintf("; the %s already scheduled keep how they were scheduled", plural(unaffected, "post", "posts"))
+	}
+	return &AutoPublishOutput{Done: done, Platform: p, PlatformLabel: label, On: in.On, ScheduledUnaffected: unaffected,
+		AutoPublish: append([]string{}, c.after...), Step: &assistantkit.Step{Subject: label},
 		UndoID: recordUndo(ctx, d, models.AssistantActionAutoPublish, "auto_publish", assistantundo.AutoPublish(c.before), assistantundo.AutoPublish(c.after))}, nil
+}
+
+// scheduledOtherWay counts platform's posts already scheduled the other way
+// from on: by hand when it turns on, on their own when it turns off.
+func scheduledOtherWay(ctx context.Context, d Deps, platform string, on bool) (int, error) {
+	if d.Posts == nil {
+		return 0, nil
+	}
+	counts, err := d.Posts.ScheduledCounts(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count scheduled posts: %w", err)
+	}
+	other := models.PostStatusScheduled
+	if on {
+		other = models.PostStatusScheduledForManualPublish
+	}
+	n := 0
+	for _, c := range counts {
+		if c.Status == other && platformSlug(c.PlatformID) == platform {
+			n += c.Count
+		}
+	}
+	return n, nil
+}
+
+// platformSlug is a post's platform as the allowlist and accounts name it.
+func platformSlug(platformID string) string {
+	if p := zernio.LookupSupportedBySqid(platformID); p != nil {
+		return p.ZernioID
+	}
+	return ""
+}
+
+// autoPublishCard is the offer's card: the platform, and the posts already
+// scheduled that the change leaves as they are.
+func autoPublishCard(ctx context.Context, d Deps, in AutoPublishInput) *assistantkit.Card {
+	p := slug(in.Platform)
+	label, _ := d.ConnectPlatform(p)
+	c := &assistantkit.Card{Verb: "Turn on for " + label, Rows: []assistantkit.CardRow{{Kind: assistantkit.CardRowDestination, Value: label}}}
+	if !in.On {
+		c.Verb = "Turn off for " + label
+	}
+	n, err := scheduledOtherWay(ctx, d, p, in.On)
+	if err == nil && n > 0 {
+		c.Footnote = fmt.Sprintf("Posts scheduled from now on follow it; the %s already scheduled keep how they were scheduled.", plural(n, "post", "posts"))
+	} else {
+		c.Footnote = "Posts scheduled from now on follow it."
+	}
+	return c
 }
 
 func connectSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {

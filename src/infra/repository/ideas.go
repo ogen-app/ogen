@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/uptrace/bun"
 
@@ -34,6 +35,9 @@ type IdeaListFilter struct {
 // campaign has since been soft-deleted reads back with a null campaign_id, so
 // the UI never links to a campaign that is gone.
 type IdeaRepository interface {
+	// CountDecided counts the ideas decided in [from, to), in campaignID
+	// when set.
+	CountDecided(ctx context.Context, from, to time.Time, campaignID string) (int, error)
 	// List returns every idea the filter keeps, oldest first.
 	List(ctx context.Context, filter IdeaListFilter) ([]models.Idea, error)
 	// Query reads one page of the ideas list with its counts. It returns

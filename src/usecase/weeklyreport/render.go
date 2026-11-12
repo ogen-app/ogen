@@ -354,7 +354,7 @@ func renderIdeas(f Facts, l links) *models.WeeklyIdeas {
 	if c.IdeasWaiting == 0 && c.IdeasCreated == 0 && c.AssetsCreated == 0 && c.RemindersDue == 0 {
 		return nil
 	}
-	i := &models.WeeklyIdeas{URL: l.to("/ideas")}
+	i := &models.WeeklyIdeas{URL: l.to("/ideas"), Decided: c.IdeasDecided, WaitingCount: c.IdeasWaiting}
 	switch c.IdeasWaiting {
 	case 0:
 	case 1:
