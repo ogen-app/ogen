@@ -454,6 +454,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		CheckBrief:        checkBriefFn,
 		CheckPosts:        checkPostsFn,
 		DeletePost:        deletePostFn(r.packDeps.Remove),
+		CancelPost:        cancelPostFn(r.packDeps.Remove),
 	}, r.campaignAssistRepos)
 	if err != nil {
 		return fmt.Errorf("init campaign pack: %w", err)
@@ -548,6 +549,14 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	slog.InfoContext(ctx, "anthropic flows rebuilt",
 		logging.AttrComponent, "genkit")
 	return nil
+}
+
+// cancelPostFn is remove's Cancel, or nil without one.
+func cancelPostFn(remove packs.PostRemover) func(context.Context, string, string) error {
+	if remove == nil {
+		return nil
+	}
+	return remove.Cancel
 }
 
 // deletePostFn is remove's Delete, or nil without a remover.

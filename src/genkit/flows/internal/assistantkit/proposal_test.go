@@ -181,6 +181,23 @@ func TestGated_ConflictStoresOptions(t *testing.T) {
 	}
 }
 
+// A choice keeps its card, so its footnote reaches the client.
+func TestGated_ConflictKeepsItsCard(t *testing.T) {
+	tool := Gated("generate", Gate[countIn]{
+		Precheck: func(_ context.Context, in countIn) error {
+			return ConflictedCard("over the goal", &Card{Footnote: "Replace isn't offered."},
+				Option{ID: "ideas", Title: "Save as ideas", Tool: "generate", Args: in})
+		},
+	}, Wrap(func(context.Context, countIn) (int, error) { return 0, nil }))
+	sink := &memSink{}
+	if _, err := tool(&ai.ToolContext{Context: WithProposalSink(t.Context(), sink)}, countIn{Count: 9}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.got) != 1 || sink.got[0].Card == nil || sink.got[0].Card.Footnote != "Replace isn't offered." {
+		t.Fatalf("stored = %+v", sink.got)
+	}
+}
+
 func TestGated_FailsClosedWithoutSink(t *testing.T) {
 	var ran int
 	_, err := countTool(&ran)(&ai.ToolContext{Context: t.Context()}, countIn{Count: 5})

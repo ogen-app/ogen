@@ -74,6 +74,7 @@ type requestState struct {
 	// extended, content-first post drafts; maxDraftPosts caps a single call.
 	draftPost     func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
 	deletePost    func(ctx context.Context, post *models.Post, actor string) (bool, error)
+	cancelPost    func(ctx context.Context, postID, actor string) error
 	maxDraftPosts int
 	// proposalThreshold is the largest generatePosts / draftPost batch run
 	// without asking; 0 means the default.
@@ -229,6 +230,7 @@ func newRequestState(cfg CampaignAssistantFlowConfig, repos CampaignAssistantRep
 		maxGeneratePosts:  cfg.MaxGeneratePosts,
 		draftPost:         cfg.DraftPost,
 		deletePost:        cfg.DeletePost,
+		cancelPost:        cfg.CancelPost,
 		maxDraftPosts:     cfg.MaxDraftPosts,
 		proposalThreshold: cfg.ProposalThreshold,
 		checkBrief:        cfg.CheckBrief,

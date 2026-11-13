@@ -82,6 +82,9 @@ const (
 	CardRowGrounding = "grounding"
 	// CardRowTags is the tags added or removed.
 	CardRowTags = "tags"
+	// CardRowPosts is posts the work leaves as they are, with what happens
+	// to them in Note, e.g. "they stay, flagged".
+	CardRowPosts = "posts"
 )
 
 // CardRow is one detail of an offer. Kind lets the client label and lay it

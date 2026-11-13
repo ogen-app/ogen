@@ -256,6 +256,9 @@ type CampaignAssistantFlowConfig struct {
 	// DeletePost deletes a post with its files, for the budget guard's
 	// "replace the weakest drafts"; nil leaves that option out.
 	DeletePost func(ctx context.Context, post *models.Post, actor string) (bool, error)
+	// CancelPost withdraws a scheduled post from publishing, for a platform
+	// removal that waits on it; nil offers no unschedule.
+	CancelPost func(ctx context.Context, postID, actor string) error
 }
 
 // ── SSE types ─────────────────────────────────────────────────────────────────
