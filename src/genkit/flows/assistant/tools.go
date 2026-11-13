@@ -179,6 +179,29 @@ func (st *turnState) addResolved(r ProposalResolved) {
 	st.resolved = append(st.resolved, r)
 }
 
+// markStale records that the offer id answered this turn ran nothing,
+// because of changes; replacedBy is the fresh offer of what still holds.
+func (st *turnState) markStale(id string, changes []string, replacedBy string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	r := ProposalResolved{ID: id, Status: resolvedStale, Reasons: changes, ReplacedBy: replacedBy}
+	if i := slices.IndexFunc(st.resolved, func(r ProposalResolved) bool { return r.ID == id }); i >= 0 {
+		st.resolved[i] = r
+		return
+	}
+	st.resolved = append(st.resolved, r)
+}
+
+// resolvedAs is how the offer id was answered this turn; "" when it wasn't.
+func (st *turnState) resolvedAs(id string) string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if i := slices.IndexFunc(st.resolved, func(r ProposalResolved) bool { return r.ID == id }); i >= 0 {
+		return st.resolved[i].Status
+	}
+	return ""
+}
+
 func (st *turnState) cardList() []ProposalCard {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -219,6 +242,7 @@ func finish(st *turnState, resp *Response) {
 	resp.UIActions = st.uiActions()
 	resp.Touched = st.touches.List()
 	resp.Proposals = st.cardList()
+	resp.Resolved = st.resolvedList()
 	st.mu.Lock()
 	resp.Packs = append([]string(nil), st.loaded...)
 	st.mu.Unlock()

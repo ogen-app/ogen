@@ -44,6 +44,9 @@ type Response struct {
 	// Proposals are the offers this turn made, waiting for the user's yes;
 	// each was also streamed as "proposal_created".
 	Proposals []ProposalCard `json:"proposals,omitempty"`
+	// Resolved are the offers this turn answered, or found changed or
+	// expired; each was also streamed as "proposal_resolved".
+	Resolved []ProposalResolved `json:"resolved,omitempty"`
 	// Result is the work's result when an offer was answered from its card.
 	Result any `json:"result,omitempty"`
 	// Results are what the packs' tools did this turn, by pack — the
@@ -67,7 +70,10 @@ const (
 //   - pack_loaded {pack}: the turn restarted with another pack's tools;
 //     the deltas streamed before it are void.
 //   - proposal_created ProposalCard / proposal_resolved ProposalResolved:
-//     an offer made, or answered, this turn; once the reply is final.
+//     an offer made, or answered, this turn; once the reply is final. A
+//     confirmed offer that ran nothing because what it was made on changed
+//     resolves "stale", with the reasons and the fresh offer replacing it;
+//     one past its expiry resolves "expired".
 //   - ui_action UIAction: a change to the client's screen, in order, once
 //     the reply is final.
 //   - complete Response: the turn's result. Last.

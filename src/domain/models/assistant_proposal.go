@@ -55,6 +55,11 @@ type AssistantProposal struct {
 	Summary string                  `bun:"summary,notnull"            json:"summary"`
 	Options []ProposalOption        `bun:"options,type:jsonb,notnull" json:"options"`
 	Status  AssistantProposalStatus `bun:"status,notnull"             json:"status"`
+	// Replaces is the confirmed offer this one was made afresh for, because
+	// what that one was made on changed; RetryOf is the confirmed offer whose
+	// run left the items this one tries again. Each is empty otherwise.
+	Replaces string `bun:"replaces,notnull" json:"replaces,omitempty"`
+	RetryOf  string `bun:"retry_of,notnull" json:"retry_of,omitempty"`
 	// Chosen is the option id the user picked; empty for a plain confirm.
 	Chosen     string     `bun:"chosen,notnull"                                json:"chosen,omitempty"`
 	CreatedBy  string     `bun:"created_by,notnull"                            json:"created_by"`

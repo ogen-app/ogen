@@ -12,6 +12,9 @@ import (
 type Refusal struct {
 	Reason       string
 	Alternatives []string
+	// Code names the refusal for the client's card, e.g. idea_read_only;
+	// empty for one the client only shows as prose.
+	Code string
 }
 
 // Error is the reason, which the model relays to the user.
@@ -20,6 +23,11 @@ func (r *Refusal) Error() string { return r.Reason }
 // Refused returns a Refusal error for a request the tool cannot do as asked.
 func Refused(reason string, alternatives ...string) error {
 	return &Refusal{Reason: reason, Alternatives: alternatives}
+}
+
+// RefusedCode is Refused with a code the client draws its own card for.
+func RefusedCode(code, reason string, alternatives ...string) error {
+	return &Refusal{Reason: reason, Alternatives: alternatives, Code: code}
 }
 
 // Matcher recognises an error type a dependency uses for user-correctable

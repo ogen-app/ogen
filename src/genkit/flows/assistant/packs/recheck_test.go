@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
@@ -45,13 +46,14 @@ func TestRecheckIDs(t *testing.T) {
 		func(in MoveIdeasInput, ids []string) MoveIdeasInput { in.IdeaIDs = ids; return in })
 	ctx, _ := turn(t, workspace, nil)
 
-	if got, err := recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"i1", "i2", "i1"}, CampaignID: "c1"}); err != nil || len(got.IdeaIDs) != 3 {
-		t.Fatalf("all there: %+v, %v; want it as offered", got, err)
+	if got, changes, err := recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"i1", "i2", "i1"}, CampaignID: "c1"}); err != nil || len(got.IdeaIDs) != 3 || changes != nil {
+		t.Fatalf("all there: %+v, %v, %v; want it as offered", got, changes, err)
 	}
-	if got, err := recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"i1", "gone", "i2"}, CampaignID: "c1"}); err != nil || !slices.Equal(got.IdeaIDs, []string{"i1", "i2"}) || got.CampaignID != "c1" {
-		t.Fatalf("some gone: %+v, %v", got, err)
+	got, changes, err := recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"i1", "gone", "i2"}, CampaignID: "c1"})
+	if err != nil || !slices.Equal(got.IdeaIDs, []string{"i1", "i2"}) || got.CampaignID != "c1" || !slices.Equal(changes, []string{"1 of the 3 ideas no longer exist"}) {
+		t.Fatalf("some gone: %+v, %v, %v", got, changes, err)
 	}
-	_, err := recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"gone"}})
+	_, _, err = recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"gone"}})
 	refused(t, err)
 }
 
@@ -60,8 +62,9 @@ func TestRecheckIDs_CampaignPosts(t *testing.T) {
 	d := Deps{Titles: memTitles{byKind: map[viewcontext.EntityKind][]string{viewcontext.KindPost: {"p1", "p2"}}, inCampaign: []string{"p1"}}}
 	recheck := recheckIDs(d, viewcontext.KindPost, campaignPostsIn, withPosts)
 	ctx, _ := turn(t, campaign1, nil)
-	if got, err := recheck(ctx, PostsRef{PostIDs: []string{"p1", "p2"}}); err != nil || !slices.Equal(got.PostIDs, []string{"p1"}) {
-		t.Fatalf("got %+v, %v", got, err)
+	if got, changes, err := recheck(ctx, PostsRef{PostIDs: []string{"p1", "p2"}}); err != nil || !slices.Equal(got.PostIDs, []string{"p1"}) ||
+		!slices.Equal(changes, []string{"1 of the 2 posts are no longer in the campaign"}) {
+		t.Fatalf("got %+v, %v, %v", got, changes, err)
 	}
 }
 
@@ -73,13 +76,33 @@ func TestMovesThatHold(t *testing.T) {
 		{PostID: "p1", From: "2027-02-20", FromAt: day("2027-02-20"), To: "2027-03-02"},
 		{PostID: "gone", To: "2027-03-10"},
 	}}
-	got, err := movesThatHold(ctx, d, in)
-	if err != nil || len(got.Moves) != 1 || got.Moves[0].PostID != "p1" {
-		t.Fatalf("got %+v, %v", got, err)
+	got, changes, err := movesThatHold(ctx, d, in)
+	if err != nil || len(got.Moves) != 1 || got.Moves[0].PostID != "p1" || !slices.Equal(changes, []string{"A post the offer moved was deleted"}) {
+		t.Fatalf("got %+v, %v, %v", got, changes, err)
 	}
-	if got, err := movesThatHold(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: in.Moves[:1]}); err != nil || len(got.Moves) != 1 {
-		t.Fatalf("all hold: %+v, %v", got, err)
+	if got, changes, err := movesThatHold(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: in.Moves[:1]}); err != nil || len(got.Moves) != 1 || changes != nil {
+		t.Fatalf("all hold: %+v, %v, %v", got, changes, err)
 	}
-	_, err = movesThatHold(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: in.Moves[1:]})
+	_, _, err = movesThatHold(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: in.Moves[1:]})
 	refused(t, err)
+}
+
+// A move that no longer holds says why, by its post's title.
+func TestWhyMoveFails(t *testing.T) {
+	c := &models.Campaign{}
+	at := day("2027-02-20")
+	m := Move{PostID: "p1", FromAt: at, To: "2027-03-02"}
+	for _, tc := range []struct {
+		post models.Post
+		want string
+	}{
+		{models.Post{Title: "Spa", Status: models.PostStatusScheduled, ScheduledAt: at}, "“Spa” was scheduled since — scheduled posts stay put"},
+		{models.Post{Title: "Spa", Status: models.PostStatusPublished, ScheduledAt: at}, "“Spa” was published since"},
+		{models.Post{Status: models.PostStatusDraft, ScheduledAt: day("2027-02-21")}, "A post was moved since"},
+		{models.Post{Title: "Spa", Status: models.PostStatusDraft, ScheduledAt: at}, "“Spa” can't go to 2027-03-02 any more: the campaign doesn't publish then"},
+	} {
+		if got := whyMoveFails(c, &tc.post, m); got != tc.want {
+			t.Errorf("%+v: got %q, want %q", tc.post, got, tc.want)
+		}
+	}
 }

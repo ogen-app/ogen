@@ -98,6 +98,71 @@ func TestAssistantProposals_ResolveOnce(t *testing.T) {
 	}
 }
 
+// A confirmed offer that ran nothing reopens unanswered; a fresh offer made
+// for it hides it from the open list and is its replacement; one past its
+// expiry is marked expired, once.
+func TestAssistantProposals_ReopenReplaceExpire(t *testing.T) {
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	repo := repository.NewAssistantProposalRepository(db)
+	ctx := tenantCtx()
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+
+	stale := newProposal(t, "camp-3", "applyCalendarMoves", now.Add(-time.Minute), now.Add(time.Hour))
+	old := newProposal(t, "camp-3", "generatePosts", now.Add(-25*time.Hour), now.Add(-time.Hour))
+	for _, x := range []*models.AssistantProposal{stale, old} {
+		if err := repo.Create(ctx, x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := repo.Resolve(ctx, stale.ID, models.ProposalConfirmed, "fill", "user-1", now); err != nil || !ok {
+		t.Fatalf("resolve = %t, %v", ok, err)
+	}
+	if ok, err := repo.Reopen(ctx, stale.ID); err != nil || !ok {
+		t.Fatalf("reopen = %t, %v", ok, err)
+	}
+	if ok, err := repo.Reopen(ctx, stale.ID); err != nil || ok {
+		t.Fatalf("reopen a pending one = %t, %v; want false", ok, err)
+	}
+	got, err := repo.GetByID(ctx, stale.ID)
+	if err != nil || got.Status != models.ProposalPending || got.Chosen != "" || got.ResolvedBy != "" || got.ResolvedAt != nil {
+		t.Fatalf("reopened = %+v, %v", got, err)
+	}
+
+	fresh := newProposal(t, "camp-3", "applyCalendarMoves", now, now.Add(time.Hour))
+	fresh.Replaces = stale.ID
+	if err := repo.Create(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := repo.Replacement(ctx, stale.ID, now); err != nil || id != fresh.ID {
+		t.Fatalf("replacement = %q, %v", id, err)
+	}
+	if id, err := repo.Replacement(ctx, fresh.ID, now); err != nil || id != "" {
+		t.Fatalf("replacement of the fresh one = %q, %v", id, err)
+	}
+	open, err := repo.ListOpen(ctx, models.AssistantScopeCampaign, "camp-3", now)
+	if err != nil || len(open) != 1 || open[0].ID != fresh.ID || open[0].Replaces != stale.ID {
+		t.Fatalf("open = %v, %v; want only the fresh offer", proposalIDs(open), err)
+	}
+	byID, err := repo.ListByIDs(ctx, []string{stale.ID, fresh.ID, "nope"})
+	if err != nil || len(byID) != 2 {
+		t.Fatalf("by ids = %v, %v", proposalIDs(byID), err)
+	}
+
+	if ok, err := repo.Expire(ctx, stale.ID, now); err != nil || ok {
+		t.Fatalf("expire a live one = %t, %v; want false", ok, err)
+	}
+	if ok, err := repo.Expire(ctx, old.ID, now); err != nil || !ok {
+		t.Fatalf("expire = %t, %v", ok, err)
+	}
+	if ok, err := repo.Expire(ctx, old.ID, now); err != nil || ok {
+		t.Fatalf("expire again = %t, %v; want false", ok, err)
+	}
+	if got, err := repo.GetByID(ctx, old.ID); err != nil || got.Status != models.ProposalExpired {
+		t.Fatalf("expired = %+v, %v", got, err)
+	}
+}
+
 // Proposals are tenant-scoped: another tenant can neither read nor resolve them.
 func TestAssistantProposals_TenantScoped(t *testing.T) {
 	db := pgtest.MustDB()

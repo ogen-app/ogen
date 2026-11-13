@@ -59,7 +59,7 @@ func repairPack(d Deps) assistant.Pack {
 			apply := genkit.DefineTool(g, "applyCalendarMoves",
 				"Moves posts to new dates exactly as offered. Only runs once the user confirmed the offer.",
 				assistantkit.Gated("applyCalendarMoves", assistantkit.Gate[ApplyMovesInput]{
-					Recheck: func(ctx context.Context, in ApplyMovesInput) (ApplyMovesInput, error) {
+					Recheck: func(ctx context.Context, in ApplyMovesInput) (ApplyMovesInput, []string, error) {
 						return movesThatHold(ctx, d, in)
 					},
 					Summary: func(in ApplyMovesInput) string { return fmt.Sprintf("Move %s", plural(len(in.Moves), "post", "posts")) },
@@ -486,32 +486,61 @@ func moveHolds(c *models.Campaign, p *models.Post, m Move) (time.Time, bool) {
 	return at, true
 }
 
-// movesThatHold narrows confirmed moves to the ones that still hold; none
-// is a refusal.
-func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesInput, error) {
+// movesThatHold narrows confirmed moves to the ones that still hold, saying
+// why each other one doesn't; none is a refusal.
+func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesInput, []string, error) {
 	c, err := d.loadCampaign(ctx, CampaignRef{CampaignID: in.CampaignID})
 	if err != nil {
-		return in, err
+		return in, nil, err
 	}
 	posts, err := d.Posts.ListByCampaign(ctx, c.ID)
 	if err != nil {
-		return in, err
+		return in, nil, err
 	}
+	var changes []string
+	deleted := 0
 	keep := slices.DeleteFunc(slices.Clone(in.Moves), func(m Move) bool {
 		i := slices.IndexFunc(posts, func(p models.Post) bool { return p.ID == m.PostID })
 		if i < 0 {
+			deleted++
 			return true
 		}
-		_, ok := moveHolds(c, &posts[i], m)
-		return !ok
+		if _, ok := moveHolds(c, &posts[i], m); ok {
+			return false
+		}
+		changes = append(changes, whyMoveFails(c, &posts[i], m))
+		return true
 	})
+	switch {
+	case deleted == 1:
+		changes = append(changes, "A post the offer moved was deleted")
+	case deleted > 1:
+		changes = append(changes, fmt.Sprintf("%d posts the offer moved were deleted", deleted))
+	}
 	if len(keep) == 0 {
-		return in, assistantkit.Refused("none of those moves hold any more: the posts were moved, scheduled or deleted since")
+		return in, changes, assistantkit.Refused("none of those moves hold any more: the posts were moved, scheduled or deleted since")
 	}
 	if len(keep) < len(in.Moves) {
 		in.Moves = keep
 	}
-	return in, nil
+	return in, changes, nil
+}
+
+// whyMoveFails says why m no longer holds for p, which is still there.
+func whyMoveFails(c *models.Campaign, p *models.Post, m Move) string {
+	title := "A post"
+	if p.Title != "" {
+		title = "“" + p.Title + "”"
+	}
+	switch {
+	case p.Status == models.PostStatusPublished:
+		return title + " was published since"
+	case !reschedule.Eligible(p.Status):
+		return title + " was scheduled since — scheduled posts stay put"
+	case !sameInstant(p.ScheduledAt, m.FromAt):
+		return title + " was moved since"
+	}
+	return title + " can't go to " + m.To + " any more: the campaign doesn't publish then"
 }
 
 // moveTarget is the instant a move lands on: its date, at the campaign's

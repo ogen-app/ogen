@@ -43,6 +43,10 @@ type Outcome[T any] struct {
 	Options      []Option `json:"options,omitempty"`
 	ProposalID   string   `json:"proposalId,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
+	// Changes is what changed since a confirmed offer was made, in plain
+	// words, when that is why it ran nothing: it was refused, or what still
+	// holds was offered afresh (ProposalID).
+	Changes []string `json:"changes,omitempty"`
 }
 
 // Partial is what a run that did part of the job left undone, each item

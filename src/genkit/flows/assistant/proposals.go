@@ -22,7 +22,9 @@ const proposalTTL = 24 * time.Hour
 
 const (
 	refuseOfferGone     = "That offer is no longer available. Ask again and I'll set it up."
-	refuseOfferAnswered = "That offer has already been answered or has expired. Ask again and I'll set it up."
+	refuseOfferAnswered = "That offer has already been answered. Ask again and I'll set it up."
+	refuseOfferExpired  = "That offer lapsed: nothing ran. Ask again and I'll set it up from things as they are now."
+	refuseOfferReplaced = "Things changed since that offer, and what still holds was offered afresh: answer that offer instead."
 	// refuseOfferUnanswered is a confirmation of an offer made in the same
 	// message, before the user saw it.
 	refuseOfferUnanswered = "That offer was made in this message and the user hasn't answered it yet. Tell them what it will do and wait for their answer."
@@ -32,7 +34,12 @@ const (
 var ErrProposalNotFound = errors.New("proposal not found")
 
 // ProposalConflictError is an offer that can no longer be answered (409).
-type ProposalConflictError struct{ Msg string }
+// Code names why for the client: offer_expired, offer_answered or
+// offer_replaced; empty for the work's own refusal.
+type ProposalConflictError struct {
+	Msg  string
+	Code string
+}
 
 func (e *ProposalConflictError) Error() string { return e.Msg }
 
@@ -46,6 +53,12 @@ type ProposalCard struct {
 	// Card is the card's details: the confirm button's verb, what the work
 	// draws on and makes. Absent, the card shows the summary and Confirm.
 	Card *assistantkit.Card `json:"card,omitempty"`
+	// Replaces is the confirmed offer this one was made afresh for, because
+	// what that one was made on changed: the card is what still holds.
+	Replaces string `json:"replaces,omitempty"`
+	// RetryOf is the confirmed offer whose run left the items this one
+	// tries again.
+	RetryOf string `json:"retryOf,omitempty"`
 }
 
 // ProposalChoice is one option on a card.
@@ -57,12 +70,34 @@ type ProposalChoice struct {
 	Recommended bool `json:"recommended,omitempty"`
 }
 
-// ProposalResolved is an offer answered this turn.
+// ProposalResolved is an offer answered this turn, or found changed or
+// expired when the user said yes.
 type ProposalResolved struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	ID string `json:"id"`
+	// Status is confirmed or dismissed; stale when a yes ran nothing
+	// because what the offer was made on changed, the offer staying open;
+	// expired when the yes came after its expiry.
+	Status string `json:"status" enums:"confirmed,dismissed,stale,expired"`
 	Chosen string `json:"chosen,omitempty"`
+	// Reasons are what changed, for a stale offer.
+	Reasons []string `json:"reasons,omitempty"`
+	// ReplacedBy is the fresh offer of what still holds, for a stale offer
+	// that has one.
+	ReplacedBy string `json:"replacedBy,omitempty"`
 }
+
+// The resolved statuses that are no answer the user gave.
+const (
+	resolvedStale   = "stale"
+	resolvedExpired = string(models.ProposalExpired)
+)
+
+// The codes of a yes refused because the offer can't be answered.
+const (
+	codeOfferExpired  = "offer_expired"
+	codeOfferAnswered = "offer_answered"
+	codeOfferReplaced = "offer_replaced"
+)
 
 // turnSink stores the turn's held-back calls as the thread's offers.
 type turnSink struct {
@@ -111,12 +146,15 @@ func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string,
 	scope := s.st.view.View.Scope
 	row := &models.AssistantProposal{
 		ID: id, ScopeKind: scope.Kind, ScopeID: scope.ID, Tool: p.Tool, Args: args, Summary: p.Summary,
-		Options: stored, CreatedBy: by, ExpiresAt: time.Now().UTC().Add(proposalTTL),
+		Options: stored, Replaces: p.Replaces, RetryOf: p.RetryOf, CreatedBy: by, ExpiresAt: time.Now().UTC().Add(proposalTTL),
 	}
 	if err := s.repos.Proposals.Create(ctx, row); err != nil {
 		return "", fmt.Errorf("store %s proposal: %w", p.Tool, err)
 	}
-	s.st.addCard(ProposalCard{ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339), Options: choices, Card: p.Card})
+	s.st.addCard(ProposalCard{
+		ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339), Options: choices, Card: p.Card,
+		Replaces: p.Replaces, RetryOf: p.RetryOf,
+	})
 	if s.st.proposedKeys == nil {
 		s.st.proposedKeys = map[string]string{}
 	}
@@ -167,22 +205,14 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 	if !t.Owns(p.Tool) && !t.ownsOption(p) {
 		return nil, assistantkit.Refused(refuseOfferGone)
 	}
-	tool, args := p.Tool, p.Args
-	if in.OptionID == "" && len(p.Options) == 1 {
-		in.OptionID = p.Options[0].ID
+	if err := t.notReplaced(ctx, p.ID); err != nil {
+		return nil, err
 	}
-	if in.OptionID == "" && len(p.Options) > 1 {
-		return nil, assistantkit.Refused("This offer has options: pick one.", optionIDs(p)...)
+	tool, args, optionID, err := pick(p, in.OptionID)
+	if err != nil {
+		return nil, err
 	}
-	if in.OptionID != "" {
-		o, ok := p.Option(in.OptionID)
-		if !ok {
-			return nil, assistantkit.Refused(fmt.Sprintf("%q is not one of the options offered.", in.OptionID), optionIDs(p)...)
-		}
-		if o.Tool != "" {
-			tool, args = o.Tool, o.Args
-		}
-	}
+	in.OptionID = optionID
 	// Confirmed work that spends is held to the spend cap; a schedule,
 	// which makes no model call, is not. The offer stays open.
 	if s, ok := t.reg.Lookup(tool); st.enforce != nil && (!ok || !s.Free) {
@@ -206,7 +236,54 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 	if err := t.resolve(ctx, st, p.ID, models.ProposalConfirmed, in.OptionID); err != nil {
 		return nil, err
 	}
-	return t.reg.RunConfirmed(ctx, tool, map[string]any(args))
+	result, err := t.reg.RunConfirmed(assistantkit.WithOffer(ctx, p.ID), tool, map[string]any(args))
+	if err != nil {
+		return result, err
+	}
+	// The offer was answered to claim it; a run that found it changed did
+	// nothing, so it is open again, and says what changed.
+	if changes, replacedBy, ok := staleResult(result); ok {
+		if _, err := t.deps.Proposals.Reopen(ctx, p.ID); err != nil {
+			return nil, fmt.Errorf("reopen proposal: %w", err)
+		}
+		st.markStale(p.ID, changes, replacedBy)
+	}
+	return result, nil
+}
+
+// notReplaced refuses an offer that ran nothing because things changed, once
+// what still holds was offered afresh: that one is the one to answer.
+func (t *toolSet) notReplaced(ctx context.Context, id string) error {
+	fresh, err := t.deps.Proposals.Replacement(ctx, id, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("load replacement: %w", err)
+	}
+	if fresh != "" {
+		return assistantkit.RefusedCode(codeOfferReplaced, refuseOfferReplaced, fresh)
+	}
+	return nil
+}
+
+// pick is the call confirming p with optionID runs, and the option it
+// picks: an offer's only option is picked without naming it.
+func pick(p *models.AssistantProposal, optionID string) (string, models.JSONMap, string, error) {
+	if optionID == "" && len(p.Options) == 1 {
+		optionID = p.Options[0].ID
+	}
+	if optionID == "" && len(p.Options) > 1 {
+		return "", nil, "", assistantkit.Refused("This offer has options: pick one.", optionIDs(p)...)
+	}
+	if optionID == "" {
+		return p.Tool, p.Args, "", nil
+	}
+	o, ok := p.Option(optionID)
+	if !ok {
+		return "", nil, "", assistantkit.Refused(fmt.Sprintf("%q is not one of the options offered.", optionID), optionIDs(p)...)
+	}
+	if o.Tool != "" {
+		return o.Tool, o.Args, optionID, nil
+	}
+	return p.Tool, p.Args, optionID, nil
 }
 
 func (t *toolSet) dismissProposal(ctx context.Context, in AnswerProposalInput) (*DismissProposalOutput, error) {
@@ -241,10 +318,24 @@ func (t *toolSet) openProposal(ctx context.Context, st *turnState, id string) (*
 	if p.ScopeKind != scope.Kind || p.ScopeID != scope.ID {
 		return nil, assistantkit.Refused(refuseOfferGone)
 	}
-	if !p.Open(time.Now().UTC()) {
-		return nil, assistantkit.Refused(refuseOfferAnswered)
+	now := time.Now().UTC()
+	if p.Status == models.ProposalPending && !now.Before(p.ExpiresAt) {
+		ok, err := t.deps.Proposals.Expire(ctx, p.ID, now)
+		if err != nil {
+			return nil, fmt.Errorf("expire proposal: %w", err)
+		}
+		if ok {
+			st.addResolved(ProposalResolved{ID: p.ID, Status: resolvedExpired})
+		}
+		return nil, assistantkit.RefusedCode(codeOfferExpired, refuseOfferExpired)
 	}
-	return p, nil
+	switch p.Status {
+	case models.ProposalPending:
+		return p, nil
+	case models.ProposalExpired:
+		return nil, assistantkit.RefusedCode(codeOfferExpired, refuseOfferExpired)
+	}
+	return nil, assistantkit.RefusedCode(codeOfferAnswered, refuseOfferAnswered)
 }
 
 // resolve records the answer; losing the race to another answer is a
@@ -256,7 +347,7 @@ func (t *toolSet) resolve(ctx context.Context, st *turnState, id string, status 
 		return fmt.Errorf("resolve proposal: %w", err)
 	}
 	if !ok {
-		return assistantkit.Refused(refuseOfferAnswered)
+		return assistantkit.RefusedCode(codeOfferAnswered, refuseOfferAnswered)
 	}
 	st.addResolved(ProposalResolved{ID: id, Status: string(status), Chosen: chosen})
 	return nil
@@ -329,7 +420,16 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	} else {
 		_, err = t.dismissProposal(ctx, in)
 	}
+	// The thread records a yes that ran nothing as what it found.
+	switch st.resolvedAs(p.ID) {
+	case resolvedStale:
+		st.turn.Instruction = "Stale: " + p.Summary
+	case resolvedExpired:
+		st.turn.Instruction = "Expired: " + p.Summary
+	}
+	_, _, stale := staleResult(result)
 	reason, refused := refusedResult(result)
+	refused = refused && !stale
 	switch {
 	case err != nil:
 		t.recordUnfinished(ctx, st, onEvent, unfinishedAnswer)
@@ -337,7 +437,7 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 		t.recordUnfinished(ctx, st, onEvent, reason)
 	}
 	if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {
-		return nil, &ProposalConflictError{Msg: r.Reason}
+		return nil, &ProposalConflictError{Msg: r.Reason, Code: r.Code}
 	}
 	if err != nil {
 		return nil, err
@@ -345,22 +445,7 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	if refused {
 		return nil, &ProposalConflictError{Msg: reason}
 	}
-	resp := &Response{Action: actionAnswered, Explanation: "Dismissed: " + p.Summary, Result: result}
-	if req.Confirm {
-		resp.Explanation = "Done: " + p.Summary
-	}
-	// What the offer was made on changed while it waited: nothing ran, and
-	// what still holds waits on a fresh card.
-	if changed, ok := reofferedResult(result); ok {
-		resp.Explanation = changed
-	}
-	if left, retry := partialResult(result); left > 0 {
-		resp.Explanation = fmt.Sprintf("Done in part: %s. %d not done", p.Summary, left)
-		if retry {
-			resp.Explanation += "; the ones worth retrying are offered again"
-		}
-		resp.Explanation += "."
-	}
+	resp := &Response{Action: actionAnswered, Explanation: answered(p, req.Confirm, result), Result: result}
 	t.finish(st, resp)
 	// The answer joins the thread, so the next chat turn knows it happened.
 	// The work has run, so a failed write marks the reply unsaved rather
@@ -373,6 +458,31 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	}
 	emitFinal(onEvent, st, resp)
 	return resp, nil
+}
+
+// answered is the reply to an offer answered from its card, with what its
+// work returned.
+func answered(p *models.AssistantProposal, confirmed bool, result any) string {
+	if !confirmed {
+		return "Dismissed: " + p.Summary
+	}
+	// What the offer was made on changed while it waited: nothing ran, the
+	// offer stays open, and what still holds may wait on a fresh card.
+	if changes, replacedBy, ok := staleResult(result); ok {
+		out := "Nothing ran: " + strings.Join(changes, "; ") + "."
+		if replacedBy != "" {
+			out += " What still holds is offered again."
+		}
+		return out
+	}
+	if left, retry := partialResult(result); left > 0 {
+		out := fmt.Sprintf("Done in part: %s. %d not done", p.Summary, left)
+		if retry {
+			out += "; the ones worth retrying are offered again"
+		}
+		return out + "."
+	}
+	return "Done: " + p.Summary
 }
 
 // unfinishedAnswer is the reply recorded when an offer was answered but its
@@ -390,7 +500,7 @@ func (t *toolSet) recordUnfinished(ctx context.Context, st *turnState, onEvent O
 		return
 	}
 	if t.deps.Messages != nil {
-		resp := &Response{Action: actionAnswered, Explanation: explanation, Touched: st.touches.List()}
+		resp := &Response{Action: actionAnswered, Explanation: explanation, Touched: st.touches.List(), Resolved: resolved}
 		if err := persistTurn(ctx, t.deps, Request{Instruction: st.turn.Instruction, View: st.view}, resp); err != nil {
 			slog.ErrorContext(ctx, "persist offer answer failed", logging.AttrComponent, logComponent, logging.AttrError, err)
 		}
@@ -411,15 +521,24 @@ func refusedResult(raw any) (string, bool) {
 	return reason, true
 }
 
-// reofferedResult reports whether a confirmed tool offered its work afresh
-// instead of running it, with why; the fresh card says what it does.
-func reofferedResult(raw any) (string, bool) {
-	m, ok := raw.(map[string]any)
-	if !ok || m["status"] != string(assistantkit.StatusProposed) {
-		return "", false
+// staleResult reports whether a confirmed tool ran nothing because what the
+// offer was made on changed, with what changed and the fresh offer of what
+// still holds, when it made one.
+func staleResult(raw any) (changes []string, replacedBy string, ok bool) {
+	m, _ := raw.(map[string]any)
+	list, _ := m["changes"].([]any)
+	for _, c := range list {
+		if s, ok := c.(string); ok {
+			changes = append(changes, s)
+		}
 	}
-	reason, _ := m["reason"].(string)
-	return reason, true
+	if len(changes) == 0 {
+		return nil, "", false
+	}
+	if m["status"] == string(assistantkit.StatusProposed) {
+		replacedBy, _ = m["proposalId"].(string)
+	}
+	return changes, replacedBy, true
 }
 
 // partialResult reports how many items a confirmed run left undone, and
