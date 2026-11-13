@@ -115,7 +115,7 @@ func selectIdeasOn(db bun.IDB, model any) *bun.SelectQuery {
 	return db.NewSelect().
 		Model(model).
 		ColumnExpr("i.id, i.title, i.note, i.verdict, i.remind_at, i.decided_at, i.decided_by").
-		ColumnExpr("i.origin, i.asset_analysis_id, i.distill_run_id, i.source_asset_id, i.angle, i.rationale, i.sources").
+		ColumnExpr("i.origin, i.asset_analysis_id, i.distill_run_id, i.source_asset_id, i.angle, i.rationale, i.sources, i.source_locator").
 		ColumnExpr("i.fit_score, i.fit_breakdown, i.fit_rubric_version").
 		ColumnExpr("i.plan_platform_id, i.plan_post_type, i.plan_phase_id, i.plan_target_date").
 		ColumnExpr("i.grounding_mode, i.asset_ids").
@@ -149,7 +149,8 @@ func (r *ideaRepository) List(ctx context.Context, filter IdeaListFilter) ([]mod
 }
 
 // hydrate fills the derived fields of ideas read back: the author, and the
-// source asset while it exists, with the campaign lens the idea was read in.
+// source asset while it exists, with the campaign lens the idea was read in
+// and the passage it came from.
 func (r *ideaRepository) hydrate(ctx context.Context, ideas []models.Idea) error {
 	return hydrateOn(ctx, r.db, ideas)
 }
@@ -184,6 +185,7 @@ func hydrateOn(ctx context.Context, db bun.IDB, ideas []models.Idea) error {
 		}
 		if a, ok := assets[*id]; ok {
 			a.Reading = readings[ideas[i].ID]
+			a.SetPassage(ideas[i].SourceLocator)
 			ideas[i].SourceAsset = &a
 		}
 	}

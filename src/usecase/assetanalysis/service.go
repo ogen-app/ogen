@@ -161,14 +161,14 @@ func (s *Service) Run(ctx context.Context, l Lens, reason string) error {
 	if err != nil || t == nil {
 		return err
 	}
-	src, err := s.buildSource(ctx, t.asset)
+	src, at, err := s.buildSource(ctx, t.asset)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errSourceUnreadable, err)
 	}
 	if !hasText(src) {
 		// Silent audio, or a partial transcript that withholds its text: an
 		// empty analysis, not a failure, and no model call.
-		return s.save(ctx, t, &asset_analysis.AnalyzeResponse{}, fingerprint(src, false, asset_analysis.Lens{}))
+		return s.save(ctx, t, &asset_analysis.AnalyzeResponse{}, fingerprint(src, false, asset_analysis.Lens{}), at)
 	}
 	lensCtx, err := s.buildLens(ctx, l.TenantID, t.asset, t.campaign, t.row.ID)
 	if err != nil {
@@ -210,7 +210,7 @@ func (s *Service) Run(ctx context.Context, l Lens, reason string) error {
 		return retryErr
 	}
 	s.limiter.DispatchCrossing(ctx, l.TenantID, dec)
-	return s.save(ctx, t, resp, fp)
+	return s.save(ctx, t, resp, fp, at)
 }
 
 // reserveRun records the run against the monthly cap and returns its id;
@@ -326,7 +326,7 @@ func (s *Service) handleFailure(ctx context.Context, t *target, err error) error
 
 // save stores the result under the lens row lock. A campaign lens whose asset
 // was detached meanwhile is dropped instead.
-func (s *Service) save(ctx context.Context, t *target, resp *asset_analysis.AnalyzeResponse, fp string) error {
+func (s *Service) save(ctx context.Context, t *target, resp *asset_analysis.AnalyzeResponse, fp string, at passages) error {
 	row := t.row
 	now := s.now().UTC()
 	row.Status = models.AssetAnalysisStatusReady
@@ -345,7 +345,7 @@ func (s *Service) save(ctx context.Context, t *target, resp *asset_analysis.Anal
 	row.FailureCode, row.FailureReason = "", ""
 	row.AnalyzedAt = &now
 
-	ideas, err := ideaRows(row, resp.Analysis.Ideas)
+	ideas, err := ideaRows(row, resp.Analysis.Ideas, at)
 	if err != nil {
 		return err
 	}
@@ -466,8 +466,9 @@ func toResult(resp *asset_analysis.AnalyzeResponse) models.AssetAnalysisResult {
 }
 
 // ideaRows turns the distilled ideas into inbox rows of the lens's scope,
-// each with its fit score when the model rated it.
-func ideaRows(row *models.AssetAnalysis, ideas []asset_analysis.Idea) ([]models.Idea, error) {
+// each with its fit score when the model rated it and where its first cited
+// passage is.
+func ideaRows(row *models.AssetAnalysis, ideas []asset_analysis.Idea, at passages) ([]models.Idea, error) {
 	out := make([]models.Idea, 0, len(ideas))
 	for _, idea := range ideas {
 		id, err := models.NewID()
@@ -487,6 +488,7 @@ func ideaRows(row *models.AssetAnalysis, ideas []asset_analysis.Idea) ([]models.
 		}
 		if len(idea.SourceLabels) > 0 {
 			i.Sources = idea.SourceLabels
+			i.SourceLocator = at.locate(idea.SourceLabels)
 		}
 		if idea.Fit != nil {
 			b := &ideafit.Breakdown{Lens: ideafit.LensWorkspace, Criteria: idea.Fit.Criteria, Caps: idea.Fit.Caps}

@@ -25,6 +25,9 @@ type Segment struct {
 	Text  string
 	// Tokens is the ingest-reported token count; zero when unknown.
 	Tokens int
+	// Locator is where the chunk the segment was read from is; nil for the
+	// parts of a body without chunks.
+	Locator *models.SourceLocator
 }
 
 // Source is an asset's text.
@@ -57,7 +60,8 @@ func Read(ctx context.Context, chunks Chunks, asset *models.Asset) (Source, erro
 		return src, fmt.Errorf("load chunks: %w", err)
 	}
 	for i, c := range rows {
-		src.Segments = append(src.Segments, Segment{Label: ChunkLabel(c, i), Text: c.Content, Tokens: c.TokenCount})
+		label := ChunkLabel(c, i)
+		src.Segments = append(src.Segments, Segment{Label: label, Text: c.Content, Tokens: c.TokenCount, Locator: new(models.LocatorOf(c, label))})
 	}
 	return src, nil
 }
