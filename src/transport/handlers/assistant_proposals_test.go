@@ -97,17 +97,19 @@ func TestConfirmProposal_StreamsTheWork(t *testing.T) {
 
 func TestConfirmProposal_ErrorCodes(t *testing.T) {
 	cases := map[string]struct {
-		err  error
-		code int
+		err    error
+		code   int
+		reason string
 	}{
-		"not found": {assistant.ErrProposalNotFound, fiber.StatusNotFound},
-		"conflict":  {&assistant.ProposalConflictError{Msg: "already answered"}, fiber.StatusConflict},
-		"ai error":  {&assistant.AIError{Msg: "busy"}, fiber.StatusBadGateway},
+		"not found": {err: assistant.ErrProposalNotFound, code: fiber.StatusNotFound},
+		"conflict":  {err: &assistant.ProposalConflictError{Msg: "the date passed"}, code: fiber.StatusConflict},
+		"expired":   {err: &assistant.ProposalConflictError{Msg: "lapsed", Code: "offer_expired"}, code: fiber.StatusConflict, reason: "offer_expired"},
+		"ai error":  {err: &assistant.AIError{Msg: "busy"}, code: fiber.StatusBadGateway},
 		// The confirmed work's own flow failed at the model.
-		"plan ai error":  {fmt.Errorf("generate: %w", &content_plan.AIError{Msg: "overloaded"}), fiber.StatusBadGateway},
-		"draft ai error": {&draft_post.AIError{Msg: "overloaded"}, fiber.StatusBadGateway},
-		"brief ai error": {&enrich_brief.AIError{Msg: "overloaded"}, fiber.StatusBadGateway},
-		"other error":    {errors.New("db down"), fiber.StatusInternalServerError},
+		"plan ai error":  {err: fmt.Errorf("generate: %w", &content_plan.AIError{Msg: "overloaded"}), code: fiber.StatusBadGateway},
+		"draft ai error": {err: &draft_post.AIError{Msg: "overloaded"}, code: fiber.StatusBadGateway},
+		"brief ai error": {err: &enrich_brief.AIError{Msg: "overloaded"}, code: fiber.StatusBadGateway},
+		"other error":    {err: errors.New("db down"), code: fiber.StatusInternalServerError},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -123,10 +125,11 @@ func TestConfirmProposal_ErrorCodes(t *testing.T) {
 				t.Fatalf("events = %v", names)
 			}
 			var payload struct {
-				Code int `json:"code"`
+				Code   int    `json:"code"`
+				Reason string `json:"reason"`
 			}
-			if err := json.Unmarshal([]byte(data[0]), &payload); err != nil || payload.Code != tc.code {
-				t.Fatalf("error payload = %s (%v), want code %d", data[0], err, tc.code)
+			if err := json.Unmarshal([]byte(data[0]), &payload); err != nil || payload.Code != tc.code || payload.Reason != tc.reason {
+				t.Fatalf("error payload = %s (%v), want code %d, reason %q", data[0], err, tc.code, tc.reason)
 			}
 		})
 	}
@@ -136,8 +139,11 @@ func TestDismissProposal(t *testing.T) {
 	var got assistant.AnswerRequest
 	app := proposalApp(func(_ context.Context, req assistant.AnswerRequest, _ assistant.OnEventFunc) (*assistant.Response, error) {
 		got = req
-		if req.ProposalID == "gone" {
+		switch req.ProposalID {
+		case "gone":
 			return nil, assistant.ErrProposalNotFound
+		case "old":
+			return nil, &assistant.ProposalConflictError{Msg: "That offer lapsed.", Code: "offer_expired"}
 		}
 		return &assistant.Response{Action: "answered", Explanation: "OK, I've dropped that."}, nil
 	})
@@ -157,6 +163,18 @@ func TestDismissProposal(t *testing.T) {
 	}
 	if resp.StatusCode != fiber.StatusNotFound {
 		t.Fatalf("dismiss of a missing offer = %d, want 404", resp.StatusCode)
+	}
+
+	resp, err = app.Test(httptest.NewRequest("POST", "/api/assistant/proposals/old/dismiss", nil), 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conflict struct {
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&conflict); err != nil || resp.StatusCode != fiber.StatusConflict || conflict.Reason != "offer_expired" || conflict.Error == "" {
+		t.Fatalf("dismiss of a lapsed offer = %d, %+v, %v", resp.StatusCode, conflict, err)
 	}
 }
 

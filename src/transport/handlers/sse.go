@@ -72,6 +72,9 @@ func streamFlow(c *fiber.Ctx, run func(emit sseEmit)) {
 type flowErrorPayload struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
+	// Reason names a conflict the client draws its own way, e.g.
+	// offer_expired; empty for any other error.
+	Reason string `json:"reason,omitempty"`
 }
 
 // flowError classifies an AI-flow failure: the flow's validation error V is a

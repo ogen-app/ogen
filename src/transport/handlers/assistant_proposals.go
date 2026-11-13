@@ -53,13 +53,16 @@ type confirmProposalRequest struct {
 // @Description  Runs an offer the assistant proposed, exactly as proposed, and streams the work's events
 // @Description  like a chat turn: the work's own events, "proposal_created" for any fresh offer, "proposal_resolved",
 // @Description  then "complete" with a assistant.Response. When what the offer was made on changed since, nothing
-// @Description  runs: either the offer is refused (a 409 "error" whose message starts "Things changed since the
-// @Description  offer:"), or what still holds comes back as a fresh offer, explained in the response. A run that did
-// @Description  part of the job says so; its result lists "notMade" and, when some items are worth retrying, an
-// @Description  optional "retryProposalId" offering just those.
-// @Description  "error" carries {"message":"...","code":<http_code>}: 404 when the offer does not exist, 409 when it
-// @Description  was already answered, expired, names an unknown option, or the work itself was refused (the
-// @Description  message says why, e.g. what changed).
+// @Description  runs and the offer stays open: "proposal_resolved" says status "stale" with "reasons" (what
+// @Description  changed, in plain words) and, when what still holds is offered afresh, "replacedBy" naming that
+// @Description  offer, whose card has "replaces"; the result carries the same as "changes". From then on only the
+// @Description  fresh offer can be confirmed. A run that did part of the job says so; its result lists "notMade"
+// @Description  and, when some items are worth retrying, an optional "retryProposalId" offering just those, whose
+// @Description  card has "retryOf".
+// @Description  "error" carries {"message":"...","code":<http_code>,"reason":<optional>}: 404 when the offer does
+// @Description  not exist, 409 when it can't be answered (reason "offer_expired" — "proposal_resolved" says
+// @Description  "expired" the first time —, "offer_answered", or "offer_replaced" when a fresh offer replaced it),
+// @Description  names an unknown option, or the work itself was refused (no reason; the message says why).
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream
@@ -108,7 +111,8 @@ func (h *AssistantProposalsHandler) Confirm(c *fiber.Ctx) error {
 // Dismiss godoc
 // @Summary      Dismiss an assistant offer
 // @Description  Withdraws an offer the assistant proposed. Nothing runs. Returns the turn's
-// @Description  assistant.Response (action "answered").
+// @Description  assistant.Response (action "answered"). A 409 for an offer that can't be answered is
+// @Description  {"error":"...","reason":"offer_expired"|"offer_answered"}.
 // @Tags         assistant
 // @Produce      json
 // @Security     CookieAuth
@@ -126,6 +130,9 @@ func (h *AssistantProposalsHandler) Dismiss(c *fiber.Ctx) error {
 	resp, err := h.answer(reqCtx(c), assistant.AnswerRequest{ProposalID: c.Params("id")}, nil)
 	if err != nil {
 		p := h.proposalError(err)
+		if p.Reason != "" {
+			return c.Status(p.Code).JSON(fiber.Map{"error": p.Message, "reason": p.Reason})
+		}
 		return fiber.NewError(p.Code, p.Message)
 	}
 	return c.JSON(resp)
@@ -148,7 +155,7 @@ func (h *AssistantProposalsHandler) proposalError(err error) flowErrorPayload {
 		return flowErrorPayload{Message: "This offer no longer exists.", Code: fiber.StatusNotFound}
 	}
 	if ce, ok := errors.AsType[*assistant.ProposalConflictError](err); ok {
-		return flowErrorPayload{Message: ce.Msg, Code: fiber.StatusConflict}
+		return flowErrorPayload{Message: ce.Msg, Code: fiber.StatusConflict, Reason: ce.Code}
 	}
 	if msg, ok := workModelFailure(err); ok {
 		return flowErrorPayload{Message: msg, Code: fiber.StatusBadGateway}

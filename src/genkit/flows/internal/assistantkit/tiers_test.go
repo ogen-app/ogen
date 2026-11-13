@@ -2,6 +2,7 @@ package assistantkit
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -80,17 +81,19 @@ func idsTool(ran *[]string, gone map[string]bool, refuse *bool) ai.ToolFunc[idsI
 			}
 			return Conflicted("past the goal", Option{ID: "anyway", Title: "Anyway"})
 		},
-		Recheck: func(_ context.Context, in idsIn) (idsIn, error) {
-			var keep []string
+		Recheck: func(_ context.Context, in idsIn) (idsIn, []string, error) {
+			var keep, changes []string
 			for _, id := range in.IDs {
-				if !gone[id] {
+				if gone[id] {
+					changes = append(changes, id+" was deleted")
+				} else {
 					keep = append(keep, id)
 				}
 			}
 			if len(keep) == 0 {
-				return in, Refused("none of them exist any more")
+				return in, changes, Refused("none of them exist any more")
 			}
-			return idsIn{IDs: keep}, nil
+			return idsIn{IDs: keep}, changes, nil
 		},
 		Summary: func(in idsIn) string { return "Touch " + strings.Join(in.IDs, ",") },
 	}, Wrap(func(_ context.Context, in idsIn) (int, error) {
@@ -104,28 +107,31 @@ func TestGated_ConfirmedRechecks(t *testing.T) {
 	gone, refuse := map[string]bool{}, false
 	run := idsTool(&ran, gone, &refuse)
 	sink := &memSink{}
-	ctx := &ai.ToolContext{Context: WithConfirmed(WithProposalSink(t.Context(), sink))}
+	ctx := &ai.ToolContext{Context: WithOffer(WithConfirmed(WithProposalSink(t.Context(), sink)), "offer-1")}
 
 	// Nothing changed: the precheck's conflict was answered, and it runs.
-	if out, err := run(ctx, idsIn{IDs: []string{"a", "b"}}); err != nil || !out.Succeeded() || len(ran) != 2 {
+	if out, err := run(ctx, idsIn{IDs: []string{"a", "b"}}); err != nil || !out.Succeeded() || len(ran) != 2 || out.Changes != nil {
 		t.Fatalf("unchanged: out = %+v, err = %v, ran = %v", out, err, ran)
 	}
-	// Some went: nothing runs, and what still holds is offered afresh.
+	// Some went: nothing runs, and what still holds is offered afresh,
+	// replacing the offer confirmed, with what changed.
 	ran, gone["b"] = nil, true
 	out, err := run(ctx, idsIn{IDs: []string{"a", "b"}})
-	if err != nil || out.Status != StatusProposed || len(ran) != 0 || out.Summary != "Touch a" || !strings.HasPrefix(out.Reason, ChangedSince) {
+	if err != nil || out.Status != StatusProposed || len(ran) != 0 || out.Summary != "Touch a" || !strings.HasPrefix(out.Reason, ChangedSince) ||
+		!slices.Equal(out.Changes, []string{"b was deleted"}) {
 		t.Fatalf("narrowed: out = %+v, err = %v, ran = %v", out, err, ran)
 	}
-	if len(sink.got) != 1 || len(sink.got[0].Args.(idsIn).IDs) != 1 {
+	if len(sink.got) != 1 || len(sink.got[0].Args.(idsIn).IDs) != 1 || sink.got[0].Replaces != "offer-1" {
 		t.Fatalf("fresh offer = %+v", sink.got)
 	}
-	// All went: refused.
-	if out, err := run(ctx, idsIn{IDs: []string{"b"}}); err != nil || out.Status != StatusRefused || len(ran) != 0 {
+	// All went: refused, with what changed.
+	if out, err := run(ctx, idsIn{IDs: []string{"b"}}); err != nil || out.Status != StatusRefused || len(ran) != 0 || !slices.Equal(out.Changes, []string{"b was deleted"}) {
 		t.Fatalf("all gone: out = %+v, err = %v", out, err)
 	}
-	// The precheck now refuses: nothing runs.
+	// The precheck now refuses: nothing runs, and its reason is what changed.
 	refuse = true
-	if out, err := run(ctx, idsIn{IDs: []string{"a"}}); err != nil || out.Status != StatusRefused || out.Reason != ChangedSince+"the campaign was archived" || len(ran) != 0 {
+	if out, err := run(ctx, idsIn{IDs: []string{"a"}}); err != nil || out.Status != StatusRefused || out.Reason != ChangedSince+"the campaign was archived" ||
+		!slices.Equal(out.Changes, []string{"the campaign was archived"}) || len(ran) != 0 {
 		t.Fatalf("refused: out = %+v, err = %v", out, err)
 	}
 }
@@ -161,7 +167,7 @@ func halfTool() ai.ToolFunc[idsIn, Outcome[*halfOut]] {
 
 func TestGatedRetry_OffersWhatWasLeft(t *testing.T) {
 	sink := &memSink{}
-	ctx := &ai.ToolContext{Context: WithConfirmed(WithProposalSink(t.Context(), sink))}
+	ctx := &ai.ToolContext{Context: WithOffer(WithConfirmed(WithProposalSink(t.Context(), sink)), "offer-1")}
 	out, err := halfTool()(ctx, idsIn{IDs: []string{"a", "x", "b"}})
 	if err != nil || !out.Succeeded() {
 		t.Fatalf("out = %+v, err = %v", out, err)
@@ -170,7 +176,7 @@ func TestGatedRetry_OffersWhatWasLeft(t *testing.T) {
 	if r := *out.Result; len(r.Done) != 1 || len(r.NotMade) != 2 || r.RetryProposalID != "prop-1" {
 		t.Fatalf("result = %+v", r)
 	}
-	if len(sink.got) != 1 || sink.got[0].Summary != "Retry: Do x,b" || sink.got[0].Tool != "halfIDs" {
+	if len(sink.got) != 1 || sink.got[0].Summary != "Retry: Do x,b" || sink.got[0].Tool != "halfIDs" || sink.got[0].RetryOf != "offer-1" {
 		t.Fatalf("retry offer = %+v", sink.got)
 	}
 	// A run that did it all offers nothing.

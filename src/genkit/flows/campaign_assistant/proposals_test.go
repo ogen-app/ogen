@@ -66,6 +66,18 @@ func (m *memProposals) Resolve(_ context.Context, id string, status models.Assis
 	return false, nil
 }
 
+func (m *memProposals) ListByIDs(context.Context, []string) ([]models.AssistantProposal, error) {
+	return nil, nil
+}
+
+func (m *memProposals) Replacement(context.Context, string, time.Time) (string, error) {
+	return "", nil
+}
+
+func (m *memProposals) Reopen(context.Context, string) (bool, error) { return false, nil }
+
+func (m *memProposals) Expire(context.Context, string, time.Time) (bool, error) { return false, nil }
+
 var _ repository.AssistantProposalRepository = (*memProposals)(nil)
 
 // proposalState is a campaign turn whose generation engine counts its calls.

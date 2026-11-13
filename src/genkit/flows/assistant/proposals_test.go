@@ -73,6 +73,53 @@ func (m *memProposals) Resolve(_ context.Context, id string, status models.Assis
 	return false, nil
 }
 
+func (m *memProposals) Replacement(_ context.Context, id string, now time.Time) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.rows {
+		if p.Replaces == id && p.Open(now) {
+			return p.ID, nil
+		}
+	}
+	return "", nil
+}
+
+func (m *memProposals) Reopen(_ context.Context, id string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.rows {
+		if p.ID == id && p.Status == models.ProposalConfirmed {
+			p.Status, p.Chosen = models.ProposalPending, ""
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *memProposals) Expire(_ context.Context, id string, now time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.rows {
+		if p.ID == id && p.Status == models.ProposalPending && !now.Before(p.ExpiresAt) {
+			p.Status = models.ProposalExpired
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *memProposals) ListByIDs(_ context.Context, ids []string) ([]models.AssistantProposal, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []models.AssistantProposal
+	for _, p := range m.rows {
+		if slices.Contains(ids, p.ID) {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
+
 type bulkIn struct {
 	N int `json:"n"`
 }
@@ -85,13 +132,15 @@ type bulkOut struct {
 
 // brokenBulk is the count bulkThing fails on; goneBulk the one it refuses
 // once confirmed, as work whose subject went away while it waited.
-// shrunkBulk is the count that shrinks by one while its offer waits;
-// halfBulk the one that does all but 6 things.
+// shrunkBulk is the count that shrinks to 5 while its offer waits;
+// halfBulk the one that does all but 6 things; vanishedBulk the one none
+// of whose things are left once confirmed.
 const (
-	brokenBulk = 13
-	goneBulk   = 14
-	shrunkBulk = 15
-	halfBulk   = 16
+	brokenBulk   = 13
+	goneBulk     = 14
+	shrunkBulk   = 15
+	halfBulk     = 16
+	vanishedBulk = 17
 )
 
 // bulkPack has one gated tool: more than 3 items wait for a yes.
@@ -106,11 +155,15 @@ func bulkPack(ran *int) Pack {
 					Card: func(_ context.Context, in bulkIn) *assistantkit.Card {
 						return &assistantkit.Card{Verb: fmt.Sprintf("Do %d", in.N)}
 					},
-					Recheck: func(_ context.Context, in bulkIn) (bulkIn, error) {
-						if in.N == shrunkBulk {
-							in.N--
+					Recheck: func(_ context.Context, in bulkIn) (bulkIn, []string, error) {
+						switch in.N {
+						case shrunkBulk:
+							in.N = 5
+							return in, []string{"10 of the things were deleted"}, nil
+						case vanishedBulk:
+							return in, []string{"all the things were deleted"}, assistantkit.Refused("none of those things exist any more")
 						}
-						return in, nil
+						return in, nil, nil
 					},
 				}, func(in bulkIn, out *bulkOut) (bulkIn, []assistantkit.NotMade, bool) {
 					if out.Done == in.N {
@@ -405,7 +458,9 @@ func TestProposals_ConfirmFromAnotherThreadIsRefused(t *testing.T) {
 }
 
 // An offer whose subject changed while it waited runs nothing once
-// confirmed: what still holds comes back on a fresh card.
+// confirmed: it resolves stale with what changed and stays open, what still
+// holds comes back on a fresh card that replaces it, and only that one can
+// be confirmed from then on.
 func TestProposals_AnswerFromTheCardReoffersWhatStillHolds(t *testing.T) {
 	h, store, ran := proposalHarness(t)
 	store.rows = []*models.AssistantProposal{
@@ -413,15 +468,110 @@ func TestProposals_AnswerFromTheCardReoffersWhatStillHolds(t *testing.T) {
 			Summary: "Do 15 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour)},
 	}
 	var events []SSEEventKind
-	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "stale", Confirm: true}, func(k SSEEventKind, _ any) { events = append(events, k) })
-	if err != nil || *ran != 0 || !strings.HasPrefix(resp.Explanation, assistantkit.ChangedSince) {
+	var resolved []ProposalResolved
+	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "stale", Confirm: true}, func(k SSEEventKind, data any) {
+		events = append(events, k)
+		if r, ok := data.(ProposalResolved); ok {
+			resolved = append(resolved, r)
+		}
+	})
+	if err != nil || *ran != 0 || resp.Explanation != "Nothing ran: 10 of the things were deleted. What still holds is offered again." {
 		t.Fatalf("resp = %+v, err = %v, ran = %d", resp, err, *ran)
 	}
-	if len(resp.Proposals) != 1 || resp.Proposals[0].Summary != "Do 14 things" || len(store.rows) != 2 || store.rows[0].Status != models.ProposalConfirmed || store.rows[1].Status != models.ProposalPending {
-		t.Fatalf("cards = %+v, rows = %d", resp.Proposals, len(store.rows))
+	if len(resp.Proposals) != 1 || resp.Proposals[0].Summary != "Do 5 things" || resp.Proposals[0].Replaces != "stale" ||
+		len(store.rows) != 2 || store.rows[0].Status != models.ProposalPending || store.rows[1].Replaces != "stale" {
+		t.Fatalf("cards = %+v, rows = %+v", resp.Proposals, store.rows)
+	}
+	fresh := resp.Proposals[0].ID
+	want := ProposalResolved{ID: "stale", Status: resolvedStale, Reasons: []string{"10 of the things were deleted"}, ReplacedBy: fresh}
+	if len(resolved) != 1 || !slices.Equal(resolved[0].Reasons, want.Reasons) || resolved[0].Status != want.Status || resolved[0].ReplacedBy != fresh ||
+		len(resp.Resolved) != 1 || resp.Resolved[0].ReplacedBy != fresh {
+		t.Fatalf("resolved = %+v, in the response %+v; want %+v", resolved, resp.Resolved, want)
 	}
 	if !slices.Equal(events, []SSEEventKind{SSEEventProposalCreated, SSEEventProposalResolved, SSEEventComplete}) {
 		t.Fatalf("events = %v", events)
+	}
+	thread, _ := h.msgs.ListRecent(t.Context(), models.AssistantScopeWorkspace, "", 10)
+	if len(thread) != 2 || thread[0].Content != "Stale: Do 15 things" {
+		t.Fatalf("thread = %+v", thread)
+	}
+	// The stale offer stays open, but the fresh one is the one to answer.
+	_, err = h.tools.answer(t.Context(), AnswerRequest{ProposalID: "stale", Confirm: true}, nil)
+	if ce, ok := errors.AsType[*ProposalConflictError](err); !ok || ce.Code != codeOfferReplaced || *ran != 0 {
+		t.Fatalf("confirm the stale one again: err = %v, ran = %d", err, *ran)
+	}
+	if open, _ := store.ListOpen(t.Context(), models.AssistantScopeWorkspace, "", time.Now()); len(open) != 2 {
+		t.Fatalf("open = %d", len(open))
+	}
+	if _, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: fresh, Confirm: true}, nil); err != nil || *ran != 5 {
+		t.Fatalf("fresh: err = %v, ran = %d", err, *ran)
+	}
+}
+
+// An offer none of whose subject is left runs nothing: it resolves stale
+// with what changed, stays open, and the answer is no conflict.
+func TestProposals_AnswerFromTheCardNothingHolds(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	store.rows = []*models.AssistantProposal{
+		{ID: "vanished", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(vanishedBulk)},
+			Summary: "Do 17 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "vanished", Confirm: true}, nil)
+	if err != nil || *ran != 0 || resp.Explanation != "Nothing ran: all the things were deleted." || len(resp.Proposals) != 0 {
+		t.Fatalf("resp = %+v, err = %v, ran = %d", resp, err, *ran)
+	}
+	if store.rows[0].Status != models.ProposalPending || len(resp.Resolved) != 1 || resp.Resolved[0].Status != resolvedStale || resp.Resolved[0].ReplacedBy != "" {
+		t.Fatalf("row = %+v, resolved = %+v", store.rows[0], resp.Resolved)
+	}
+}
+
+// A yes after the offer's expiry runs nothing: the offer is marked
+// expired, resolves so, and the answer is a conflict saying why.
+func TestProposals_AnswerFromTheCardExpired(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	store.rows = []*models.AssistantProposal{
+		{ID: "old", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(5)},
+			Summary: "Do 5 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(-time.Minute)},
+	}
+	var resolved []ProposalResolved
+	_, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "old", Confirm: true}, func(_ SSEEventKind, data any) {
+		if r, ok := data.(ProposalResolved); ok {
+			resolved = append(resolved, r)
+		}
+	})
+	if ce, ok := errors.AsType[*ProposalConflictError](err); !ok || ce.Code != codeOfferExpired || *ran != 0 {
+		t.Fatalf("err = %v, ran = %d; want an expired conflict", err, *ran)
+	}
+	if store.rows[0].Status != models.ProposalExpired || len(resolved) != 1 || resolved[0].Status != resolvedExpired {
+		t.Fatalf("row = %+v, resolved = %+v", store.rows[0], resolved)
+	}
+	thread, _ := h.msgs.ListRecent(t.Context(), models.AssistantScopeWorkspace, "", 10)
+	if len(thread) != 2 || thread[0].Content != "Expired: Do 5 things" {
+		t.Fatalf("thread = %+v", thread)
+	}
+	// Once marked, it stays expired, and isn't announced again.
+	resolved = nil
+	if _, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "old", Confirm: true}, nil); !isConflict(err) || len(resolved) != 0 {
+		t.Fatalf("again: err = %v", err)
+	}
+}
+
+// A typed yes to an offer that changed resolves stale, as the card's does.
+func TestProposals_ConfirmInChatStale(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	store.rows = []*models.AssistantProposal{
+		{ID: "stale", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(shrunkBulk)},
+			Summary: "Do 15 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	home := viewOf(t, `{"version":1,"screen":"home","scope":{"kind":"workspace"}}`)
+	resp, _, _, err := h.turn(home, "yes",
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": "stale"}}),
+		fakemodel.Answer(`{"explanation":"One went; here's the rest.","action":"answered"}`))
+	if err != nil || *ran != 0 {
+		t.Fatalf("err = %v, ran = %d", err, *ran)
+	}
+	if len(resp.Resolved) != 1 || resp.Resolved[0].Status != resolvedStale || resp.Resolved[0].ReplacedBy == "" || store.rows[0].Status != models.ProposalPending {
+		t.Fatalf("resolved = %+v, row = %+v", resp.Resolved, store.rows[0])
 	}
 }
 

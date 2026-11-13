@@ -22,6 +22,11 @@ type Proposal struct {
 	// Card is the card's details; nil shows the summary alone.
 	Card    *Card
 	Options []Option
+	// Replaces is the confirmed offer this one was made afresh for, because
+	// what that one was made on changed; RetryOf is the confirmed offer whose
+	// run left the items this one tries again. Each is empty otherwise.
+	Replaces string
+	RetryOf  string
 }
 
 // ProposalSink stores held-back calls. The runner puts one in the context of
@@ -57,6 +62,8 @@ type sinkKey struct{}
 
 type confirmedKey struct{}
 
+type offerKey struct{}
+
 // WithProposalSink returns ctx carrying the sink gated tools store into.
 func WithProposalSink(ctx context.Context, s ProposalSink) context.Context {
 	return context.WithValue(ctx, sinkKey{}, s)
@@ -71,6 +78,18 @@ func WithConfirmed(ctx context.Context) context.Context {
 // Confirmed reports whether ctx runs a confirmed call.
 func Confirmed(ctx context.Context) bool {
 	v, _ := ctx.Value(confirmedKey{}).(bool)
+	return v
+}
+
+// WithOffer returns ctx running the confirmed offer id, so an offer the run
+// makes — afresh, or a retry — names the one it follows.
+func WithOffer(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, offerKey{}, id)
+}
+
+// OfferID is the confirmed offer ctx runs; empty outside one.
+func OfferID(ctx context.Context) string {
+	v, _ := ctx.Value(offerKey{}).(string)
 	return v
 }
 
@@ -96,10 +115,11 @@ type Gate[In any] struct {
 	Card func(context.Context, In) *Card
 	// Recheck runs when the user confirms, after Precheck, and returns the
 	// call narrowed to what still holds, e.g. without the ideas deleted
-	// while the offer waited. A call that narrowed is offered afresh
+	// while the offer waited, with what changed in plain words, e.g. "2 of
+	// the 5 ideas no longer exist". A call that narrowed is offered afresh
 	// instead of run; a *Refusal means nothing holds any more. Nil keeps
 	// the call as stored.
-	Recheck func(context.Context, In) (In, error)
+	Recheck func(context.Context, In) (In, []string, error)
 }
 
 // Gated holds a proposal-tier tool back until the user confirms it. Unless
@@ -157,22 +177,23 @@ const ChangedSince = "Things changed since the offer: "
 
 // runConfirmed runs a call the user confirmed, unless what it was offered on
 // changed while it waited: a call its precheck now refuses runs nothing, and
-// one that narrowed is offered afresh with what still holds. A conflict the
-// precheck raises again was the user's to answer, and they did.
+// one that narrowed is offered afresh with what still holds. Either way the
+// outcome lists what changed. A conflict the precheck raises again was the
+// user's to answer, and they did.
 func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], in In, next ai.ToolFunc[In, Outcome[Out]]) (Outcome[Out], error) {
 	if gate.Precheck != nil {
 		err := gate.Precheck(ctx, in)
 		if r, ok := errors.AsType[*Refusal](err); ok {
-			return Refuse[Out](ChangedSince+r.Reason, r.Alternatives...), nil
+			return changedSince[Out](r, nil), nil
 		}
 		if _, ok := errors.AsType[*ConflictError](err); err != nil && !ok {
 			return Outcome[Out]{}, err
 		}
 	}
 	if gate.Recheck != nil {
-		fresh, err := gate.Recheck(ctx, in)
+		fresh, changes, err := gate.Recheck(ctx, in)
 		if r, ok := errors.AsType[*Refusal](err); ok {
-			return Refuse[Out](ChangedSince+r.Reason, r.Alternatives...), nil
+			return changedSince[Out](r, changes), nil
 		}
 		if err != nil {
 			return Outcome[Out]{}, err
@@ -182,12 +203,29 @@ func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], 
 			return Outcome[Out]{}, fmt.Errorf("recheck %s: %w", tool, err)
 		}
 		if !same {
-			out, err := propose[Out](ctx, gate.proposal(ctx, tool, fresh), StatusProposed)
+			p := gate.proposal(ctx, tool, fresh)
+			p.Replaces = OfferID(ctx)
+			out, err := propose[Out](ctx, p, StatusProposed)
 			out.Reason = ChangedSince + "nothing ran, and what still holds is offered again."
+			out.Changes = changes
+			if len(changes) == 0 {
+				out.Changes = []string{"some of what the offer was made on changed"}
+			}
 			return out, err
 		}
 	}
 	return next(ctx, in)
+}
+
+// changedSince is a confirmed call that ran nothing because r now holds;
+// changes say what changed, else r's reason does.
+func changedSince[Out any](r *Refusal, changes []string) Outcome[Out] {
+	out := Refuse[Out](ChangedSince+r.Reason, r.Alternatives...)
+	out.Changes = changes
+	if len(changes) == 0 {
+		out.Changes = []string{r.Reason}
+	}
+	return out
 }
 
 // Retry reads a run that did part of the job: what it left undone, and the
@@ -213,7 +251,7 @@ func GatedRetry[In any, Out PartialResult](tool string, gate Gate[In], retry Ret
 		}
 		// The work has run either way: an offer that can't be stored loses
 		// only the retry.
-		id, err := Offer(ctx, Proposal{Tool: tool, Args: again, Summary: "Retry: " + gate.summary(ctx, tool, again)})
+		id, err := Offer(ctx, Proposal{Tool: tool, Args: again, Summary: "Retry: " + gate.summary(ctx, tool, again), RetryOf: OfferID(ctx)})
 		if err != nil {
 			slog.WarnContext(ctx, "offer a retry failed", "tool", tool, "err", err)
 		}
