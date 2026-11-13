@@ -104,6 +104,13 @@ func setAutoPublish(ctx context.Context, d Deps, in AutoPublishInput) (*AutoPubl
 	if err != nil {
 		return nil, err
 	}
+	// Counted before the change is saved, so a failed count can't leave a
+	// change without its undo.
+	p := slug(in.Platform)
+	unaffected, err := scheduledOtherWay(ctx, d, p, in.On)
+	if err != nil {
+		return nil, err
+	}
 	// Conditional on what was read, so a change made meanwhile isn't
 	// overwritten.
 	ok, err := d.AutoPublish.ReplaceIf(ctx, nil, c.before, c.after)
@@ -114,12 +121,7 @@ func setAutoPublish(ctx context.Context, d Deps, in AutoPublishInput) (*AutoPubl
 		return nil, assistantkit.Refused("auto-publishing was changed meanwhile; check workspaceSetup and ask again")
 	}
 	assistantkit.Touch(ctx, "auto_publish", "")
-	p := slug(in.Platform)
 	label, _ := d.ConnectPlatform(p)
-	unaffected, err := scheduledOtherWay(ctx, d, p, in.On)
-	if err != nil {
-		return nil, err
-	}
 	done := label + " posts scheduled from now on go out on their own"
 	if !in.On {
 		done = label + " posts scheduled from now on wait to be published by hand"

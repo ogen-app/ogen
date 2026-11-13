@@ -12,6 +12,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/activity/report"
@@ -174,6 +175,8 @@ type memDigest struct {
 	// out are the members who turned the email off; optedOut is everyone.
 	out     map[string]bool
 	emailed []string
+	// dates are the weeks EmailTo was asked for.
+	dates []string
 }
 
 func (m *memDigest) Build(_ context.Context, date string) (*weeklyreport.Week, error) {
@@ -195,6 +198,7 @@ func (m *memDigest) EmailTo(ctx context.Context, userID, date string) (*weeklyre
 		return nil, err
 	}
 	m.emailed = append(m.emailed, userID)
+	m.dates = append(m.dates, date)
 	return m.Build(ctx, date)
 }
 
@@ -296,6 +300,27 @@ func TestSetAutoPublish_ScheduledUnaffected(t *testing.T) {
 	}
 }
 
+// failingCounts can't count the scheduled posts.
+type failingCounts struct{ repository.PostRepository }
+
+func (failingCounts) ScheduledCounts(context.Context) ([]repository.ScheduledCount, error) {
+	return nil, errors.New("db down")
+}
+
+// A count that fails stops the change before it is saved, so no change is
+// left without its undo.
+func TestSetAutoPublish_CountFailsFirst(t *testing.T) {
+	ctx, _ := turn(t, workspace, nil)
+	allow, actions := &memAllowlist{}, &memActions{}
+	d := Deps{AutoPublish: allow, ConnectPlatform: platformsKnown, Actions: actions, Posts: failingCounts{}}
+	if _, err := setAutoPublish(ctx, d, AutoPublishInput{Platform: "linkedin", On: true}); err == nil {
+		t.Fatal("a failed count is lost")
+	}
+	if len(allow.list) != 0 || len(actions.rows) != 0 {
+		t.Fatalf("list %v, undo %v; want nothing saved", allow.list, actions.rows)
+	}
+}
+
 // A schedule moved says from when to when, a change the assistant made says
 // who asked, the latest failure says why, and a narrowed history says how.
 func TestPostHistory_Changes(t *testing.T) {
@@ -308,6 +333,7 @@ func TestPostHistory_Changes(t *testing.T) {
 			{VersionNumber: 2, CreatedAt: at(2, 9), Creator: models.PostVersionCreatorUser, CreatedBy: "u1"},
 		}},
 		PostLogs: memPostLogs{list: []models.PostLog{
+			{EventTimestamp: at(21, 9), EventType: models.PostLogEventUserSchedule, Actor: "u1", Payload: `{"scheduled_at":"2026-04-22T10:00:00Z"}`},
 			{EventTimestamp: at(20, 10), EventType: models.PostLogEventStateTransition, Actor: models.ActorSystem, FromStatus: &sched, ToStatus: &failed},
 			{EventTimestamp: at(15, 15), EventType: models.PostLogEventUserSchedule, Actor: "u1", Payload: `{"scheduled_at":"2026-04-20T10:00:00Z","trigger":"assistant"}`},
 			{EventTimestamp: at(14, 9), EventType: models.PostLogEventUserSchedule, Actor: "u1", Payload: `{"scheduled_at":"2026-04-18T10:00:00Z","trigger":"api"}`},
@@ -325,10 +351,14 @@ func TestPostHistory_Changes(t *testing.T) {
 	for _, e := range out.Entries {
 		changes = append(changes, e.Change)
 	}
-	if !slices.Equal(changes, []string{"failed", "rescheduled", "scheduled", "unscheduled", "scheduled", "version", "version"}) {
+	if !slices.Equal(changes, []string{"scheduled", "failed", "rescheduled", "scheduled", "unscheduled", "scheduled", "version", "version"}) {
 		t.Fatalf("changes = %v", changes)
 	}
-	failure, moved, after := out.Entries[0], out.Entries[1], out.Entries[2]
+	// After a failure the next schedule is new: the failed one ended.
+	if again := out.Entries[0]; again.From != nil || !again.To.Equal(at(22, 10)) {
+		t.Fatalf("schedule after the failure = %+v", again)
+	}
+	failure, moved, after := out.Entries[1], out.Entries[2], out.Entries[3]
 	if failure.Reason != "Instagram needs reconnecting" || failure.Kind != "event" {
 		t.Fatalf("failure = %+v", failure)
 	}
@@ -344,7 +374,7 @@ func TestPostHistory_Changes(t *testing.T) {
 	}
 
 	out, err = postHistory(ctx, d, PostHistoryInput{Since: "2026-04-14", Changes: []string{"scheduled", "rescheduled"}})
-	if err != nil || len(out.Entries) != 2 || out.Scope == nil || out.Scope.Since != "2026-04-14" || len(out.Scope.Changes) != 2 {
+	if err != nil || len(out.Entries) != 3 || out.Scope == nil || out.Scope.Since != "2026-04-14" || len(out.Scope.Changes) != 2 {
 		t.Fatalf("narrowed = %+v, %v", out, err)
 	}
 	_, err = postHistory(ctx, d, PostHistoryInput{Changes: []string{"edited"}})
@@ -367,6 +397,10 @@ func TestEmailWeeklyDigest_Recipients(t *testing.T) {
 	want := []DigestSkip{{Recipient: "dan@else.test", Reason: digestNotMember}, {Recipient: "max@acme.test", Reason: digestOptedOut}}
 	if !slices.Equal(out.NotSent, want) {
 		t.Fatalf("not sent = %+v; want %+v", out.NotSent, want)
+	}
+	// Every send is the week reported, not "last week" worked out again.
+	if !slices.Equal(dg.dates, []string{"2026-11-02"}) {
+		t.Fatalf("emailed weeks = %v", dg.dates)
 	}
 
 	// No member named sends nothing and needs no offer; the result says why.
@@ -392,6 +426,29 @@ func TestEmailWeeklyDigest_Recipients(t *testing.T) {
 	}
 	if line := digestSummary(ctx, d, EmailDigestInput{Week: "2026-11-02", Recipients: []string{"u1", "u2"}}); line != "Email the report for the week of 2026-11-02 to 2 people" {
 		t.Fatalf("summary = %q", line)
+	}
+}
+
+// twoDans is a workspace with two members of one name.
+type twoDans struct{ repository.UserRepository }
+
+func (twoDans) List(context.Context) ([]models.User, error) {
+	return []models.User{{ID: "u1", Name: "Dan", Email: "dan@acme.test"}, {ID: "u2", Name: "Dan", Email: "dan.cole@acme.test"}}, nil
+}
+
+// A name two members share is refused with their emails, never guessed; an
+// email or id still picks one of them.
+func TestDigestRecipients_AmbiguousName(t *testing.T) {
+	ctx, _ := turn(t, workspace, nil)
+	d := Deps{Users: twoDans{}}
+	_, _, err := digestRecipients(ctx, d, []string{"dan"})
+	r, ok := errors.AsType[*assistantkit.Refusal](err)
+	if !ok || !slices.Equal(r.Alternatives, []string{"dan@acme.test", "dan.cole@acme.test"}) {
+		t.Fatalf("refusal = %v", err)
+	}
+	members, _, err := digestRecipients(ctx, d, []string{"DAN.COLE@acme.test"})
+	if err != nil || len(members) != 1 || members[0].ID != "u2" {
+		t.Fatalf("by email = %+v, %v", members, err)
 	}
 }
 

@@ -230,6 +230,11 @@ func logEntries(logs []models.PostLog, names map[string]string, failureReason st
 				e.Change, e.What = changeFailed, "didn't go out"
 				lastFailed = len(entries)
 			}
+			// Failing, going out or going back to draft ends the schedule,
+			// so the next one is new, not a move.
+			if l.ToStatus != nil && (*l.ToStatus == models.PostStatusFailed || *l.ToStatus == models.PostStatusPublished || *l.ToStatus == models.PostStatusDraft) {
+				scheduled = nil
+			}
 		case models.PostLogEventUserSchedule:
 			at, err := time.Parse(time.RFC3339, p.ScheduledAt)
 			if err == nil {

@@ -351,7 +351,7 @@ func campaignRow(g CampaignGoal, l links) models.WeeklyCampaign {
 
 func renderIdeas(f Facts, l links) *models.WeeklyIdeas {
 	c := f.Counts
-	if c.IdeasWaiting == 0 && c.IdeasCreated == 0 && c.AssetsCreated == 0 && c.RemindersDue == 0 {
+	if c.IdeasWaiting == 0 && c.IdeasCreated == 0 && c.IdeasDecided == 0 && c.AssetsCreated == 0 && c.RemindersDue == 0 {
 		return nil
 	}
 	i := &models.WeeklyIdeas{URL: l.to("/ideas"), Decided: c.IdeasDecided, WaitingCount: c.IdeasWaiting}
@@ -365,6 +365,10 @@ func renderIdeas(f Facts, l links) *models.WeeklyIdeas {
 	var parts []string
 	if c.IdeasCreated > 0 {
 		parts = append(parts, plural(c.IdeasCreated, "new idea", "new ideas"))
+	}
+	// Said, so a week of decisions alone never shows an empty section.
+	if c.IdeasDecided > 0 {
+		parts = append(parts, grouped(c.IdeasDecided)+" decided")
 	}
 	if c.AssetsCreated > 0 {
 		parts = append(parts, plural(c.AssetsCreated, "new asset", "new assets"))
