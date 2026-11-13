@@ -3,15 +3,20 @@ package server
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
+	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/config"
+	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 )
@@ -36,14 +41,56 @@ func newAssetAnalysis(d *deps) *assetanalysis.Service {
 	}, d.entitlements.limiter, d.hub)
 	svc.SetJobs(d.enqueuer, d.cfg.AnalysisRebriefDebounce, d.cfg.AnalysisEditDebounce)
 
-	d.ingest.pdf.Analysis = svc
-	d.ingest.document.Analysis = svc
-	d.ingest.audio.Analysis = svc
-	d.ingest.url.Analysis = svc
+	settled := sourceSettled{AnalysisScheduler: svc, ready: sourceReady(d)}
+	d.ingest.pdf.Analysis = settled
+	d.ingest.document.Analysis = settled
+	d.ingest.audio.Analysis = settled
+	d.ingest.url.Analysis = settled
 	// The embedder only runs for authored assets (notes, Markdown), which
 	// are re-saved as they are typed, so their analysis is debounced.
-	flows.SetOnAssetEmbedded(svc.ScheduleEdited)
+	flows.SetOnAssetEmbedded(func(ctx context.Context, tenantID, assetID string) {
+		svc.ScheduleEdited(ctx, tenantID, assetID)
+		settled.ready(ctx, tenantID, assetID)
+	})
 	return svc
+}
+
+// sourceSettled queues an asset's analyses once its text settles, and tells
+// the assistant the asset is ready, for the requests waiting on a source.
+type sourceSettled struct {
+	queues.AnalysisScheduler
+	ready func(ctx context.Context, tenantID, assetID string)
+}
+
+func (s sourceSettled) ScheduleAsset(ctx context.Context, tenantID, assetID string) {
+	s.AnalysisScheduler.ScheduleAsset(ctx, tenantID, assetID)
+	s.ready(ctx, tenantID, assetID)
+}
+
+// sourceReady offers again, in the thread of each campaign holding a ready
+// asset, the requests that waited for a source. Best-effort: a failure is
+// logged, and the ingest it runs in goes on.
+func sourceReady(d *deps) func(ctx context.Context, tenantID, assetID string) {
+	return func(ctx context.Context, tenantID, assetID string) {
+		if d.genkit == nil {
+			return
+		}
+		ctx = tenantctx.With(ctx, tenantID)
+		asset, err := d.r.pieceRepo.GetByID(ctx, assetID)
+		if err != nil || !models.IsAnalyzableAssetStatus(asset.Status) {
+			return
+		}
+		campaignIDs, err := d.r.assetAnalysisRepo.CampaignIDsWithAsset(ctx, assetID)
+		if err != nil {
+			slog.WarnContext(ctx, "list the ready source's campaigns failed", logging.AttrComponent, "assistant", "asset_id", assetID, logging.AttrError, err)
+			return
+		}
+		for _, id := range campaignIDs {
+			if err := d.genkit.SourceReady(ctx, id, asset.Title); err != nil {
+				slog.WarnContext(ctx, "offer the requests waiting on a source failed", logging.AttrComponent, "assistant", "campaign_id", id, "asset_id", assetID, logging.AttrError, err)
+			}
+		}
+	}
 }
 
 // assetAnalysisFlows are the callbacks of the analysis flows.

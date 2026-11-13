@@ -42,13 +42,6 @@ func traced(ctx context.Context, st *requestState, g assistantkit.Grounding) ass
 	})
 }
 
-// The options of the choice generation without sources becomes.
-const (
-	OptionAddDocument = "add_document"
-	OptionImportPage  = "import_page"
-	OptionExploratory = "exploratory"
-)
-
 // SourceOptions are the ways forward from generation that would come from
 // general knowledge: add a document, import a page, or run tool with
 // exploratory, its call with the exploratory flag set. Picking one of the
@@ -56,11 +49,11 @@ const (
 // the source is ready.
 func SourceOptions(tool string, exploratory any) []assistantkit.Option {
 	return []assistantkit.Option{
-		{ID: OptionAddDocument, Title: "Add a document", Description: "Opens the upload on the campaign's Assets tab.", Recommended: true,
+		{ID: assistantkit.OptionAddDocument, Title: "Add a document", Description: "Opens the upload on the campaign's Assets tab.", Recommended: true,
 			Why: "Posts drawn from your own material say what's true of you, not what's true in general.", Tool: "openAddSource", Args: OpenAddSourceInput{Via: assistant.AddSourceUpload}},
-		{ID: OptionImportPage, Title: "Import a page", Description: "Reads a web page and adds it to the campaign's sources.",
+		{ID: assistantkit.OptionImportPage, Title: "Import a page", Description: "Reads a web page and adds it to the campaign's sources.",
 			Input: &assistantkit.OptionInput{Kind: assistantkit.OptionInputURL, Label: "Page link", Arg: "url"}, Tool: "importPage", Args: struct{}{}},
-		{ID: OptionExploratory, Title: "Go ahead without sources (marked not grounded)", Tool: tool, Args: exploratory},
+		{ID: assistantkit.OptionExploratory, Title: "Go ahead without sources (marked not grounded)", Tool: tool, Args: exploratory},
 	}
 }
 

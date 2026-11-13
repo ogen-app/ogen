@@ -65,6 +65,8 @@ type confirmedKey struct{}
 
 type offerKey struct{}
 
+type offeringKey struct{}
+
 // WithProposalSink returns ctx carrying the sink gated tools store into.
 func WithProposalSink(ctx context.Context, s ProposalSink) context.Context {
 	return context.WithValue(ctx, sinkKey{}, s)
@@ -91,6 +93,17 @@ func WithOffer(ctx context.Context, id string) context.Context {
 // OfferID is the confirmed offer ctx runs; empty outside one.
 func OfferID(ctx context.Context) string {
 	v, _ := ctx.Value(offerKey{}).(string)
+	return v
+}
+
+// withOffering marks ctx as offering a call again rather than running it:
+// its gate offers it whatever its size, made afresh for OfferID(ctx).
+func withOffering(ctx context.Context) context.Context {
+	return context.WithValue(ctx, offeringKey{}, true)
+}
+
+func offering(ctx context.Context) bool {
+	v, _ := ctx.Value(offeringKey{}).(bool)
 	return v
 }
 
@@ -146,7 +159,7 @@ func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome
 				return Outcome[Out]{}, err
 			}
 		}
-		if gate.Needs != nil && !gate.Needs(ctx, in) {
+		if gate.Needs != nil && !gate.Needs(ctx, in) && !offering(ctx) {
 			return next(ctx, in)
 		}
 		return propose[Out](ctx, gate.proposal(ctx, tool, in), StatusProposed)
@@ -297,6 +310,9 @@ func propose[Out any](ctx context.Context, p Proposal, status Status) (Outcome[O
 	sink, _ := ctx.Value(sinkKey{}).(ProposalSink)
 	if sink == nil {
 		return Outcome[Out]{}, ErrNoProposalSink
+	}
+	if offering(ctx) && p.Replaces == "" {
+		p.Replaces = OfferID(ctx)
 	}
 	id, err := sink.Propose(ctx, p)
 	if err != nil {

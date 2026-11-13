@@ -121,6 +121,22 @@ func (r *Registry) RunConfirmed(ctx context.Context, name string, args any) (any
 	return tool.RunRaw(WithConfirmed(ctx), args)
 }
 
+// OfferAgain offers a gated tool's call again, made afresh for the offer
+// ctx names (WithOffer): its precheck runs, and the call is offered
+// whatever its size, its card made as the gate makes it. Nothing runs. A
+// tool with no gate can't be offered.
+func (r *Registry) OfferAgain(ctx context.Context, name string, args any) (any, error) {
+	s, ok := r.Lookup(name)
+	if !ok || !isGated(name) {
+		return nil, fmt.Errorf("assistantkit: no gated tool %q to offer", name)
+	}
+	tool, ok := s.Tool.(ai.Tool)
+	if !ok {
+		return nil, fmt.Errorf("assistantkit: tool %q cannot be run directly", name)
+	}
+	return tool.RunRaw(withOffering(ctx), args)
+}
+
 // Actions returns the distinct response actions of the given packs in
 // registration order.
 func (r *Registry) Actions(packs ...string) []Action {

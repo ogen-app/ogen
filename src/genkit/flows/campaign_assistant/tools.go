@@ -431,7 +431,7 @@ func toolOpenAddSource(ctx context.Context, in OpenAddSourceInput) (*OpenAddSour
 	if err := assistant.OpenAddSource(ctx, st.campaignID, in.Via); err != nil {
 		return &OpenAddSourceOutput{Note: "Open the campaign's Assets tab to upload a document or import a link."}, nil
 	}
-	return &OpenAddSourceOutput{Opened: true, Note: "The campaign's Assets tab is open to upload a document or import a link. Once it is read, ask again and the posts will draw on it."}, nil
+	return &OpenAddSourceOutput{Opened: true, Note: "The campaign's Assets tab is open to upload a document or import a link. Once it is read, the request waiting on it is offered again, drawing on it."}, nil
 }
 
 // AssetExcerpt is one relevant chunk of an attached asset.

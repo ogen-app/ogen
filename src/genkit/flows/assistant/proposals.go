@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -470,7 +471,7 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	if refused {
 		return nil, &ProposalConflictError{Msg: reason}
 	}
-	resp := &Response{Action: actionAnswered, Explanation: answered(p, req.Confirm, result), Result: result}
+	resp := &Response{Action: actionAnswered, Explanation: answered(p, req.Confirm, req.OptionID, result), Result: result}
 	t.finish(st, resp)
 	// The answer joins the thread, so the next chat turn knows it happened.
 	// The work has run, so a failed write marks the reply unsaved rather
@@ -485,11 +486,17 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	return resp, nil
 }
 
-// answered is the reply to an offer answered from its card, with what its
-// work returned.
-func answered(p *models.AssistantProposal, confirmed bool, result any) string {
+// answered is the reply to an offer answered from its card with the option
+// chosen, with what its work returned.
+func answered(p *models.AssistantProposal, confirmed bool, chosen string, result any) string {
 	if !confirmed {
 		return "Dismissed: " + p.Summary
+	}
+	// Going to add a source leaves the request waiting for it.
+	if slices.Contains(assistantkit.AwaitingSource, chosen) {
+		if _, refused := refusedResult(result); !refused {
+			return "Once the source is read, I'll offer this again, drawing on it."
+		}
 	}
 	// What the offer was made on changed while it waited: nothing ran, the
 	// offer stays open, and what still holds may wait on a fresh card.

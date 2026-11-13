@@ -63,8 +63,10 @@ func TestProposals_OptionTakesInput(t *testing.T) {
 	if ce, ok := errors.AsType[*ProposalConflictError](err); !ok || ce.Code != codeInputRequired || len(imported) != 0 || store.rows[0].Status != models.ProposalPending {
 		t.Fatalf("without input: err = %v, imported = %v, status = %s", err, imported, store.rows[0].Status)
 	}
-	_, err = h.tools.answer(t.Context(), AnswerRequest{ProposalID: id, OptionID: "import_page", Input: " https://example.com/page ", Confirm: true}, nil)
-	if err != nil || !slices.Equal(imported, []string{"https://example.com/page"}) || store.rows[0].Chosen != "import_page" {
-		t.Fatalf("with input: err = %v, imported = %v, row = %+v", err, imported, store.rows[0])
+	// Going to add a source says the request waits for it.
+	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: id, OptionID: "import_page", Input: " https://example.com/page ", Confirm: true}, nil)
+	if err != nil || !slices.Equal(imported, []string{"https://example.com/page"}) || store.rows[0].Chosen != "import_page" ||
+		!strings.Contains(resp.Explanation, "offer this again") {
+		t.Fatalf("with input: err = %v, imported = %v, row = %+v, resp = %+v", err, imported, store.rows[0], resp)
 	}
 }

@@ -30,6 +30,10 @@ type AssistantProposalRepository interface {
 	// Replacement returns the id of the pending, unexpired offer made afresh
 	// for id; "" when there is none.
 	Replacement(ctx context.Context, id string, now time.Time) (string, error)
+	// ListAwaiting returns a scope's offers confirmed with one of the chosen
+	// options at or after since, oldest first, leaving out one any offer
+	// already replaces: the offers still waiting on what that option set off.
+	ListAwaiting(ctx context.Context, kind models.AssistantScopeKind, scopeID string, chosen []string, since time.Time) ([]models.AssistantProposal, error)
 	// Resolve moves an open proposal to status (confirmed or dismissed),
 	// recording the chosen option and who resolved it. It reports false when
 	// the proposal was no longer open — already resolved or expired — so a
@@ -116,6 +120,20 @@ func (r *assistantProposalRepository) Replacement(ctx context.Context, id string
 		return "", err
 	}
 	return ids[0], nil
+}
+
+func (r *assistantProposalRepository) ListAwaiting(ctx context.Context, kind models.AssistantScopeKind, scopeID string, chosen []string, since time.Time) ([]models.AssistantProposal, error) {
+	if len(chosen) == 0 {
+		return nil, nil
+	}
+	var out []models.AssistantProposal
+	err := r.db.NewSelect().Model(&out).
+		Where("ap.scope_kind = ? AND ap.scope_id = ?", kind, scopeID).
+		Where("ap.status = ? AND ap.chosen IN (?) AND ap.resolved_at >= ?", models.ProposalConfirmed, bun.List(chosen), since).
+		Where("NOT EXISTS (SELECT 1 FROM assistant_proposals r WHERE r.replaces = ap.id AND r.tenant_id = ap.tenant_id)").
+		OrderExpr("ap.resolved_at, ap.id").
+		Scan(ctx)
+	return out, err
 }
 
 func (r *assistantProposalRepository) Reopen(ctx context.Context, id string) (bool, error) {
