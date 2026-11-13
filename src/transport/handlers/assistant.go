@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -265,13 +266,21 @@ func (h *AssistantHandler) withOffers(ctx context.Context, msgs []models.Assista
 	if err != nil {
 		return err
 	}
+	// The offers made afresh are read on their own: the turn that made one
+	// may not be in the thread, e.g. when its answer failed to save.
+	fresh, err := h.proposals.ListReplacing(ctx, ids)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	states := make(map[string]models.AssistantOfferState, len(rows))
 	for _, p := range rows {
 		states[p.ID] = p.State(now)
 	}
-	for _, p := range rows {
-		if s, ok := states[p.Replaces]; ok && p.Replaces != "" {
+	// The latest offer made afresh for one is its replacement.
+	slices.SortFunc(fresh, func(a, b models.AssistantProposal) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	for _, p := range fresh {
+		if s, ok := states[p.Replaces]; ok {
 			s.ReplacedBy = p.ID
 			states[p.Replaces] = s
 		}

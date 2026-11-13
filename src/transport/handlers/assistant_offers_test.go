@@ -35,6 +35,10 @@ func (r offerRepo) ListByIDs(_ context.Context, ids []string) ([]models.Assistan
 	return slices.DeleteFunc(slices.Clone(r.rows), func(p models.AssistantProposal) bool { return !slices.Contains(ids, p.ID) }), nil
 }
 
+func (r offerRepo) ListReplacing(_ context.Context, ids []string) ([]models.AssistantProposal, error) {
+	return slices.DeleteFunc(slices.Clone(r.rows), func(p models.AssistantProposal) bool { return !slices.Contains(ids, p.Replaces) }), nil
+}
+
 // A model turn in the history carries the offers it made or answered as
 // they stand now: a stale offer names the fresh one that replaced it, a
 // pending one past its expiry reads expired, and a retry names its run.
@@ -80,5 +84,33 @@ func TestAssistantThread_Offers(t *testing.T) {
 	}
 	if m5 := msgs[4].Offers; len(m5) != 1 || m5[0].RetryOf != "o0" {
 		t.Fatalf("m5 offers = %+v", m5)
+	}
+}
+
+// An offer's replacement shows even when the turn that made it isn't in the
+// thread, e.g. because its answer failed to save.
+func TestAssistantThread_ReplacementWithoutItsTurn(t *testing.T) {
+	now := time.Now().UTC()
+	threads := historyRepo{msgs: []models.AssistantMessage{
+		{ID: "m1", Role: "model", Content: `{"explanation":"Offered.","proposals":[{"id":"o1"}]}`},
+	}}
+	offers := offerRepo{rows: []models.AssistantProposal{
+		{ID: "o1", Status: models.ProposalPending, ExpiresAt: now.Add(time.Hour)},
+		{ID: "o2", Status: models.ProposalPending, ExpiresAt: now.Add(time.Hour), Replaces: "o1", CreatedAt: now.Add(-time.Minute)},
+		{ID: "o3", Status: models.ProposalPending, ExpiresAt: now.Add(time.Hour), Replaces: "o1", CreatedAt: now},
+	}}
+	app := fiber.New()
+	handlers.NewAssistantHandler(nil, nil, nil, threads, nil, func(c *fiber.Ctx) error { return c.Next() }).WithProposals(offers).Register(app)
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/api/assistant/threads/workspace/messages", nil), 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msgs []models.AssistantMessage
+	if err := json.NewDecoder(resp.Body).Decode(&msgs); err != nil || len(msgs) != 1 {
+		t.Fatalf("msgs = %+v, %v", msgs, err)
+	}
+	if o := msgs[0].Offers; len(o) != 1 || o[0].ID != "o1" || o[0].ReplacedBy != "o3" {
+		t.Fatalf("offers = %+v; want o1 replaced by the latest, o3", o)
 	}
 }

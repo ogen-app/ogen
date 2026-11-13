@@ -148,6 +148,10 @@ func TestAssistantProposals_ReopenReplaceExpire(t *testing.T) {
 	if err != nil || len(byID) != 2 {
 		t.Fatalf("by ids = %v, %v", proposalIDs(byID), err)
 	}
+	replacing, err := repo.ListReplacing(ctx, []string{stale.ID, old.ID})
+	if err != nil || len(replacing) != 1 || replacing[0].ID != fresh.ID {
+		t.Fatalf("replacing = %v, %v; want the fresh offer", proposalIDs(replacing), err)
+	}
 
 	if ok, err := repo.Expire(ctx, stale.ID, now); err != nil || ok {
 		t.Fatalf("expire a live one = %t, %v; want false", ok, err)

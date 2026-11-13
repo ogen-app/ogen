@@ -124,7 +124,9 @@ func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string,
 	if err != nil {
 		return "", fmt.Errorf("encode %s proposal args: %w", p.Tool, err)
 	}
-	dedupKey := p.Tool + "\x00" + string(key)
+	// An offer that follows another is its own, even when its call matches
+	// one offered already, so each original keeps its replacement or retry.
+	dedupKey := p.Tool + "\x00" + string(key) + "\x00" + p.Replaces + "\x00" + p.RetryOf
 	// Held across the store so parallel identical calls can't both create one.
 	s.st.proposing.Lock()
 	defer s.st.proposing.Unlock()
