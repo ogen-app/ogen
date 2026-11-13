@@ -168,20 +168,22 @@ func TestCampaignFromAssets_Proposal(t *testing.T) {
 		StartDate: "2026-03-02", EndDate: "2026-04-26", DateReason: "Around the 14 March opening, from the brochure",
 	})
 	want := &assistantkit.Card{
-		Verb: "Create campaign", Meta: "from 2 assets",
+		Verb: "Create campaign", Action: assistantkit.CardActionCreateCampaign,
+		Meta: "from 2 assets", DrawsOn: assistantkit.CardDrawsOnSources,
 		Rows: []assistantkit.CardRow{
 			{Kind: assistantkit.CardRowType, Value: "Launch"},
 			{Kind: assistantkit.CardRowDates, Value: "2 Mar – 26 Apr 2026", Note: "Around the 14 March opening, from the brochure", Start: "2026-03-02", End: "2026-04-26"},
 		},
-		Sources:  []assistantkit.CardSource{{ID: "a1", Title: "Brochure", Type: "PDF"}, {ID: "a2", Title: "Press kit"}},
-		Footnote: "The 2 become its sources. No posts yet; a content plan can follow.",
+		Sources:     []assistantkit.CardSource{{ID: "a1", Title: "Brochure", Type: "PDF"}, {ID: "a2", Title: "Press kit"}},
+		Footnote:    "The 2 become its sources. No posts yet; a content plan can follow.",
+		FootnoteKey: assistantkit.CardFootnoteCampaignSources, FootnoteCount: 2,
 	}
 	if !reflect.DeepEqual(card, want) {
 		t.Fatalf("card = %+v\nwant %+v", card, want)
 	}
 	// One source is named; no dates leaves the row out; a bad call has none.
 	card = campaignCard(page, d, CampaignFromAssetsInput{Name: "x"})
-	if card.Meta != "from Press kit" || len(card.Rows) != 1 || !strings.HasPrefix(card.Footnote, "It becomes") {
+	if card.Meta != "from Press kit" || len(card.Rows) != 1 || !strings.HasPrefix(card.Footnote, "It becomes") || card.FootnoteCount != 1 {
 		t.Fatalf("one-source card = %+v", card)
 	}
 	if card := campaignCard(page, d, CampaignFromAssetsInput{}); card != nil {
@@ -208,11 +210,14 @@ func TestTagCard(t *testing.T) {
 	d, _, _ := campaignDeps(plan{}, 0)
 	ctx, _ := turn(t, workspace, nil)
 	card := tagCard(ctx, d, TagAssetsInput{AssetIDs: []string{"a1", "a2", "a1"}, Add: []string{"press", "spring"}, Remove: []string{"old"}})
-	if card.Verb != "Tag 2 assets" || card.Meta != "" || len(card.Sources) != 2 || card.Sources[0].Type != "PDF" ||
-		len(card.Rows) != 2 || card.Rows[0].Value != "Add press, spring" || card.Rows[1].Value != "Remove old" {
+	if card.Verb != "Tag 2 assets" || card.Action != assistantkit.CardActionTag || card.Count != 2 || card.Meta != "" || card.DrawsOn != "" ||
+		len(card.Sources) != 2 || card.Sources[0].Type != "PDF" || len(card.Rows) != 2 ||
+		card.Rows[0].Value != "Add press, spring" || !slices.Equal(card.Rows[0].Add, []string{"press", "spring"}) || card.Rows[0].Remove != nil ||
+		card.Rows[1].Value != "Remove old" || !slices.Equal(card.Rows[1].Remove, []string{"old"}) || card.Rows[1].Add != nil {
 		t.Fatalf("card = %+v", card)
 	}
-	if card := tagCard(ctx, d, TagAssetsInput{AssetIDs: []string{"a1"}, Remove: []string{"old"}}); card.Verb != "Untag 1 asset" {
+	if card := tagCard(ctx, d, TagAssetsInput{AssetIDs: []string{"a1"}, Remove: []string{"old"}}); card.Verb != "Untag 1 asset" ||
+		card.Action != assistantkit.CardActionUntag || card.Count != 1 {
 		t.Fatalf("untag card = %+v", card)
 	}
 	if card := tagCard(ctx, d, TagAssetsInput{AssetIDs: []string{"a9"}}); card != nil {

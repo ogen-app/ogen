@@ -222,13 +222,16 @@ func campaignCard(ctx context.Context, d Deps, in CampaignFromAssetsInput) *assi
 	}
 	c := &assistantkit.Card{
 		Verb:    "Create campaign",
+		Action:  assistantkit.CardActionCreateCampaign,
 		Meta:    sourcesMeta(p.sources),
+		DrawsOn: assistantkit.CardDrawsOnSources,
 		Rows:    []assistantkit.CardRow{{Kind: assistantkit.CardRowType, Value: cmp.Or(p.ct.Label, p.ct.Name)}},
 		Sources: cardSources(p.sources),
 	}
 	if p.start != nil || p.end != nil {
 		c.Rows = append(c.Rows, datesRow(p.start, p.end, strings.TrimSpace(in.DateReason)))
 	}
+	c.FootnoteKey, c.FootnoteCount = assistantkit.CardFootnoteCampaignSources, len(p.sources)
 	if len(p.sources) == 1 {
 		c.Footnote = "It becomes the campaign's source. No posts yet; a content plan can follow."
 	} else {

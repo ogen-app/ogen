@@ -31,7 +31,7 @@ var (
 			return "Generate a new content plan for this campaign"
 		},
 		Card: func(ctx context.Context, in RunContentPlanInput) *assistantkit.Card {
-			return &assistantkit.Card{Verb: "Generate plan", Widen: widenFromOpen(ctx, in.AssetIDs)}
+			return &assistantkit.Card{Verb: "Generate plan", Action: assistantkit.CardActionGeneratePlan, Widen: widenFromOpen(ctx, in.AssetIDs)}
 		},
 	}
 	redistributeGate = assistantkit.Gate[struct{}]{
@@ -61,10 +61,14 @@ var (
 			return fmt.Sprintf("Plan %d ideas for %s", max(in.Count, 1), strings.Join(in.Platforms, ", "))
 		},
 		Card: func(ctx context.Context, in GeneratePostsInput) *assistantkit.Card {
+			n := generateTotal(ctx, in)
+			names := platformNames(ctx, in.Platforms)
 			return &assistantkit.Card{
-				Verb:  fmt.Sprintf("Plan %d ideas", generateTotal(ctx, in)),
-				Rows:  []assistantkit.CardRow{{Kind: assistantkit.CardRowDestination, Value: platformNames(ctx, in.Platforms)}},
-				Widen: widenFromOpen(ctx, in.AssetIDs),
+				Verb:   fmt.Sprintf("Plan %d ideas", n),
+				Action: assistantkit.CardActionPlanIdeas,
+				Count:  n,
+				Rows:   []assistantkit.CardRow{{Kind: assistantkit.CardRowDestination, Value: strings.Join(names, ", "), Platforms: names}},
+				Widen:  widenFromOpen(ctx, in.AssetIDs),
 			}
 		},
 	}
@@ -87,13 +91,13 @@ var (
 
 // platformNames is the platforms a call names, by their display names; the
 // call may name them by id. As given when they don't resolve.
-func platformNames(ctx context.Context, platforms []string) string {
+func platformNames(ctx context.Context, platforms []string) []string {
 	if camp := getRequestState(ctx).campaign; camp != nil {
 		if _, names, err := resolveTargetPlatforms(camp, platforms); err == nil {
-			return strings.Join(names, ", ")
+			return names
 		}
 	}
-	return strings.Join(platforms, ", ")
+	return platforms
 }
 
 // widenFromOpen is a card's offer to draw on all the campaign's assets when
@@ -114,6 +118,7 @@ func widenFromOpen(ctx context.Context, ids []string) *assistantkit.CardWiden {
 	return &assistantkit.CardWiden{
 		Note:        "Draws on the open asset only.",
 		Label:       fmt.Sprintf("Use the campaign's %d assets", len(ready)),
+		Count:       len(ready),
 		Instruction: "Use all the campaign's assets, not only the open one.",
 	}
 }
@@ -126,29 +131,37 @@ func draftCard(ctx context.Context, in DraftPostInput) *assistantkit.Card {
 	if n == 1 {
 		verb = "Draft 1 post"
 	}
-	c := &assistantkit.Card{Verb: verb, Meta: "from the research in this chat"}
+	c := &assistantkit.Card{
+		Verb: verb, Action: assistantkit.CardActionDraftPosts, Count: n,
+		Meta: "from the research in this chat", DrawsOn: assistantkit.CardDrawsOnResearch,
+	}
 	switch {
 	case len(in.Cited) == 1:
-		c.Meta = "from " + in.Cited[0].Title
+		c.Meta, c.DrawsOn = "from "+in.Cited[0].Title, assistantkit.CardDrawsOnSources
 	case len(in.Cited) > 1:
-		c.Meta = fmt.Sprintf("from %d assets", len(in.Cited))
+		c.Meta, c.DrawsOn = fmt.Sprintf("from %d assets", len(in.Cited)), assistantkit.CardDrawsOnSources
 	}
-	where := platformNames(ctx, in.Platforms)
+	names := platformNames(ctx, in.Platforms)
+	dest := assistantkit.CardRow{Kind: assistantkit.CardRowDestination, Value: strings.Join(names, ", "), Platforms: names}
 	if camp := getRequestState(ctx).campaign; camp != nil {
-		where += " in " + camp.Name
+		dest.Value += " in " + camp.Name
+		dest.Campaign = camp.Name
 	}
-	c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowDestination, Value: where})
+	c.Rows = append(c.Rows, dest)
 	if day, err := time.Parse(time.DateOnly, strings.TrimSpace(in.PublishDate)); err == nil {
 		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowDates, Value: day.Format("2 Jan 2006"), Start: day.Format(time.DateOnly)})
 	} else {
-		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowDates, Value: "Spread over the next two weeks"})
+		// No date spreads the drafts over the window the tool defaults to.
+		start, end, _ := resolveWindow("", "", time.Now().UTC())
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowDates, Value: "Spread over the next two weeks", Start: start, End: end, Spread: true})
 	}
 	for _, s := range in.Cited {
 		c.Sources = append(c.Sources, assistantkit.CardSource{ID: s.ID, Title: s.Title})
 	}
 	if in.CitesKnown && len(in.Cited) == 0 {
-		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowGrounding, Value: "Not grounded in an asset"})
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowGrounding, Value: "Not grounded in an asset", NotGrounded: true})
 	}
+	c.FootnoteKey, c.FootnoteCount = assistantkit.CardFootnoteDraftsLand, n
 	c.Footnote = "They land in the campaign as drafts, ready to edit."
 	if n == 1 {
 		c.Footnote = "It lands in the campaign as a draft, ready to edit."

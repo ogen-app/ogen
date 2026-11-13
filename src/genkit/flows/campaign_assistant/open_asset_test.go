@@ -185,11 +185,11 @@ func TestAskCampaignAssets_Result(t *testing.T) {
 func TestWidenFromOpen(t *testing.T) {
 	ctx := onAssetPage(t, "a1")
 	w := widenFromOpen(ctx, []string{"a1"})
-	if w == nil || w.Label != "Use the campaign's 2 assets" || w.Instruction == "" {
+	if w == nil || w.Label != "Use the campaign's 2 assets" || w.Count != 2 || w.Instruction == "" {
 		t.Fatalf("widen = %+v", w)
 	}
 	card := contentPlanGate.Card(ctx, RunContentPlanInput{AssetIDs: []string{"a1"}})
-	if card.Verb != "Generate plan" || card.Widen == nil {
+	if card.Verb != "Generate plan" || card.Action != assistantkit.CardActionGeneratePlan || card.Count != 0 || card.Widen == nil {
 		t.Fatalf("plan card = %+v", card)
 	}
 	for name, ids := range map[string][]string{"two assets": {"a1", "a2"}, "another asset": {"a2"}, "all": nil} {

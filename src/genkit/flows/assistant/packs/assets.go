@@ -473,19 +473,21 @@ func tagCard(ctx context.Context, d Deps, in TagAssetsInput) *assistantkit.Card 
 	if err != nil || len(metas) == 0 {
 		return nil
 	}
-	verb := "Tag "
+	verb, action := "Tag ", assistantkit.CardActionTag
 	if len(in.Add) == 0 {
-		verb = "Untag "
+		verb, action = "Untag ", assistantkit.CardActionUntag
 	}
 	c := &assistantkit.Card{
 		Verb:    verb + plural(len(ids), "asset", "assets"),
+		Action:  action,
+		Count:   len(ids),
 		Sources: cardSources(metas),
 	}
 	if len(in.Add) > 0 {
-		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowTags, Value: "Add " + strings.Join(in.Add, ", ")})
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowTags, Value: "Add " + strings.Join(in.Add, ", "), Add: in.Add})
 	}
 	if len(in.Remove) > 0 {
-		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowTags, Value: "Remove " + strings.Join(in.Remove, ", ")})
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowTags, Value: "Remove " + strings.Join(in.Remove, ", "), Remove: in.Remove})
 	}
 	return c
 }
