@@ -70,6 +70,10 @@ func (m *memProposals) ListByIDs(context.Context, []string) ([]models.AssistantP
 	return nil, nil
 }
 
+func (m *memProposals) ListReplacing(context.Context, []string) ([]models.AssistantProposal, error) {
+	return nil, nil
+}
+
 func (m *memProposals) Replacement(context.Context, string, time.Time) (string, error) {
 	return "", nil
 }

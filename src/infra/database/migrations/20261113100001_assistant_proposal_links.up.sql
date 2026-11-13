@@ -6,7 +6,8 @@ ALTER TABLE assistant_proposals
     ADD COLUMN replaces TEXT NOT NULL DEFAULT '',
     ADD COLUMN retry_of TEXT NOT NULL DEFAULT '';
 
--- A pending offer that was offered afresh is no longer the one to answer.
+-- Confirming an offer and reading a thread both look up the offers made
+-- afresh for it.
 CREATE INDEX idx_assistant_proposals_replaces
     ON assistant_proposals (replaces)
-    WHERE replaces <> '' AND status = 'pending';
+    WHERE replaces <> '';

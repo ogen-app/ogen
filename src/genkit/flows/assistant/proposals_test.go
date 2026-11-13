@@ -53,8 +53,11 @@ func (m *memProposals) ListOpen(_ context.Context, kind models.AssistantScopeKin
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []models.AssistantProposal
+	replaced := func(id string) bool {
+		return slices.ContainsFunc(m.rows, func(r *models.AssistantProposal) bool { return r.Replaces == id && r.Open(now) })
+	}
 	for _, p := range m.rows {
-		if p.ScopeKind == kind && p.ScopeID == id && p.Open(now) {
+		if p.ScopeKind == kind && p.ScopeID == id && p.Open(now) && !replaced(p.ID) {
 			out = append(out, *p)
 		}
 	}
@@ -169,7 +172,11 @@ func bulkPack(ran *int) Pack {
 					if out.Done == in.N {
 						return in, nil, out.Done, false
 					}
-					return bulkIn{N: in.N - out.Done}, []assistantkit.NotMade{{ID: "rest", Reason: "engine hiccup"}}, out.Done, true
+					left := make([]assistantkit.NotMade, in.N-out.Done)
+					for i := range left {
+						left[i] = assistantkit.NotMade{ID: fmt.Sprint("thing-", out.Done+i), Reason: "engine hiccup"}
+					}
+					return bulkIn{N: in.N - out.Done}, left, out.Done, true
 				}, assistantkit.Wrap(func(ctx context.Context, in bulkIn) (*bulkOut, error) {
 					if in.N == brokenBulk {
 						return nil, errors.New("bulk engine down")
@@ -500,8 +507,8 @@ func TestProposals_AnswerFromTheCardReoffersWhatStillHolds(t *testing.T) {
 	if ce, ok := errors.AsType[*ProposalConflictError](err); !ok || ce.Code != codeOfferReplaced || *ran != 0 {
 		t.Fatalf("confirm the stale one again: err = %v, ran = %d", err, *ran)
 	}
-	if open, _ := store.ListOpen(t.Context(), models.AssistantScopeWorkspace, "", time.Now()); len(open) != 2 {
-		t.Fatalf("open = %d", len(open))
+	if open, _ := store.ListOpen(t.Context(), models.AssistantScopeWorkspace, "", time.Now()); len(open) != 1 || open[0].ID != fresh {
+		t.Fatalf("open = %+v; want only the fresh offer", open)
 	}
 	if _, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: fresh, Confirm: true}, nil); err != nil || *ran != 5 {
 		t.Fatalf("fresh: err = %v, ran = %d", err, *ran)
@@ -585,7 +592,7 @@ func TestProposals_AnswerFromTheCardDoneInPart(t *testing.T) {
 	}
 	var events []SSEEventKind
 	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "half", Confirm: true}, func(k SSEEventKind, _ any) { events = append(events, k) })
-	if err != nil || *ran != 10 || resp.Explanation != "Done in part: Do 16 things. 10 of 11 made, 1 not; the ones worth retrying are offered again." {
+	if err != nil || *ran != 10 || resp.Explanation != "Done in part: Do 16 things. 10 of 16 made, 6 not; the ones worth retrying are offered again." {
 		t.Fatalf("resp = %+v, err = %v, ran = %d", resp, err, *ran)
 	}
 	if len(resp.Proposals) != 1 || resp.Proposals[0].Summary != "Retry: Do 6 things" || resp.Proposals[0].RetryOf != "half" ||
@@ -597,7 +604,7 @@ func TestProposals_AnswerFromTheCardDoneInPart(t *testing.T) {
 	}
 	// The thread says how much was made, so a reload can say it was partial.
 	thread, _ := h.msgs.ListRecent(t.Context(), models.AssistantScopeWorkspace, "", 10)
-	if len(thread) != 2 || thread[0].Content != "Confirmed: Do 16 things · 10 of 11 made" {
+	if len(thread) != 2 || thread[0].Content != "Confirmed: Do 16 things · 10 of 16 made" {
 		t.Fatalf("thread = %+v", thread)
 	}
 	// The retry runs just what was left.
@@ -625,5 +632,25 @@ func TestProposals_RecommendedOptionOnTheCard(t *testing.T) {
 	}
 	if cards := st.cardList(); !cards[0].Options[0].Recommended || cards[0].Options[0].Why == "" || cards[0].Options[1].Recommended {
 		t.Fatalf("card = %+v", cards[0].Options)
+	}
+}
+
+// Identical calls share one offer, unless they follow different offers:
+// each original keeps its own replacement.
+func TestProposals_FreshOffersForDifferentOriginalsStayApart(t *testing.T) {
+	store := &memProposals{}
+	st := newTurnState(&viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: "home",
+		Scope: viewcontext.Scope{Kind: models.AssistantScopeWorkspace}}}, nil)
+	sink := turnSink{st: st, repos: Repos{Proposals: store}}
+	propose := func(replaces string) string {
+		id, err := sink.Propose(t.Context(), assistantkit.Proposal{Tool: "bulkThing", Args: bulkIn{N: 5}, Summary: "Do 5 things", Replaces: replaces})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	a, again, b := propose("o1"), propose("o1"), propose("o2")
+	if a != again || a == b || len(store.rows) != 2 || store.rows[0].Replaces != "o1" || store.rows[1].Replaces != "o2" {
+		t.Fatalf("ids %s %s %s, rows %+v", a, again, b, store.rows)
 	}
 }

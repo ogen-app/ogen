@@ -21,6 +21,9 @@ type AssistantProposalRepository interface {
 	// ListByIDs returns the caller's tenant's proposals among ids, in no
 	// order; ids it doesn't know are left out.
 	ListByIDs(ctx context.Context, ids []string) ([]models.AssistantProposal, error)
+	// ListReplacing returns the caller's tenant's proposals made afresh for
+	// one of ids, in no order.
+	ListReplacing(ctx context.Context, ids []string) ([]models.AssistantProposal, error)
 	// ListOpen returns a scope's pending, unexpired proposals, newest first,
 	// leaving out one a pending offer replaces.
 	ListOpen(ctx context.Context, kind models.AssistantScopeKind, scopeID string, now time.Time) ([]models.AssistantProposal, error)
@@ -90,6 +93,15 @@ func (r *assistantProposalRepository) ListByIDs(ctx context.Context, ids []strin
 	}
 	var out []models.AssistantProposal
 	err := r.db.NewSelect().Model(&out).Where("ap.id IN (?)", bun.List(ids)).Scan(ctx)
+	return out, err
+}
+
+func (r *assistantProposalRepository) ListReplacing(ctx context.Context, ids []string) ([]models.AssistantProposal, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var out []models.AssistantProposal
+	err := r.db.NewSelect().Model(&out).Where("ap.replaces IN (?)", bun.List(ids)).Scan(ctx)
 	return out, err
 }
 
