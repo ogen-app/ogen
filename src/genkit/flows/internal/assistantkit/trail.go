@@ -1,11 +1,27 @@
 package assistantkit
 
 // TrailAsset is an asset on a trail. Type is the asset's kind, for its
-// badge, as on a CardSource.
+// badge, as on a CardSource. An idea's asset says where in it the idea
+// came from.
 type TrailAsset struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	Type  string `json:"type,omitempty"`
+	Passage
+}
+
+// Passage is where in an asset an idea came from, to open the asset there.
+// Every field is empty when no passage was recorded: the idea predates it, or
+// the asset's body has no chunks.
+type Passage struct {
+	ChunkID string `json:"chunkId,omitempty"`
+	// Label is the passage as cited: "p. 12", "Slide 4", "12:03–12:47".
+	Label   string `json:"label,omitempty"`
+	Page    *int   `json:"page,omitempty"`
+	PageEnd *int   `json:"pageEnd,omitempty"`
+	Slide   *int   `json:"slide,omitempty"`
+	StartMS *int64 `json:"startMs,omitempty"`
+	EndMS   *int64 `json:"endMs,omitempty"`
 }
 
 // TrailAnalysis is the analysis an idea was distilled by: the asset's

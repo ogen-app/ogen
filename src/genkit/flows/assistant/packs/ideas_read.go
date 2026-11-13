@@ -39,7 +39,7 @@ func defineReadTools(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			}))), ai.WithStrictSchema(false))
 	return []assistantkit.Spec{
 		spec(ideasPackName, get, assistantkit.TierRead,
-			`Call this when the user asks about one idea — "why does this fit?", "why did it score 80?", "where does this come from?", "has it been used?". ideaId defaults to the idea open on screen, else the one selected. Explain a fit from its criteria's reasons; never invent one.`),
+			`Call this when the user asks about one idea — "why does this fit?", "why did it score 80?", "where does this come from?", "has it been used?". ideaId defaults to the idea open on screen, else the one selected. Explain a fit from its criteria's reasons; never invent one. Say where in its source it came from by sourceAsset's label (a page, slide or time) when it has one.`),
 		spec(ideasPackName, common, assistantkit.TierRead,
 			`Call this when the user asks what several ideas have in common, or what ties them together — "what do the selected ideas share?". ideaIds default to the selected ideas; 2 to 50. Describe the shared themes from what it returns — theme and angle word the thread they share, splits are where they differ — and say when they share little.`),
 	}
@@ -68,10 +68,23 @@ type GetIdeaOutput struct {
 	Note2     string               `json:"explain,omitempty"`
 }
 
-// AssetName is an asset by id and title.
+// AssetName is an asset by id and title, with where in it the idea came
+// from.
 type AssetName struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
+	Passage
+}
+
+// Passage is where in an asset an idea came from, as on a trail.
+type Passage = assistantkit.Passage
+
+// passageOf is loc as a Passage; empty for nil.
+func passageOf(loc *models.SourceLocator) Passage {
+	if loc == nil {
+		return Passage{}
+	}
+	return Passage{ChunkID: loc.ChunkID, Label: loc.Label, Page: loc.Page, PageEnd: loc.PageEnd, Slide: loc.Slide, StartMS: loc.StartMS, EndMS: loc.EndMS}
 }
 
 // IdeaFit is how a lens rated an idea.
@@ -129,7 +142,7 @@ func getIdea(ctx context.Context, d Deps, in GetIdeaInput) (*GetIdeaOutput, erro
 	}
 	if idea.SourceAssetID != nil && d.Assets != nil {
 		if metas, err := d.Assets.ListMeta(ctx, []string{*idea.SourceAssetID}); err == nil && len(metas) == 1 {
-			out.SourceAsset = &AssetName{ID: metas[0].ID, Title: metas[0].Title}
+			out.SourceAsset = &AssetName{ID: metas[0].ID, Title: metas[0].Title, Passage: passageOf(idea.SourceLocator)}
 		}
 	}
 	if idea.SourceAssetID != nil && idea.AssetAnalysisID != nil && d.Analyses != nil {
