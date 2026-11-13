@@ -170,12 +170,12 @@ func TestAskCampaignAssets_Result(t *testing.T) {
 		t.Fatalf("result = %+v", got)
 	}
 
-	// An unready open asset searches nothing and reports nothing.
+	// An unready open asset searches nothing and reports no answer.
 	ctx = onAssetPage(t, "a3")
 	if st := ask(ctx, AskCampaignAssetsInput{}); st.ask != nil {
 		t.Fatalf("unready = %+v", st.ask)
 	}
-	if res, _ := end(ctx); res != nil {
+	if res, _ := end(ctx); res == nil || res.Value.(*CampaignAssistantResponse).Ask != nil {
 		t.Fatalf("end = %+v", res)
 	}
 }
