@@ -95,7 +95,8 @@ func TestMoreLikeThese_RateUnreadable(t *testing.T) {
 // and using another, one with no trail — in a campaign with one more source.
 func moreDeps(written []more_like_these.Idea) (Deps, *memIdeaRepo, *more_like_these.Request) {
 	ideasRepo := &memIdeaRepo{byID: map[string]*models.Idea{
-		"idea-pricing": {ID: "idea-pricing", Title: "Pricing myths", Angle: new("Discounts teach buyers to wait"), SourceAssetID: new("a-report"), AssetAnalysisID: new("an-report")},
+		"idea-pricing": {ID: "idea-pricing", Title: "Pricing myths", Angle: new("Discounts teach buyers to wait"), SourceAssetID: new("a-report"), AssetAnalysisID: new("an-report"),
+			Origin: models.IdeaOriginAssetAnalysis, Sources: []string{"p. 12", "p. 14"}},
 	}}
 	var got more_like_these.Request
 	d := Deps{
@@ -157,6 +158,10 @@ func TestMoreLikeThese_WritesIdeasFromTheTrail(t *testing.T) {
 	// The idea names the campaign lens it was distilled by.
 	if an := first.Ideas[0].Analysis; an == nil || *an != (assistantkit.TrailAnalysis{ID: "an-report", CampaignID: "c1", CampaignName: "Spring"}) {
 		t.Fatalf("analysis = %+v", an)
+	}
+	// It names the passages it was distilled from.
+	if p := first.Ideas[0].Passages; !slices.Equal(p, []string{"p. 12", "p. 14"}) {
+		t.Fatalf("passages = %v", p)
 	}
 	if !out.Trail[1].NoTrail || out.Trail[1].Rate != nil {
 		t.Fatalf("an example with nothing recorded = %+v", out.Trail[1])
@@ -223,6 +228,12 @@ func TestMoreLikeTheseCard(t *testing.T) {
 	card := moreLikeTheseCard(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1", "top2"}, Count: 4})
 	if card.Verb != "Plan 4 ideas" || card.Meta != "like 2 posts" || len(card.Trail) != 2 || card.Trail[0].Ideas[0].Asset.ID != "a-report" || !card.Trail[1].NoTrail {
 		t.Fatalf("card = %+v", card)
+	}
+	// An idea written by hand has sources that aren't passages.
+	d, repo, _ := moreDeps(nil)
+	repo.byID["idea-pricing"].Origin, repo.byID["idea-pricing"].Sources = models.IdeaOriginManual, []string{"Asset: Pricing report"}
+	if card = moreLikeTheseCard(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1"}}); card.Trail[0].Ideas[0].Passages != nil {
+		t.Fatalf("manual idea passages = %v", card.Trail[0].Ideas[0].Passages)
 	}
 	card = moreLikeTheseCard(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1", "gone"}})
 	if card.Verb != "Plan 3 ideas" || card.Trail != nil {
