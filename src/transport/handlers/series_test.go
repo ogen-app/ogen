@@ -398,6 +398,33 @@ var _ = Describe("SeriesHandler", Ordered, func() {
 		Expect(list(admin)).To(HaveLen(2))
 	})
 
+	It("holds an interval and a weekday, and keeps a plain {times, per} as it is", func() {
+		camp := createCampaign(admin, "Launch")
+		fridays := fiber.Map{"times": 1, "per": "week", "weekday": "Friday", "every": 1}
+		a := create(admin, digest(fiber.Map{"name": "A", "default_rhythm": fridays}))
+		Expect(a.DefaultRhythm).To(Equal(&models.SeriesRhythm{Times: 1, Per: "week", Weekday: "friday"}))
+
+		cs := campaignWrite(do(admin, "POST", "/api/campaigns/"+camp+"/series", fiber.Map{"series_id": a.ID}))
+		Expect(cs.Runs).To(Equal([]runWire{{SeriesID: a.ID, Rhythm: &models.SeriesRhythm{Times: 1, Per: "week", Weekday: "friday"}}}))
+
+		fortnight := fiber.Map{"times": 1, "per": "week", "every": 2, "weekday": "tuesday"}
+		cs = campaignWrite(do(admin, "PUT", "/api/campaigns/"+camp+"/series/"+a.ID, fiber.Map{"rhythm": fortnight}))
+		Expect(cs.Runs).To(Equal([]runWire{{SeriesID: a.ID, Rhythm: &models.SeriesRhythm{Times: 1, Per: "week", Every: 2, Weekday: "tuesday"}}}))
+		Expect(runsOf(admin, camp)).To(Equal(cs))
+
+		cs = campaignWrite(do(admin, "PUT", "/api/campaigns/"+camp+"/series/"+a.ID, fiber.Map{"rhythm": weekly(2)}))
+		Expect(cs.Runs).To(Equal([]runWire{{SeriesID: a.ID, Rhythm: &models.SeriesRhythm{Times: 2, Per: "week"}}}))
+
+		for _, bad := range []fiber.Map{
+			{"times": 2, "per": "week", "weekday": "friday"},
+			{"times": 1, "per": "month", "weekday": "friday"},
+			{"times": 1, "per": "week", "weekday": "fri"},
+			{"times": 1, "per": "week", "every": 13},
+		} {
+			Expect(do(admin, "PUT", "/api/campaigns/"+camp+"/series/"+a.ID, fiber.Map{"rhythm": bad}).StatusCode).To(Equal(400), "%v", bad)
+		}
+	})
+
 	It("rejects bad campaign series writes", func() {
 		camp := createCampaign(admin, "Launch")
 		a := create(admin, digest(nil))

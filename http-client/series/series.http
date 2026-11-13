@@ -77,6 +77,14 @@ Content-Type: application/json
   "rhythm": { "times": 2, "per": "week" }
 }
 
+### Run it every 2 weeks on Tuesday (a weekday needs times 1 per week)  [protected]
+PUT {{baseUrl}}/api/campaigns/{{campaignId}}/series/{{seriesId}}
+Content-Type: application/json
+
+{
+  "rhythm": { "times": 1, "per": "week", "every": 2, "weekday": "tuesday" }
+}
+
 ### Make it occasional (claims no plan slots)  [protected]
 PUT {{baseUrl}}/api/campaigns/{{campaignId}}/series/{{seriesId}}
 Content-Type: application/json
