@@ -283,6 +283,50 @@ func TestRunCampaignLensRerunsOnBriefChange(t *testing.T) {
 	}
 }
 
+// An idea keeps where its first cited passage is, read back on its source
+// asset: the first chunk with that label when labels repeat. An idea citing
+// nothing, or a body without chunks, has no passage.
+func TestRunIdeasKeepTheirPassage(t *testing.T) {
+	f := newFixture(t, nil)
+	f.seedAsset(t, "pdf-1", models.AssetTypePDF, models.AssetStatusReady, "")
+	p3, p5, p6 := 3, 5, 6
+	zero := pgvector.NewHalfVector(make([]float32, 3072))
+	if err := f.repos.Chunks.UpsertChunks(f.ctx, "pdf-1", []models.AssetChunk{
+		{ID: "pdf-1:0", AssetID: "pdf-1", ChunkIndex: 0, Content: "Intro", TokenCount: 1, PageStart: &p3, PageEnd: &p3, Embedding: zero},
+		{ID: "pdf-1:1", AssetID: "pdf-1", ChunkIndex: 1, Content: "More of page 3", TokenCount: 1, PageStart: &p3, PageEnd: &p3, Embedding: zero},
+		{ID: "pdf-1:2", AssetID: "pdf-1", ChunkIndex: 2, Content: "Pricing", TokenCount: 1, PageStart: &p5, PageEnd: &p6, Embedding: zero},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.stub.reply = func(req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error) {
+		return &asset_analysis.AnalyzeResponse{Analysis: asset_analysis.Analysis{Gist: "g", Ideas: []asset_analysis.Idea{
+			{Title: "Pricing", SourceLabels: []string{"pp. 5–6", "p. 3"}},
+			{Title: "Intro", SourceLabels: []string{"p. 3"}},
+			{Title: "Uncited"},
+		}}, ModelID: "test-model"}, nil
+	}
+
+	run(t, f, "pdf-1", nil)
+
+	ideas := scoredIdeas(t, f, "pdf-1")
+	if a := ideas["Pricing"].SourceAsset; a == nil || *a.ChunkID != "pdf-1:2" || *a.Label != "pp. 5–6" || *a.Page != 5 || *a.PageEnd != 6 {
+		t.Fatalf("pricing passage = %+v", a)
+	}
+	if loc := ideas["Intro"].SourceLocator; loc == nil || loc.ChunkID != "pdf-1:0" || *loc.Page != 3 || loc.PageEnd != nil {
+		t.Fatalf("intro passage = %+v", loc)
+	}
+	if a := ideas["Uncited"].SourceAsset; ideas["Uncited"].SourceLocator != nil || a == nil || a.Page != nil || a.ChunkID != nil {
+		t.Fatalf("uncited passage = %+v", a)
+	}
+
+	f.seedAsset(t, "md-2", models.AssetTypeMarkdown, models.AssetStatusReady, "A body without chunks.")
+	f.stub.reply = answer("From a body")
+	run(t, f, "md-2", nil)
+	if body := scoredIdeas(t, f, "md-2")["From a body"]; body.SourceLocator != nil || body.SourceAsset == nil || body.SourceAsset.Page != nil {
+		t.Fatalf("body passage = %+v", body.SourceAsset)
+	}
+}
+
 // rated rates every criterion of the lens kind (with phases) at level.
 func rated(kind ideafit.LensKind, level int, caps ...ideafit.Cap) *asset_analysis.IdeaFit {
 	f := &asset_analysis.IdeaFit{Criteria: map[string]ideafit.Rating{}, Caps: append([]ideafit.Cap{}, caps...)}
