@@ -49,6 +49,20 @@ func TestSeries_ToolsAndUndo(t *testing.T) {
 	if err != nil || again.Rhythm.Per != "month" {
 		t.Fatalf("rhythm = %+v, %v", again, err)
 	}
+	// Every 2 weeks on Tuesday is stored and reported in its plain form; a
+	// weekday on a twice-a-week rhythm is refused.
+	fortnight, err := runSeries(ctx, d, RunSeriesInput{SeriesID: id, Rhythm: &RhythmInput{Times: 1, Per: "week", Every: 2, Weekday: "Tuesday"}})
+	if err != nil || *fortnight.Rhythm != (models.SeriesRhythm{Times: 1, Per: "week", Every: 2, Weekday: "tuesday"}) {
+		t.Fatalf("fortnightly = %+v, %v", fortnight, err)
+	}
+	if r, _ := repo.Run(ctx, "c1", id); r == nil || r.Rhythm.Every != 2 || r.Rhythm.Weekday != "tuesday" {
+		t.Fatalf("stored fortnightly run = %+v", r)
+	}
+	_, err = runSeries(ctx, d, RunSeriesInput{SeriesID: id, Rhythm: &RhythmInput{Times: 2, Per: "week", Weekday: "friday"}})
+	refused(t, err)
+	if again, err = runSeries(ctx, d, RunSeriesInput{SeriesID: id, Rhythm: &RhythmInput{Times: 2, Per: "month", Every: 1}}); err != nil || again.Rhythm.Every != 0 {
+		t.Fatalf("every 1 = %+v, %v", again, err)
+	}
 	list, err := listSeries(ctx, d, ListSeriesInput{})
 	if err != nil || len(list.Series) != 1 || !list.Series[0].Runs || list.Series[0].Rhythm.Times != 2 {
 		t.Fatalf("list = %+v, %v", list, err)

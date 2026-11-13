@@ -34,7 +34,7 @@ var (
 	ErrRecipeTooLong      = errors.New("series recipe is too long")
 	ErrInvalidSupply      = errors.New("supply must be self or idea")
 	ErrInvalidFormat      = errors.New("invalid content_format")
-	ErrInvalidRhythm      = errors.New("rhythm must be null or {times: 1-31, per: week|month}")
+	ErrInvalidRhythm      = errors.New("rhythm must be null or {times: 1-31, per: week|month, every: 1-12, weekday: monday-sunday with times 1 per week}")
 	ErrSeriesOutOfScope   = errors.New("series belongs to another campaign")
 	ErrPostSeriesNotFound = errors.New("series_id not found")
 )
@@ -222,6 +222,9 @@ func (s *Service) SetRun(ctx context.Context, campaignID, seriesID string, want 
 		return nil, err
 	}
 	if want != nil {
+		w := *want
+		w.Rhythm = normalizeRhythm(w.Rhythm)
+		want = &w
 		if want.Rhythm != nil && !want.Rhythm.Valid() {
 			return nil, ErrInvalidRhythm
 		}
@@ -321,6 +324,7 @@ func (s *Service) Detach(ctx context.Context, campaignID, seriesID string) (*mod
 // SetRhythm sets how often a campaign runs one of its series. nil is
 // occasional. Returns ErrNotAttached when the campaign does not run it.
 func (s *Service) SetRhythm(ctx context.Context, campaignID, seriesID string, rhythm *models.SeriesRhythm) (*models.CampaignSeries, error) {
+	rhythm = normalizeRhythm(rhythm)
 	if rhythm != nil && !rhythm.Valid() {
 		return nil, ErrInvalidRhythm
 	}
@@ -406,7 +410,16 @@ func normalize(in Input) Input {
 	in.Name = strings.TrimSpace(in.Name)
 	in.Promise = strings.TrimSpace(in.Promise)
 	in.Recipe = strings.TrimSpace(in.Recipe)
+	in.DefaultRhythm = normalizeRhythm(in.DefaultRhythm)
 	return in
+}
+
+// normalizeRhythm is a copy of r in its stored form; nil stays nil.
+func normalizeRhythm(r *models.SeriesRhythm) *models.SeriesRhythm {
+	if r == nil {
+		return nil
+	}
+	return new(r.Normalized())
 }
 
 func validate(in Input) error {

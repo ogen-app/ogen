@@ -22628,6 +22628,12 @@ const docTemplate = `{
         "models.SeriesRhythm": {
             "type": "object",
             "properties": {
+                "every": {
+                    "description": "Every is the interval in Per between periods it runs in; absent is 1.",
+                    "type": "integer",
+                    "maximum": 12,
+                    "minimum": 1
+                },
                 "per": {
                     "type": "string",
                     "enum": [
@@ -22637,6 +22643,19 @@ const docTemplate = `{
                 },
                 "times": {
                     "type": "integer"
+                },
+                "weekday": {
+                    "description": "Weekday is the day a once-a-week rhythm runs on; absent is any day.",
+                    "type": "string",
+                    "enum": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday",
+                        "saturday",
+                        "sunday"
+                    ]
                 }
             }
         },

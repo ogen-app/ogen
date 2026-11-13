@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -24,18 +25,70 @@ func (s SeriesSupply) Valid() bool {
 // series in a 31-day month.
 const MaxRhythmTimes = 31
 
+// MaxRhythmEvery is the longest interval a rhythm can skip between active
+// periods: a year in months, or twelve weeks.
+const MaxRhythmEvery = 12
+
+// rhythmWeekdays are the days a weekly rhythm can name, by their JSON form.
+var rhythmWeekdays = map[string]time.Weekday{
+	"monday": time.Monday, "tuesday": time.Tuesday, "wednesday": time.Wednesday, "thursday": time.Thursday,
+	"friday": time.Friday, "saturday": time.Saturday, "sunday": time.Sunday,
+}
+
 // SeriesRhythm is how often a series runs: Times per Per, where Per is a goal
-// cadence (week|month). A nil *SeriesRhythm means occasional: the series runs
-// when there is something for it and claims no plan slots. Zero times is not a
-// way to say that.
+// cadence (week|month), in one of every Every periods (absent is 1), on
+// Weekday when one is named. A nil *SeriesRhythm means occasional: the series
+// runs when there is something for it and claims no plan slots. Zero times is
+// not a way to say that.
+//
+// "Every Friday" is {1, week, weekday: friday}; "every 2 weeks on Tuesday" is
+// {1, week, every: 2, weekday: tuesday}. A stored {times, per} keeps its
+// meaning: every period, on no set day.
 type SeriesRhythm struct {
 	Times int    `json:"times"`
 	Per   string `json:"per" enums:"week,month"`
+	// Every is the interval in Per between periods it runs in; absent is 1.
+	Every int `json:"every,omitzero" minimum:"1" maximum:"12"`
+	// Weekday is the day a once-a-week rhythm runs on; absent is any day.
+	Weekday string `json:"weekday,omitempty" enums:"monday,tuesday,wednesday,thursday,friday,saturday,sunday"`
 }
 
-// Valid reports whether the rhythm is a complete, in-range {times, per}.
+// Valid reports whether the rhythm is a complete, in-range rhythm. A weekday
+// needs a once-a-week rhythm: it says which day the one post goes on.
 func (r SeriesRhythm) Valid() bool {
-	return r.Times >= 1 && r.Times <= MaxRhythmTimes && (r.Per == "week" || r.Per == "month")
+	if r.Times < 1 || r.Times > MaxRhythmTimes || (r.Per != "week" && r.Per != "month") {
+		return false
+	}
+	if r.Every < 0 || r.Every > MaxRhythmEvery {
+		return false
+	}
+	if r.Weekday == "" {
+		return true
+	}
+	_, ok := rhythmWeekdays[r.Weekday]
+	return ok && r.Per == "week" && r.Times == 1
+}
+
+// Normalized is r in its stored form: per and weekday trimmed and lower-cased,
+// and an Every of 1 left out, so the same rhythm always compares equal.
+func (r SeriesRhythm) Normalized() SeriesRhythm {
+	r.Per = strings.ToLower(strings.TrimSpace(r.Per))
+	r.Weekday = strings.ToLower(strings.TrimSpace(r.Weekday))
+	if r.Every == 1 {
+		r.Every = 0
+	}
+	return r
+}
+
+// Interval is how many periods apart its runs are: Every, or 1 when absent.
+func (r SeriesRhythm) Interval() int {
+	return max(r.Every, 1)
+}
+
+// Day is the weekday it runs on, and false when it names none.
+func (r SeriesRhythm) Day() (time.Weekday, bool) {
+	d, ok := rhythmWeekdays[r.Weekday]
+	return d, ok
 }
 
 // SeriesUsage is what a series has produced, counted from posts.series_id.

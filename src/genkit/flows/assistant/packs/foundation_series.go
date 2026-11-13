@@ -23,15 +23,17 @@ import (
 
 // RhythmInput is how often a series runs.
 type RhythmInput struct {
-	Times int    `json:"times" jsonschema:"description=1-31"`
-	Per   string `json:"per"   jsonschema:"description=week or month"`
+	Times   int    `json:"times"             jsonschema:"description=1-31"`
+	Per     string `json:"per"               jsonschema:"description=week or month"`
+	Every   int    `json:"every,omitempty"   jsonschema:"description=Runs in one of every this many weeks or months; 2 with week is every 2 weeks. 1-12; 1 when omitted"`
+	Weekday string `json:"weekday,omitempty" jsonschema:"description=monday-sunday: the day it runs on; only with times 1 per week, as in every Friday"`
 }
 
 func (r *RhythmInput) rhythm() *models.SeriesRhythm {
 	if r == nil {
 		return nil
 	}
-	return &models.SeriesRhythm{Times: r.Times, Per: strings.ToLower(strings.TrimSpace(r.Per))}
+	return new(models.SeriesRhythm{Times: r.Times, Per: r.Per, Every: r.Every, Weekday: r.Weekday}.Normalized())
 }
 
 // SeriesOut is a series: what it promises, how one is made, its default
@@ -449,7 +451,7 @@ func seriesSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		spec(foundationPackName, remove, assistantkit.TierReversible,
 			`Call this when the user asks to delete a series. It can be undone.`),
 		spec(foundationPackName, run, assistantkit.TierReversible,
-			`Call this when the user wants a campaign to run a series — "add Tip Tuesday to this campaign", "run it twice a month here". It can be undone.`),
+			`Call this when the user wants a campaign to run a series — "add Tip Tuesday to this campaign", "run it twice a month here". "Every Friday" is rhythm {times 1, per week, weekday friday}; "every 2 weeks on Tuesday" adds every 2. It can be undone.`),
 		spec(foundationPackName, stop, assistantkit.TierReversible,
 			`Call this when the user wants a campaign to stop running a series. It can be undone.`),
 	}
