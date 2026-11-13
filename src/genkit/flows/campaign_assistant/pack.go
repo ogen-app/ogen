@@ -142,15 +142,14 @@ func end(ctx context.Context) (*assistant.PackResult, error) {
 	st.mu.Lock()
 	ask := st.ask
 	st.mu.Unlock()
+	snap := st.snapshot
 	outs := st.outcomes()
 	if len(outs) == 0 {
-		// A question changes nothing, so it is reported and not announced.
-		if ask != nil {
-			return &assistant.PackResult{Value: &CampaignAssistantResponse{Action: actionAnswered, Ask: ask}}, nil
-		}
-		return nil, nil
+		// A question changes nothing, so it is reported and not announced;
+		// the state it read is reported all the same.
+		return &assistant.PackResult{Value: &CampaignAssistantResponse{Action: actionAnswered, Ask: ask, State: &snap, Starters: starters(snap)}}, nil
 	}
-	resp := &CampaignAssistantResponse{Action: turnAction(outs, st.writes), Ask: ask}
+	resp := &CampaignAssistantResponse{Action: turnAction(outs, st.writes), Ask: ask, State: &snap, Starters: starters(snap)}
 	for _, o := range outs {
 		if o.attach != nil {
 			o.attach(resp)
