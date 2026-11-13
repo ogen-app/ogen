@@ -179,6 +179,14 @@ func (st *turnState) addResolved(r ProposalResolved) {
 	st.resolved = append(st.resolved, r)
 }
 
+// unresolve forgets that the offer id was answered this turn: it is open
+// again.
+func (st *turnState) unresolve(id string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.resolved = slices.DeleteFunc(st.resolved, func(r ProposalResolved) bool { return r.ID == id })
+}
+
 // markStale records that the offer id answered this turn ran nothing,
 // because of changes; replacedBy is the fresh offer of what still holds.
 func (st *turnState) markStale(id string, changes []string, replacedBy string) {

@@ -71,4 +71,13 @@ func TestAssistantProposals_ListAwaiting(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].ID != page.ID {
 		t.Fatalf("after the re-offer = %+v, %v", got, err)
 	}
+
+	// A re-offer removed, unshown, leaves it waiting again.
+	if err := repo.Delete(ctx, []string{fresh.ID}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.ListAwaiting(ctx, models.AssistantScopeCampaign, "camp-1", chosen, since)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("after removing the re-offer = %+v, %v", got, err)
+	}
 }

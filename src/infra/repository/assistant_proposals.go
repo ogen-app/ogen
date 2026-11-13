@@ -46,6 +46,9 @@ type AssistantProposalRepository interface {
 	// Expire marks a pending proposal past its expiry as expired. It reports
 	// false when the proposal wasn't pending or hasn't expired.
 	Expire(ctx context.Context, id string, now time.Time) (bool, error)
+	// Delete removes the caller's tenant's proposals among ids: offers made
+	// but never shown, e.g. their thread turn couldn't be stored.
+	Delete(ctx context.Context, ids []string) error
 }
 
 type assistantProposalRepository struct {
@@ -134,6 +137,14 @@ func (r *assistantProposalRepository) ListAwaiting(ctx context.Context, kind mod
 		OrderExpr("ap.resolved_at, ap.id").
 		Scan(ctx)
 	return out, err
+}
+
+func (r *assistantProposalRepository) Delete(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.db.NewDelete().Model((*models.AssistantProposal)(nil)).Where("ap.id IN (?)", bun.List(ids)).Exec(ctx)
+	return err
 }
 
 func (r *assistantProposalRepository) Reopen(ctx context.Context, id string) (bool, error) {

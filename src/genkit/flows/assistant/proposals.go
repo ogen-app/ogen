@@ -254,18 +254,32 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 		return nil, err
 	}
 	result, err := t.reg.RunConfirmed(assistantkit.WithOffer(ctx, p.ID), tool, map[string]any(args))
-	if err != nil {
-		return result, err
+	if rerr := t.reopenUnrun(ctx, st, p, in.OptionID, result, err); rerr != nil {
+		return nil, rerr
 	}
-	// The offer was answered to claim it; a run that found it changed did
-	// nothing, so it is open again, and says what changed.
-	if changes, replacedBy, ok := staleResult(result); ok {
-		if _, err := t.deps.Proposals.Reopen(ctx, p.ID); err != nil {
-			return nil, fmt.Errorf("reopen proposal: %w", err)
-		}
-		st.markStale(p.ID, changes, replacedBy)
+	return result, err
+}
+
+// reopenUnrun opens again an offer that was answered to claim it but whose
+// run did nothing: a value typed into the option that the work refused,
+// e.g. a link that isn't a page, so another can be given; or a run that
+// found the offer changed, which says what changed.
+func (t *toolSet) reopenUnrun(ctx context.Context, st *turnState, p *models.AssistantProposal, optionID string, result any, runErr error) error {
+	o, ok := p.Option(optionID)
+	refusedInput := ok && o.Input != nil && refusedRun(result, runErr)
+	changes, replacedBy, stale := staleResult(result)
+	if !refusedInput && (runErr != nil || !stale) {
+		return nil
 	}
-	return result, nil
+	if _, err := t.deps.Proposals.Reopen(ctx, p.ID); err != nil {
+		return fmt.Errorf("reopen proposal: %w", err)
+	}
+	if refusedInput {
+		st.unresolve(p.ID)
+		return nil
+	}
+	st.markStale(p.ID, changes, replacedBy)
+	return nil
 }
 
 // notReplaced refuses an offer that ran nothing because things changed, once
@@ -556,6 +570,16 @@ func (t *toolSet) recordUnfinished(ctx context.Context, st *turnState, onEvent O
 	for _, r := range resolved {
 		emit(onEvent, SSEEventProposalResolved, r)
 	}
+}
+
+// refusedRun reports whether a confirmed tool refused to run, by its
+// result or its error.
+func refusedRun(result any, err error) bool {
+	if _, ok := errors.AsType[*assistantkit.Refusal](err); ok {
+		return true
+	}
+	_, refused := refusedResult(result)
+	return err == nil && refused
 }
 
 // refusedResult reports whether a confirmed tool refused to run — e.g. the
