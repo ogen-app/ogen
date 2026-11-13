@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -783,6 +784,15 @@ type RevisePostOutput struct {
 	// Grounding is the post's own: a rewrite keeps its sources. Unset when
 	// the post's never was known.
 	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
+	// Length is the copy's length in characters before and after; unset
+	// when the rewrite couldn't be read back.
+	Length *Lengths `json:"length,omitempty"`
+}
+
+// Lengths is a text's length in characters before and after a change.
+type Lengths struct {
+	Before int `json:"before"`
+	After  int `json:"after"`
 }
 
 // revisePost rewrites one of the campaign's posts by the instruction a
@@ -826,6 +836,7 @@ func revisePost(ctx context.Context, d Deps, in RevisePostInput) (*RevisePostOut
 			out.VoiceName = r.Voice.Name
 		}
 	}
+	out.Length = &Lengths{Before: utf8.RuneCountInString(was.Content), After: utf8.RuneCountInString(rev.Content)}
 	return out, nil
 }
 

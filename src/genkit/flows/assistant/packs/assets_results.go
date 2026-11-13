@@ -17,6 +17,7 @@ type AssetsResult struct {
 	Analysis *ReadAnalysisOutput       `json:"analysis,omitempty"`
 	Compare  *CompareAssetsOutput      `json:"compare,omitempty"`
 	Campaign *CampaignFromAssetsOutput `json:"campaign,omitempty"`
+	Distill  *DistillMoreOutput        `json:"distill,omitempty"`
 }
 
 // AskCard is an askAssets answer's sources: what was searched and the

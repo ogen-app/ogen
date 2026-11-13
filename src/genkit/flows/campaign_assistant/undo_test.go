@@ -223,6 +223,9 @@ func TestEnrichBrief_IsUndoable(t *testing.T) {
 		!slices.Equal(g.Sources, []assistantkit.Source{{ID: "a1", Title: "Brochure", AnalysisID: "an1"}}) {
 		t.Fatalf("grounding = %+v", st.briefResult.Grounding)
 	}
+	if f := st.briefResult.Fields; len(f) != 4 || f[0] != (BriefField{Field: "description", Value: "new desc"}) || f[3].Field != "toneGuidelines" {
+		t.Fatalf("fields = %+v", f)
+	}
 	a := actions.logged(t, st.briefResult.UndoID)
 	want := models.JSONMap{"description": "desc", "targetPersona": "persona", "keyMessages": "messages", "toneGuidelines": "tone"}
 	if !maps.Equal(a.Before, want) || a.After["toneGuidelines"] != "new tone" {
@@ -239,5 +242,32 @@ func TestSetCampaignDates_WithoutLogStillApplies(t *testing.T) {
 	out := runTool(t, st, "setCampaignDates", map[string]any{"endDate": "2026-03-31"})
 	if out.Status != "ok" || st.datesResult.UndoID != "" || !campaigns.c.EndDate.Equal(day("2026-03-31")) {
 		t.Fatalf("outcome = %+v, result = %+v", out, st.datesResult)
+	}
+}
+
+// The brief's card lists only the fields the enrichment rewrote, and a brief
+// that drew on nothing says whether the campaign had any sources.
+func TestEnrichBrief_FieldsAndReason(t *testing.T) {
+	for name, tc := range map[string]struct {
+		offered int
+		reason  assistantkit.UngroundedReason
+	}{"no sources": {0, assistantkit.NoSources}, "none relevant": {3, assistantkit.NoneRelevant}} {
+		t.Run(name, func(t *testing.T) {
+			c := timelineCampaign()
+			c.ID = "c1"
+			c.Description, c.TargetPersona, c.KeyMessages, c.ToneGuidelines = "desc", "persona", "messages", "tone"
+			st := &requestState{campaignID: "c1", campaign: c,
+				repos: CampaignAssistantRepos{Campaigns: &storedCampaign{c: c}, Actions: &memActions{}},
+				enrichBrief: func(context.Context, enrich_brief.EnrichBriefRequest, enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error) {
+					return &enrich_brief.EnrichBriefResponse{Description: "desc ", TargetPersona: "persona", KeyMessages: "sharper messages", ToneGuidelines: "tone", Offered: tc.offered}, nil
+				}}
+			runTool(t, st, "enrichBrief", map[string]any{"instruction": "sharper"})
+			if f := st.briefResult.Fields; !slices.Equal(f, []BriefField{{Field: "keyMessages", Value: "sharper messages"}}) {
+				t.Fatalf("fields = %+v", f)
+			}
+			if g := st.briefResult.Grounding; g.Mode != assistantkit.Exploratory || g.Reason != tc.reason || g.Note == "" {
+				t.Fatalf("grounding = %+v", g)
+			}
+		})
 	}
 }

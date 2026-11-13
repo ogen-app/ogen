@@ -448,6 +448,7 @@ func distillMore(ctx context.Context, d Deps, in DistillMoreInput) (*DistillMore
 	switch {
 	case errors.Is(err, assetanalysis.ErrDistillInProgress):
 		out.QueuedOutput = QueuedOutput{Queued: false, Note: "more ideas are already being distilled from this asset"}
+		recordAssets(ctx, func(r *AssetsResult) { r.Distill = out })
 		return out, nil
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, assistantkit.Refused("that asset isn't analysed for this lens yet; analyse it first")
@@ -456,6 +457,7 @@ func distillMore(ctx context.Context, d Deps, in DistillMoreInput) (*DistillMore
 	}
 	assistantkit.Touch(ctx, "idea", "")
 	out.QueuedOutput = QueuedOutput{Queued: true, Note: "the new ideas appear in the Ideas list when they're ready"}
+	recordAssets(ctx, func(r *AssetsResult) { r.Distill = out })
 	return out, nil
 }
 

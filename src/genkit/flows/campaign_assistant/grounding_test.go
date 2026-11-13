@@ -81,7 +81,7 @@ func TestGeneratePosts_NoSourcesOffersExploratory(t *testing.T) {
 	if gen.count != 1 || !gen.excluded {
 		t.Fatalf("generated = %d, excluded = %v", gen.count, gen.excluded)
 	}
-	if g := st.generatedPostsResult.Grounding; g.Mode != assistantkit.Exploratory {
+	if g := st.generatedPostsResult.Grounding; g.Mode != assistantkit.Exploratory || g.Reason != assistantkit.ChoseWithout || g.Note == "" {
 		t.Fatalf("grounding = %+v", g)
 	}
 }
@@ -118,7 +118,8 @@ func TestGeneratePosts_ExplicitExploratoryLeavesAssetsOut(t *testing.T) {
 	}
 }
 
-// With sources, the result names only the offered ones the ideas cite.
+// With sources, the result names only the offered ones the ideas cite, and
+// says why when it cites none.
 func TestGeneratePosts_GroundingFromCitedAssets(t *testing.T) {
 	brochure := content_plan.AssetRef{ID: "a1", Title: "Hotel de Russie brochure"}
 	cases := map[string]struct {
@@ -126,11 +127,12 @@ func TestGeneratePosts_GroundingFromCitedAssets(t *testing.T) {
 		cited   []string
 		mode    assistantkit.GroundingMode
 		sources int
+		reason  assistantkit.UngroundedReason
 	}{
-		"cites an offered source": {[]content_plan.AssetRef{brochure, {ID: "a2", Title: "Menu"}}, []string{"a1"}, assistantkit.Grounded, 1},
-		"offered but not cited":   {[]content_plan.AssetRef{brochure}, nil, assistantkit.Exploratory, 0},
-		"cites an unoffered id":   {[]content_plan.AssetRef{brochure}, []string{"zz"}, assistantkit.Exploratory, 0},
-		"nothing offered":         {nil, nil, assistantkit.Exploratory, 0},
+		"cites an offered source": {[]content_plan.AssetRef{brochure, {ID: "a2", Title: "Menu"}}, []string{"a1"}, assistantkit.Grounded, 1, ""},
+		"offered but not cited":   {[]content_plan.AssetRef{brochure}, nil, assistantkit.Exploratory, 0, assistantkit.NoneRelevant},
+		"cites an unoffered id":   {[]content_plan.AssetRef{brochure}, []string{"zz"}, assistantkit.Exploratory, 0, assistantkit.NoneRelevant},
+		"nothing offered":         {nil, nil, assistantkit.Exploratory, 0, assistantkit.NoSources},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -142,7 +144,7 @@ func TestGeneratePosts_GroundingFromCitedAssets(t *testing.T) {
 				t.Fatalf("outcome = %+v, excluded = %v", out, gen.excluded)
 			}
 			g := st.generatedPostsResult.Grounding
-			if g.Mode != tc.mode || len(g.Sources) != tc.sources {
+			if g.Mode != tc.mode || len(g.Sources) != tc.sources || g.Reason != tc.reason || (g.Note == "") != (tc.reason == "") {
 				t.Fatalf("grounding = %+v", g)
 			}
 		})

@@ -127,6 +127,19 @@ type DraftPostResult struct {
 	// Grounding is those assets; unset when the research's sources aren't
 	// known.
 	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
+	// Posts are the drafts, one row each, in the order they were written.
+	Posts []DraftedRow `json:"posts,omitempty"`
+}
+
+// DraftedRow is one drafted post as its card lists it. Date is its publish
+// day (YYYY-MM-DD), empty for a draft left off the calendar.
+type DraftedRow struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	PlatformID string `json:"platformId"`
+	Platform   string `json:"platform"`
+	PostType   string `json:"postType"`
+	Date       string `json:"date,omitempty"`
 }
 
 // ContentPlanResult summarises a runContentPlan tool invocation.
@@ -154,6 +167,16 @@ type BriefResult struct {
 	UndoID string `json:"undoId,omitempty"`
 	// Grounding is the campaign's sources the brief drew on.
 	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
+	// Fields are the brief's fields the enrichment rewrote, each with its
+	// new value; none when it changed nothing.
+	Fields []BriefField `json:"fields,omitempty"`
+}
+
+// BriefField is one rewritten brief field: description, targetPersona,
+// keyMessages or toneGuidelines, and its new value.
+type BriefField struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
 }
 
 // CampaignAssistantRepos bundles the repository dependencies for the flow.

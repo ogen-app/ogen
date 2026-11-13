@@ -84,3 +84,22 @@ func TestCited(t *testing.T) {
 		t.Fatalf("plain text cited %+v", got)
 	}
 }
+
+// Because says why exploratory grounding is, with the sentence the UI
+// shows, and leaves grounded output alone; offering nothing is no sources.
+func TestGrounding_Because(t *testing.T) {
+	if g := GroundingFrom(nil).Because(ChoseWithout); g.Reason != ChoseWithout || g.Note == "" {
+		t.Fatalf("exploratory = %+v", g)
+	}
+	if g := GroundingFrom([]Source{{ID: "a1"}}).Because(NoneRelevant); g.Reason != "" || g.Note != "" {
+		t.Fatalf("grounded = %+v", g)
+	}
+	if UngroundedBy(0) != NoSources || UngroundedBy(2) != NoneRelevant {
+		t.Fatal("UngroundedBy")
+	}
+	for _, r := range []UngroundedReason{NoSources, ChoseWithout, NoneRelevant} {
+		if ungroundedNotes[r] == "" {
+			t.Fatalf("no note for %q", r)
+		}
+	}
+}

@@ -729,6 +729,7 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 	// via the TenantScoped BeforeUpdate hook.
 	c := st.campaign
 	before := assistantundo.CampaignBrief(c)
+	fields := briefChanges(c, resp)
 	c.Description = resp.Description
 	c.TargetPersona = resp.TargetPersona
 	c.KeyMessages = resp.KeyMessages
@@ -742,8 +743,8 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 	for i, src := range resp.Sources {
 		sources[i] = assistantkit.Source{ID: src.ID, Title: src.Title, AnalysisID: src.AnalysisID}
 	}
-	grounding := assistantkit.GroundingFrom(sources)
-	st.briefResult = &BriefResult{Applied: true, UndoID: st.logChange(ctx, models.AssistantActionCampaignBrief, before, assistantundo.CampaignBrief(c)), Grounding: &grounding}
+	grounding := assistantkit.GroundingFrom(sources).Because(assistantkit.UngroundedBy(resp.Offered))
+	st.briefResult = &BriefResult{Applied: true, UndoID: st.logChange(ctx, models.AssistantActionCampaignBrief, before, assistantundo.CampaignBrief(c)), Grounding: &grounding, Fields: fields}
 	st.recordWrite(actionBriefEnriched)
 	return &EnrichBriefOutput{
 		Description:    resp.Description,
@@ -753,6 +754,23 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 		Applied:        true,
 		Grounding:      &grounding,
 	}, nil
+}
+
+// briefChanges is each brief field the enriched brief rewrites, in the
+// brief's order, with its new value.
+func briefChanges(c *models.Campaign, resp *enrich_brief.EnrichBriefResponse) []BriefField {
+	var out []BriefField
+	for _, f := range []struct{ field, was, now string }{
+		{"description", c.Description, resp.Description},
+		{"targetPersona", c.TargetPersona, resp.TargetPersona},
+		{"keyMessages", c.KeyMessages, resp.KeyMessages},
+		{"toneGuidelines", c.ToneGuidelines, resp.ToneGuidelines},
+	} {
+		if strings.TrimSpace(f.now) != strings.TrimSpace(f.was) {
+			out = append(out, BriefField{Field: f.field, Value: f.now})
+		}
+	}
+	return out
 }
 
 func toolListCampaignPosts(ctx context.Context) ([]CampaignPostInfo, error) {
@@ -988,7 +1006,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 	perPlatform, requested, clamped := resolveGenerateCount(in.Count, maxN)
 	var grounding *assistantkit.Grounding
 	if source.known {
-		grounding = new(traced(ctx, st, assistantkit.GroundingFrom(source.cited)))
+		grounding = new(traced(ctx, st, assistantkit.GroundingFrom(source.cited).Because(ungroundedReason(ctx))))
 	}
 	used := make([]AssetRef, len(source.cited))
 	usedIDs := make([]string, len(source.cited))
@@ -1046,7 +1064,8 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 		return assistantkit.Outcome[DraftPostOutput]{}, err
 	}
 
-	total, allDates, allWarn := tallyDrafts(resps)
+	rows, allDates, allWarn := tallyDrafts(resps, platformNames)
+	total := len(rows)
 	refused := slices.DeleteFunc(refusals, func(r string) bool { return r == "" })
 	if total == 0 && len(refused) > 0 {
 		return assistantkit.Refuse[DraftPostOutput](strings.Join(refused, "; ")), nil
@@ -1061,6 +1080,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 		Warnings:    allWarn,
 		UsedAssets:  used,
 		Grounding:   grounding,
+		Posts:       rows,
 	}
 	st.recordWrite(actionPostDrafted)
 	return assistantkit.OK(DraftPostOutput{
@@ -1230,23 +1250,23 @@ func answeredOnly(action string, results map[string]json.RawMessage) bool {
 	return true
 }
 
-// tallyDrafts adds up what the platforms' draft flows wrote: the posts, their
-// publish dates and the flows' warnings. A platform that wrote nothing has a
+// tallyDrafts adds up what the platforms' draft flows wrote: a row per post,
+// their publish dates and the flows' warnings. A platform that wrote nothing has a
 // nil response.
-func tallyDrafts(resps []*draft_post.DraftPostResponse) (total int, dates, warnings []string) {
-	for _, resp := range resps {
+func tallyDrafts(resps []*draft_post.DraftPostResponse, platformNames []string) (rows []DraftedRow, dates, warnings []string) {
+	for i, resp := range resps {
 		if resp == nil {
 			continue
 		}
-		total += len(resp.Posts)
 		for _, p := range resp.Posts {
+			rows = append(rows, DraftedRow{ID: p.PostID, Title: p.Title, PlatformID: p.PlatformID, Platform: platformNames[i], PostType: p.PostType, Date: p.PublishDate})
 			if p.PublishDate != "" {
 				dates = append(dates, p.PublishDate)
 			}
 		}
 		warnings = append(warnings, resp.Warnings...)
 	}
-	return total, dates, warnings
+	return rows, dates, warnings
 }
 
 // softGenerateFailure turns a user-correctable generatePosts problem — a

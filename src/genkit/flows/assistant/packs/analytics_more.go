@@ -406,7 +406,7 @@ func saveIdea(ctx context.Context, d Deps, t *trailSources, w more_like_these.Id
 	if err := d.IdeaRepo.Create(ctx, idea); err != nil {
 		return nil, assistantkit.Grounding{}, fmt.Errorf("save idea: %w", err)
 	}
-	return idea, assistantkit.GroundingFrom(sources), nil
+	return idea, assistantkit.GroundingFrom(sources).Because(assistantkit.UngroundedBy(len(t.assetOf))), nil
 }
 
 func deref(s *string) string {
