@@ -252,6 +252,44 @@ func TestResolve_AllMatchingCalendar(t *testing.T) {
 	}
 }
 
+// OnScreen asks for the given posts under the calendar's filter and window,
+// and keeps them in the order asked.
+func TestOnScreen(t *testing.T) {
+	posts := &fakePosts{ids: []string{"p3", "p1"}, total: 2}
+	r := New(titles(), &fakeIdeas{}, &fakeAssets{}, posts)
+	v := parse(t, `{"version":1,"screen":"campaign.calendar","scope":{"kind":"campaign","id":"c1"},
+		"filter":"status=draft&tz=Europe/Kyiv","window":{"from":"2026-04-20","to":"2026-04-26"}}`)
+	got, err := r.OnScreen(t.Context(), v, []string{"p1", "p2", "p3"})
+	if err != nil || !slices.Equal(got, []string{"p1", "p3"}) {
+		t.Fatalf("on screen = %v, %v; want p1, p3 in the order asked", got, err)
+	}
+	q := posts.got
+	kyiv, _ := time.LoadLocation("Europe/Kyiv")
+	if !slices.Equal(q.IDs, []string{"p1", "p2", "p3"}) || q.ScopeCampaign != "c1" ||
+		!slices.Equal(q.Status.Any, []string{"draft"}) ||
+		!q.ScheduledAfter.Equal(time.Date(2026, 4, 20, 0, 0, 0, 0, kyiv)) ||
+		!q.ScheduledBefore.Equal(time.Date(2026, 4, 27, 0, 0, 0, 0, kyiv)) {
+		t.Fatalf("query = %+v", q)
+	}
+
+	// No ids, or a window the filter rules out, is none on screen without a
+	// read.
+	for _, tc := range []struct {
+		raw string
+		ids []string
+	}{
+		{`{"version":1,"screen":"calendar","scope":{"kind":"workspace"},"window":{"from":"2026-04-20","to":"2026-04-26"}}`, nil},
+		{`{"version":1,"screen":"calendar","scope":{"kind":"workspace"},"filter":"platform=x","window":{"platforms":["linkedin"]}}`, []string{"p1"}},
+	} {
+		posts = &fakePosts{ids: []string{"p1"}}
+		r = New(titles(), &fakeIdeas{}, &fakeAssets{}, posts)
+		got, err := r.OnScreen(t.Context(), parse(t, tc.raw), tc.ids)
+		if err != nil || len(got) != 0 || posts.asked {
+			t.Fatalf("%s: got %v, asked %v, %v", tc.raw, got, posts.asked, err)
+		}
+	}
+}
+
 func TestResolve_Refusals(t *testing.T) {
 	r := New(titles(), &fakeIdeas{}, &fakeAssets{}, &fakePosts{})
 	cases := map[string]struct {

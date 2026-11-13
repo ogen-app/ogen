@@ -56,6 +56,8 @@ func TestPostRepository_Query(t *testing.T) {
 		"scheduled":         {models.PostQuery{Scheduled: models.PostScheduledYes, ScopeCampaign: "c1"}, []string{"p2", "p3"}},
 		"days":              {models.PostQuery{ScheduledAfter: new(t0.Add(48 * time.Hour)), ScheduledBefore: new(t0.Add(72 * time.Hour))}, []string{"p4"}},
 		"from a day onward": {models.PostQuery{ScheduledAfter: new(t0.Add(48 * time.Hour))}, []string{"p3", "p4"}},
+		"these ids":         {models.PostQuery{IDs: []string{"p2", "p3", "gone"}, Scheduled: models.PostScheduledYes, ScopeCampaign: "c1"}, []string{"p2", "p3"}},
+		"no ids":            {models.PostQuery{IDs: []string{}}, nil},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

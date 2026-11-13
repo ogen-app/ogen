@@ -80,6 +80,11 @@ func (v memViews) CampaignItems(ctx context.Context, kind viewcontext.EntityKind
 	return slices.DeleteFunc(items, func(it viewresolve.Item) bool { return strings.HasSuffix(it.ID, "-other") }), err
 }
 
+// OnScreen keeps the posts on a calendar's days; p-later is dated past them.
+func (memViews) OnScreen(_ context.Context, _ *viewcontext.ViewContext, ids []string) ([]string, error) {
+	return slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return id == "p-later" }), nil
+}
+
 func (memViews) CheckFilter(_ viewcontext.EntityKind, filter string) error {
 	if strings.Contains(filter, "nope") {
 		return &viewcontext.InvalidError{Field: "filter", Reason: "unknown pile"}
@@ -101,7 +106,7 @@ func testViews() memViews {
 		viewcontext.KindCampaign: {"c1": "Spring launch", "c2": "Autumn"},
 		viewcontext.KindAsset:    {"a1": "Q3 deck"},
 		viewcontext.KindIdea:     {"i1": "Pricing myths", "i2": "Founder story"},
-		viewcontext.KindPost:     {"p1": "Launch day", "p-other": "Another campaign's post"},
+		viewcontext.KindPost:     {"p1": "Launch day", "p-other": "Another campaign's post", "p-later": "Next week's post"},
 		viewcontext.KindVoice:    {"v1": "Plain"},
 	}}
 }
