@@ -49,6 +49,7 @@ func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos, packs ...Pack) (*Assist
 		Route: func(ctx context.Context, req Request) (*Routing, error) {
 			return route(ctx, g, req, cfg, repos, p, tools)
 		},
+		SourceReady: tools.sourceReady,
 	}, nil
 }
 

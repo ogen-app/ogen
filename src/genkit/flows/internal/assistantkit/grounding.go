@@ -33,6 +33,18 @@ type Source struct {
 	IdeaID     string `json:"ideaId,omitempty"`
 }
 
+// The options of the choice generation without sources becomes: add a
+// document, import a page, or go ahead from general knowledge.
+const (
+	OptionAddDocument = "add_document"
+	OptionImportPage  = "import_page"
+	OptionExploratory = "exploratory"
+)
+
+// AwaitingSource are the options that go to add a source: an offer
+// confirmed with one waits for it, and is offered again once it is ready.
+var AwaitingSource = []string{OptionAddDocument, OptionImportPage}
+
 // UngroundedReason says why output came from general knowledge.
 type UngroundedReason string
 

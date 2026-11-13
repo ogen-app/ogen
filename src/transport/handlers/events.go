@@ -87,6 +87,12 @@ func (h *EventsHandler) Register(app *fiber.App) {
 // @Description  reordered) and source is editor|bank|figma_plugin|alt_text.
 // @Description  Every member of the workspace receives it, including the actor.
 // @Description
+// @Description  `assistant.offer.created` on `entity:campaign:<id>` follows the
+// @Description  assistant offering a request again in the campaign's thread,
+// @Description  once a source its user went to add is ready. Its data is
+// @Description  `{scope: {kind, id}, proposalIds}`; the offer and its card are
+// @Description  in the thread's history, which the client reloads.
+// @Description
 // @Description  The `Last-Event-ID` request header is currently accepted
 // @Description  and ignored — reserved for future replay support.
 // @Tags         events

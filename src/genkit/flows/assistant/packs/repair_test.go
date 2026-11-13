@@ -214,8 +214,8 @@ func TestCheckCalendar_GapOfferWithoutSources(t *testing.T) {
 	d, _, _ := repairDeps()
 	d.Assets = memAssets{}
 	_, plans := gapOffers(t, d)
-	if len(plans) != 1 || len(plans[0].Options) != 3 || plans[0].Options[0].ID != campaign_assistant.OptionAddDocument ||
-		plans[0].Options[1].ID != campaign_assistant.OptionImportPage {
+	if len(plans) != 1 || len(plans[0].Options) != 3 || plans[0].Options[0].ID != assistantkit.OptionAddDocument ||
+		plans[0].Options[1].ID != assistantkit.OptionImportPage {
 		t.Fatalf("plans = %+v", plans)
 	}
 	if base := plans[0].Args.(campaign_assistant.GeneratePostsInput); base.Exploratory {

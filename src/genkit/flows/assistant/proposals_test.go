@@ -64,12 +64,12 @@ func (m *memProposals) ListOpen(_ context.Context, kind models.AssistantScopeKin
 	return out, nil
 }
 
-func (m *memProposals) Resolve(_ context.Context, id string, status models.AssistantProposalStatus, chosen, _ string, now time.Time) (bool, error) {
+func (m *memProposals) Resolve(_ context.Context, id string, status models.AssistantProposalStatus, chosen, by string, now time.Time) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, p := range m.rows {
 		if p.ID == id && p.Open(now) {
-			p.Status, p.Chosen = status, chosen
+			p.Status, p.Chosen, p.ResolvedBy, p.ResolvedAt = status, chosen, by, &now
 			return true, nil
 		}
 	}
@@ -85,6 +85,22 @@ func (m *memProposals) Replacement(_ context.Context, id string, now time.Time) 
 		}
 	}
 	return "", nil
+}
+
+func (m *memProposals) ListAwaiting(_ context.Context, kind models.AssistantScopeKind, scopeID string, chosen []string, since time.Time) ([]models.AssistantProposal, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []models.AssistantProposal
+	for _, p := range m.rows {
+		if p.ScopeKind != kind || p.ScopeID != scopeID || p.Status != models.ProposalConfirmed || !slices.Contains(chosen, p.Chosen) ||
+			p.ResolvedAt == nil || p.ResolvedAt.Before(since) {
+			continue
+		}
+		if !slices.ContainsFunc(m.rows, func(r *models.AssistantProposal) bool { return r.Replaces == p.ID }) {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
 }
 
 func (m *memProposals) Reopen(_ context.Context, id string) (bool, error) {

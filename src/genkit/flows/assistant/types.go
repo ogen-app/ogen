@@ -175,6 +175,9 @@ type Repos struct {
 	// leaves the proposal-tier tools unable to run and drops
 	// confirmOffer / dismissOffer.
 	Proposals repository.AssistantProposalRepository
+	// Events announces a thread's fresh offer made outside a turn; nil
+	// leaves it for the thread's next load.
+	Events EventPublisher
 }
 
 // ViewReader reloads references in the caller's tenant;
@@ -219,4 +222,8 @@ type Assistant struct {
 	// Route makes a turn's first model call without running the tools it
 	// asks for: what the evals check.
 	Route func(ctx context.Context, req Request) (*Routing, error)
+	// SourceReady offers again, in a campaign's thread, the requests that
+	// waited for their user to add a source, now that the source named
+	// title is ready. ctx carries the campaign's tenant.
+	SourceReady func(ctx context.Context, campaignID, title string) error
 }

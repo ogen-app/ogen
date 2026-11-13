@@ -80,6 +80,10 @@ func (m *memProposals) Replacement(context.Context, string, time.Time) (string, 
 
 func (m *memProposals) Reopen(context.Context, string) (bool, error) { return false, nil }
 
+func (m *memProposals) ListAwaiting(context.Context, models.AssistantScopeKind, string, []string, time.Time) ([]models.AssistantProposal, error) {
+	return nil, nil
+}
+
 func (m *memProposals) Expire(context.Context, string, time.Time) (bool, error) { return false, nil }
 
 var _ repository.AssistantProposalRepository = (*memProposals)(nil)

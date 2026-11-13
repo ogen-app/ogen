@@ -453,6 +453,7 @@ func (d *deps) genkitDeps() genkitDeps {
 		assistantRepos: assistant.Repos{
 			Proposals:  r.proposalRepo,
 			Messages:   r.assistantMessageRepo,
+			Events:     d.hub,
 			Views:      viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo, r.postRepo),
 			SavedViews: r.savedViewRepo,
 			SavedViewLists: savedviews.New(r.savedViewRepo, d.hub,

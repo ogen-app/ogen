@@ -71,6 +71,7 @@ type genkitRuntime struct {
 	enrichBriefFn     func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
 	assistantFn       assistant.Runner
 	answerAssistantFn func(ctx context.Context, req assistant.AnswerRequest, onEvent assistant.OnEventFunc) (*assistant.Response, error)
+	sourceReadyFn     func(ctx context.Context, campaignID, title string) error
 	generatePostsFn   func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	draftPostFn       func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
 	checkBriefFn      func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
@@ -295,6 +296,19 @@ func (r *genkitRuntime) AnswerProposal(ctx context.Context, req assistant.Answer
 	return fn(ctx, req, onEvent)
 }
 
+// SourceReady offers again, in a campaign's thread, the requests that
+// waited for a source, now that the one named title is ready. Without the
+// assistant it does nothing.
+func (r *genkitRuntime) SourceReady(ctx context.Context, campaignID, title string) error {
+	r.mu.RLock()
+	fn := r.sourceReadyFn
+	r.mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(ctx, campaignID, title)
+}
+
 func (r *genkitRuntime) GeneratePosts(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 	r.mu.RLock()
 	fn := r.generatePostsFn
@@ -373,6 +387,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		r.enrichBriefFn = nil
 		r.assistantFn = nil
 		r.answerAssistantFn = nil
+		r.sourceReadyFn = nil
 		r.generatePostsFn = nil
 		r.draftPostFn = nil
 		r.checkBriefFn = nil
@@ -525,6 +540,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	r.enrichBriefFn = enrichBriefFn
 	r.assistantFn = universal.Run
 	r.answerAssistantFn = universal.Answer
+	r.sourceReadyFn = universal.SourceReady
 	r.generatePostsFn = generatePostsFn
 	r.draftPostFn = draftPostFn
 	r.checkBriefFn = checkBriefFn
