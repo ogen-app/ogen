@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -97,6 +98,24 @@ func TestSourceReady_OffersTheWaitingRequestAgain(t *testing.T) {
 	// Another source becoming ready finds nothing waiting.
 	if err := h.tools.sourceReady(t.Context(), "c1", "Menu"); err != nil || len(store.rows) != 4 || len(events.got) != 1 {
 		t.Fatalf("again: err = %v, rows = %d, events = %d", err, len(store.rows), len(events.got))
+	}
+}
+
+// When the thread turn can't be stored, the fresh offer is removed, so the
+// request still waits for the next source.
+func TestSourceReady_UnrecordedOfferKeepsWaiting(t *testing.T) {
+	store := &memProposals{}
+	h := proposalsHarness(t, store, planPack(new(int)))
+	h.msgs.fail = errors.New("db down")
+	at := time.Now().UTC()
+	store.rows = []*models.AssistantProposal{{ID: "wait", ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1", Tool: "planThing", Args: models.JSONMap{"n": float64(2)},
+		Status: models.ProposalConfirmed, Chosen: assistantkit.OptionAddDocument, ResolvedBy: "u1", ResolvedAt: &at, ExpiresAt: at.Add(time.Hour)}}
+	if err := h.tools.sourceReady(t.Context(), "c1", "Brochure"); err == nil || len(store.rows) != 1 {
+		t.Fatalf("err = %v, rows = %d", err, len(store.rows))
+	}
+	h.msgs.fail = nil
+	if err := h.tools.sourceReady(t.Context(), "c1", "Brochure"); err != nil || len(store.rows) != 2 || store.rows[1].Replaces != "wait" {
+		t.Fatalf("next source: err = %v, rows = %d", err, len(store.rows))
 	}
 }
 

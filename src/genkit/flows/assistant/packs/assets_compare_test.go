@@ -137,7 +137,8 @@ func TestCompareAssets_Refusals(t *testing.T) {
 	}
 	req = asset_compare.Request{}
 	out, err = compareAssets(ctx, d, CompareAssetsInput{AssetIDs: []string{"a4", "a1"}})
-	if err != nil || out.Note == "" || out.Grounding.Mode != "exploratory" || req.Mode != "" {
+	// One readable asset is a source, so it isn't "no sources".
+	if err != nil || out.Note == "" || out.Grounding.Mode != "exploratory" || out.Grounding.Reason != "" || req.Mode != "" {
 		t.Fatalf("one readable of two = %+v, %v; want a note and no model call", out, err)
 	}
 

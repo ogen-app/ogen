@@ -87,16 +87,21 @@ func (t *toolSet) reoffer(ctx context.Context, p models.AssistantProposal, title
 	if len(cards) == 0 {
 		return nil
 	}
+	ids := make([]string, len(cards))
+	for i, c := range cards {
+		ids[i] = c.ID
+	}
 	resp := &Response{Action: actionAnswered, Explanation: fmt.Sprintf("“%s” is ready, so this can draw on it now: %s.", title, cards[0].Summary)}
 	finish(st, resp)
+	// An offer the thread doesn't show would end the wait unseen: without
+	// its turn, it is removed, and the request waits for the next source.
 	if err := persistTurn(ctx, t.deps, Request{Instruction: st.turn.Instruction, View: view}, resp); err != nil {
+		if derr := t.deps.Proposals.Delete(ctx, ids); derr != nil {
+			err = errors.Join(err, fmt.Errorf("remove the unshown offer: %w", derr))
+		}
 		return fmt.Errorf("record the offer: %w", err)
 	}
 	if t.deps.Events != nil {
-		ids := make([]string, len(cards))
-		for i, c := range cards {
-			ids[i] = c.ID
-		}
 		ev := eventhub.Event{Topic: "entity:campaign:" + p.ScopeID, Type: EventThreadOffer, Payload: ThreadOfferPayload{Scope: scope, ProposalIDs: ids}}
 		if err := t.deps.Events.Publish(ctx, ev); err != nil {
 			slog.WarnContext(ctx, "announce the offer failed", logging.AttrComponent, logComponent, logging.AttrError, err)

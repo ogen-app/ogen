@@ -103,6 +103,13 @@ func (m *memProposals) ListAwaiting(_ context.Context, kind models.AssistantScop
 	return out, nil
 }
 
+func (m *memProposals) Delete(_ context.Context, ids []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rows = slices.DeleteFunc(m.rows, func(p *models.AssistantProposal) bool { return slices.Contains(ids, p.ID) })
+	return nil
+}
+
 func (m *memProposals) Reopen(_ context.Context, id string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

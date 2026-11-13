@@ -21,13 +21,17 @@ type importIn struct {
 	URL string `json:"url"`
 }
 
-// importerPack has one tool that records the pages it is asked to import.
+// importerPack has one tool that records the pages it is asked to import,
+// and refuses a link that isn't a web address.
 func importerPack(imported *[]string) Pack {
 	return Pack{
 		Name: "importer", Summary: "imports", Scopes: []models.AssistantScopeKind{models.AssistantScopeWorkspace},
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			tool := genkit.DefineTool(g, "importThing", "Imports a page.",
 				assistantkit.Wrap(func(_ context.Context, in importIn) (string, error) {
+					if !strings.HasPrefix(in.URL, "https://") {
+						return "", assistantkit.Refused("that isn't a web page's link")
+					}
 					*imported = append(*imported, in.URL)
 					return "imported", nil
 				}))
@@ -38,7 +42,8 @@ func importerPack(imported *[]string) Pack {
 
 // An option that asks for a value stores what its argument is and shows the
 // field on its card, without the argument; picked without the value it is
-// refused and stays open, and with it runs with the value in that argument.
+// refused and stays open, a value the work refuses leaves it open too, and
+// with a good one it runs with the value in that argument.
 func TestProposals_OptionTakesInput(t *testing.T) {
 	var imported []string
 	store := &memProposals{}
@@ -62,6 +67,10 @@ func TestProposals_OptionTakesInput(t *testing.T) {
 	_, err = h.tools.answer(t.Context(), AnswerRequest{ProposalID: id, OptionID: "import_page", Confirm: true}, nil)
 	if ce, ok := errors.AsType[*ProposalConflictError](err); !ok || ce.Code != codeInputRequired || len(imported) != 0 || store.rows[0].Status != models.ProposalPending {
 		t.Fatalf("without input: err = %v, imported = %v, status = %s", err, imported, store.rows[0].Status)
+	}
+	_, err = h.tools.answer(t.Context(), AnswerRequest{ProposalID: id, OptionID: "import_page", Input: "the spa page", Confirm: true}, nil)
+	if !isConflict(err) || len(imported) != 0 || store.rows[0].Status != models.ProposalPending {
+		t.Fatalf("refused input: err = %v, imported = %v, status = %s", err, imported, store.rows[0].Status)
 	}
 	// Going to add a source says the request waits for it.
 	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: id, OptionID: "import_page", Input: " https://example.com/page ", Confirm: true}, nil)
