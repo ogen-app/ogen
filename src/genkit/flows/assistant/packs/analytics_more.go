@@ -381,6 +381,10 @@ func (t *trailSources) idea(ctx context.Context, id, title string) (TrailIdea, e
 		if ti.Analysis, err = t.analysis(ctx, assetID, an); err != nil {
 			return ti, err
 		}
+		// A distilled idea's sources are the passages its analysis cited.
+		if idea.Origin == models.IdeaOriginAssetAnalysis {
+			ti.Passages = slices.Clone(idea.Sources)
+		}
 	}
 	t.add("idea:"+id, "Idea: "+title, title, text, assetID)
 	return ti, nil

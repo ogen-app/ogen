@@ -23,6 +23,10 @@ type TrailIdea struct {
 	Title    string         `json:"title"`
 	Analysis *TrailAnalysis `json:"analysis,omitempty"`
 	Asset    *TrailAsset    `json:"asset,omitempty"`
+	// Passages are where in Asset the idea was distilled from, as its
+	// analysis cites them: "p. 12", "Slide 4", "12:03–12:47". None for an
+	// idea not distilled from that asset.
+	Passages []string `json:"passages,omitempty"`
 }
 
 // TrailStep is how one example post came to be: its engagement rate, the
