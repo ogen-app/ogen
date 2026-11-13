@@ -256,8 +256,8 @@ func TestDeletePosts_RetriesWhatFailed(t *testing.T) {
 	if err != nil || out.Changed != 1 || len(out.Failed) != 1 || out.Failed[0].PostID != "p2" {
 		t.Fatalf("out = %+v, err = %v", out, err)
 	}
-	retry, notMade, ok := postRetry(in, out)
-	if !ok || !slices.Equal(retry.PostIDs, []string{"p2"}) || len(notMade) != 1 || !strings.Contains(notMade[0].Reason, "storage timeout") {
+	retry, notMade, made, ok := postRetry(in, out)
+	if !ok || !slices.Equal(retry.PostIDs, []string{"p2"}) || len(notMade) != 1 || made != 1 || !strings.Contains(notMade[0].Reason, "storage timeout") {
 		t.Fatalf("retry = %+v, notMade = %+v, ok = %t", retry, notMade, ok)
 	}
 	if _, err := deletePosts(ctx, d, PostsRef{PostIDs: []string{"p2"}}); err == nil {

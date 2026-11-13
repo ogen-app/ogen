@@ -74,7 +74,7 @@ func TestDraftIdeas_StoppedEarly(t *testing.T) {
 		t.Fatalf("draft = %+v, %v", out, err)
 	}
 	// The idea the stop left is offered again.
-	if retry, notMade, ok := draftRetry(in, out); !ok || !slices.Equal(retry.IdeaIDs, []string{"i2"}) || len(notMade) != 1 {
+	if retry, notMade, made, ok := draftRetry(in, out); !ok || !slices.Equal(retry.IdeaIDs, []string{"i2"}) || len(notMade) != 1 || made != 1 {
 		t.Fatalf("retry = %+v, notMade = %+v", retry, notMade)
 	}
 	d, _ = draftDeps(1)
@@ -101,7 +101,7 @@ func TestUnwritten(t *testing.T) {
 	in := DraftIdeasInput{IdeaIDs: []string{"a", "b"}, PlatformIDs: []string{"li", "x"}}
 
 	retry, notMade := unwritten(plan, []compose.DraftedPost{post("a", "li"), post("a", "x")}, in, "stopped")
-	if retry == nil || !slices.Equal(retry.IdeaIDs, []string{"b"}) || !slices.Equal(retry.PlatformIDs, []string{"li", "x"}) || len(notMade) != 2 || notMade[0].Title != "B · li" {
+	if retry == nil || !slices.Equal(retry.IdeaIDs, []string{"b"}) || !slices.Equal(retry.PlatformIDs, []string{"li", "x"}) || len(notMade) != 2 || notMade[0].Title != "B" || notMade[0].Platform != "li" {
 		t.Fatalf("whole idea left: retry = %+v, notMade = %+v", retry, notMade)
 	}
 	retry, notMade = unwritten(plan, []compose.DraftedPost{post("a", "li")}, in, "stopped")

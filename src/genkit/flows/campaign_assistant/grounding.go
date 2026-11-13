@@ -60,7 +60,8 @@ func needSources(ctx context.Context, tool string, explicit bool, exploratory fu
 	}
 	return assistantkit.Conflicted(
 		noSourcesReason+" Offer to add a document or a link first, or to go ahead without them. If the user replies with a web page's link, import it with importPage (it is attached to this campaign) and, once it is read, run the request again.",
-		assistantkit.Option{ID: "add_source", Title: "Add a document or a link", Description: "Opens the campaign's Assets tab to upload a document or import a page.", Recommended: true, Tool: "openAddSource", Args: struct{}{}},
+		assistantkit.Option{ID: "add_source", Title: "Add a document or a link", Description: "Opens the campaign's Assets tab to upload a document or import a page.", Recommended: true,
+			Why: "Posts drawn from your own material say what's true of you, not what's true in general.", Tool: "openAddSource", Args: struct{}{}},
 		assistantkit.Option{ID: "exploratory", Title: "Go ahead without sources (marked not grounded)", Tool: tool, Args: exploratory()},
 	)
 }

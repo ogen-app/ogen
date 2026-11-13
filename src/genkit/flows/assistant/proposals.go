@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -68,6 +69,8 @@ type ProposalChoice struct {
 	Description string `json:"description,omitempty"`
 	// Recommended is the option the card leads with; at most one is.
 	Recommended bool `json:"recommended,omitempty"`
+	// Why says in one line why the recommended option is the one to pick.
+	Why string `json:"why,omitempty"`
 }
 
 // ProposalResolved is an offer answered this turn, or found changed or
@@ -135,8 +138,8 @@ func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string,
 		if err != nil {
 			return "", fmt.Errorf("encode %s proposal option: %w", p.Tool, err)
 		}
-		stored[i] = models.ProposalOption{ID: o.ID, Title: o.Title, Description: o.Description, Recommended: o.Recommended, Tool: o.Tool, Args: oargs}
-		choices[i] = ProposalChoice{ID: o.ID, Title: o.Title, Description: o.Description, Recommended: o.Recommended}
+		stored[i] = models.ProposalOption{ID: o.ID, Title: o.Title, Description: o.Description, Recommended: o.Recommended, Why: o.Why, Tool: o.Tool, Args: oargs}
+		choices[i] = ProposalChoice{ID: o.ID, Title: o.Title, Description: o.Description, Recommended: o.Recommended, Why: o.Why}
 	}
 	id, err := models.NewID()
 	if err != nil {
@@ -420,13 +423,7 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	} else {
 		_, err = t.dismissProposal(ctx, in)
 	}
-	// The thread records a yes that ran nothing as what it found.
-	switch st.resolvedAs(p.ID) {
-	case resolvedStale:
-		st.turn.Instruction = "Stale: " + p.Summary
-	case resolvedExpired:
-		st.turn.Instruction = "Expired: " + p.Summary
-	}
+	st.turn.Instruction = cmp.Or(answerRecord(st, p, result), st.turn.Instruction)
 	_, _, stale := staleResult(result)
 	reason, refused := refusedResult(result)
 	refused = refused && !stale
@@ -475,14 +472,30 @@ func answered(p *models.AssistantProposal, confirmed bool, result any) string {
 		}
 		return out
 	}
-	if left, retry := partialResult(result); left > 0 {
-		out := fmt.Sprintf("Done in part: %s. %d not done", p.Summary, left)
-		if retry {
+	if part := partialResult(result); part.left > 0 {
+		out := fmt.Sprintf("Done in part: %s. %d of %d made, %d not", p.Summary, part.made, part.total, part.left)
+		if part.retry {
 			out += "; the ones worth retrying are offered again"
 		}
 		return out + "."
 	}
 	return "Done: " + p.Summary
+}
+
+// answerRecord is how the thread records a yes that didn't simply run: one
+// that ran nothing as what it found, one that did part of the job with how
+// much. "" keeps the answer as given.
+func answerRecord(st *turnState, p *models.AssistantProposal, result any) string {
+	switch st.resolvedAs(p.ID) {
+	case resolvedStale:
+		return "Stale: " + p.Summary
+	case resolvedExpired:
+		return "Expired: " + p.Summary
+	}
+	if part := partialResult(result); part.left > 0 {
+		return fmt.Sprintf("Confirmed: %s · %d of %d made", p.Summary, part.made, part.total)
+	}
+	return ""
 }
 
 // unfinishedAnswer is the reply recorded when an offer was answered but its
@@ -541,17 +554,26 @@ func staleResult(raw any) (changes []string, replacedBy string, ok bool) {
 	return changes, replacedBy, true
 }
 
-// partialResult reports how many items a confirmed run left undone, and
-// whether it offered the ones worth retrying; its result says both.
-func partialResult(raw any) (left int, retry bool) {
+// partial is how much of the job a confirmed run did.
+type partial struct {
+	made, total, left int
+	// retry is set when the ones worth retrying were offered again.
+	retry bool
+}
+
+// partialResult reads how much of the job a confirmed run did from its
+// result.
+func partialResult(raw any) partial {
 	m, _ := raw.(map[string]any)
 	result, ok := m["result"].(map[string]any)
 	if !ok {
-		return 0, false
+		return partial{}
 	}
 	notMade, _ := result["notMade"].([]any)
+	made, _ := result["made"].(float64)
+	total, _ := result["total"].(float64)
 	id, _ := result["retryProposalId"].(string)
-	return len(notMade), id != ""
+	return partial{made: int(made), total: int(total), left: len(notMade), retry: id != ""}
 }
 
 func (t *toolSet) ownsOption(p *models.AssistantProposal) bool {

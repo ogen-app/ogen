@@ -119,16 +119,19 @@ type assistantTurnRequest struct {
 // @Description  setIdeaVerdicts and tagAssets only above a few items. Smaller batches and other tools (distillMoreIdeas
 // @Description  among them) run straight away, so a client can't rely on an offer before every write. "proposal_created" {"id","tool","summary",
 // @Description  "expiresAt","options","card","replaces","retryOf"} streams once the reply is final; "options" is an array of
-// @Description  {"id","title"} with optional "description" and "recommended" (at most one option is recommended: the card
-// @Description  leads with it). "proposal_resolved" {"id","status","chosen","reasons","replacedBy"} streams when one is
+// @Description  {"id","title"} with optional "description", "recommended" and "why" (at most one option is recommended:
+// @Description  the card leads with it, and its "why" says in a line why it's the one to pick). "proposal_resolved" {"id","status","chosen","reasons","replacedBy"} streams when one is
 // @Description  answered in chat; "complete" lists them again as "resolved". Cards answer through POST
 // @Description  /api/assistant/proposals/{id}/confirm or /dismiss. A confirmed offer re-checks first: when what it was made on
 // @Description  changed, nothing runs, the offer stays open and resolves "stale" with "reasons", and what still holds
 // @Description  may come back as a fresh offer ("replacedBy"; its card's "replaces"), the only one then confirmable. A
-// @Description  yes after an offer's expiry resolves it "expired". A run that
-// @Description  did part of the job (setIdeaVerdicts, moveIdeas, draftIdeas, editBrand, unschedulePosts, deletePosts) has, in
-// @Description  its result (complete.results and a card's answer alike), "notMade" [{id,title?,reason}] and, only when some
-// @Description  items are worth retrying and the offer could be stored, "retryProposalId": a fresh offer of just those.
+// @Description  yes after an offer's expiry resolves it "expired". A run that can
+// @Description  do part of the job (setIdeaVerdicts, moveIdeas, draftIdeas, editBrand, unschedulePosts, deletePosts) has, in
+// @Description  its result (complete.results and a card's answer alike), "made" of "total" items and, when some weren't,
+// @Description  "notMade" [{id,title?,platform?,reason}] (platform: the platform id of an idea's post that wasn't written)
+// @Description  and, only when some items are worth retrying and the offer could be stored, "retryProposalId": a fresh
+// @Description  offer of just those, whose card has "retryOf". The thread records such an answer as "Confirmed: <summary>
+// @Description  · <made> of <total> made", a stale one as "Stale: <summary>", an expired one as "Expired: <summary>".
 // @Description  Packs stream their own progress between: the campaign pack forwards the campaign assistant's events
 // @Description  (content_plan_idea, generate_posts_idea, draft_post_*, …), and draftIdeas sends "idea_draft_post" per post,
 // @Description  shaped as one of its result's posts.

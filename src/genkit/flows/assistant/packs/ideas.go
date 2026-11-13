@@ -656,11 +656,11 @@ func draftIdeas(ctx context.Context, d Deps, in DraftIdeasInput) (*DraftIdeasOut
 }
 
 // draftRetry retries the posts a stopped draft left unwritten.
-func draftRetry(_ DraftIdeasInput, out *DraftIdeasOutput) (DraftIdeasInput, []assistantkit.NotMade, bool) {
+func draftRetry(_ DraftIdeasInput, out *DraftIdeasOutput) (DraftIdeasInput, []assistantkit.NotMade, int, bool) {
 	if out.retry == nil {
-		return DraftIdeasInput{}, out.notMade, false
+		return DraftIdeasInput{}, out.notMade, len(out.Posts), false
 	}
-	return *out.retry, out.notMade, true
+	return *out.retry, out.notMade, len(out.Posts), true
 }
 
 // unwritten is the jobs of plan no post came from, each one idea (or all of
@@ -687,7 +687,7 @@ func unwritten(plan *compose.DraftPlan, written []compose.DraftedPost, in DraftI
 			wrote[key.idea] = true
 			continue
 		}
-		notMade = append(notMade, assistantkit.NotMade{ID: key.idea, Title: titles[key.idea] + " · " + j.Request.PlatformID, Reason: reason})
+		notMade = append(notMade, assistantkit.NotMade{ID: key.idea, Title: titles[key.idea], Platform: j.Request.PlatformID, Reason: reason})
 		if !slices.Contains(ideaIDs, key.idea) {
 			ideaIDs = append(ideaIDs, key.idea)
 		}
