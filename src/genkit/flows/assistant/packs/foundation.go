@@ -33,7 +33,7 @@ func foundationPack(d Deps) assistant.Pack {
 		Summary: "read the brand foundation (voices, audiences, guardrails, facts, look, templates); add, edit or remove voices, audiences, facts and series; edit the guardrails; set which series a campaign runs; read the brand off a website or assets and answer its questions",
 		Screens: []viewcontext.Screen{
 			"foundation", "foundation.voices", "foundation.voice", "foundation.audiences", "foundation.audience",
-			"foundation.facts", "foundation.guardrails", "foundation.look", "foundation.questions",
+			"foundation.facts", "foundation.guardrails", "foundation.look", "foundation.questions", "foundation.read",
 			"foundation.series", "foundation.series_item", "foundation.templates",
 		},
 		// Each tool's last output in the turn reaches the client under its

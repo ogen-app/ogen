@@ -38,7 +38,7 @@ type Screen string
 var screens = []Screen{
 	"home", "ideas", "assets", "asset", "analytics", "analytics.post", "calendar", "campaigns", "tasks",
 	"foundation", "foundation.voices", "foundation.voice", "foundation.audiences", "foundation.audience",
-	"foundation.facts", "foundation.guardrails", "foundation.look", "foundation.questions",
+	"foundation.facts", "foundation.guardrails", "foundation.look", "foundation.questions", "foundation.read",
 	"foundation.series", "foundation.series_item", "foundation.templates",
 	"activity", "settings", "profile",
 	"campaign.overview", "campaign.strategy", "campaign.list", "campaign.ideas", "campaign.assets",
@@ -61,7 +61,7 @@ var detailKinds = map[Screen]EntityKind{
 	"asset": KindAsset, "campaign.asset": KindAsset,
 	"post": KindPost, "analytics.post": KindPost,
 	"foundation.voice": KindVoice, "foundation.audience": KindAudience,
-	"foundation.series_item": KindSeries,
+	"foundation.series_item": KindSeries, "foundation.read": KindDistill,
 }
 
 // DetailKind is the kind of entity a detail screen shows; false for a screen
@@ -118,9 +118,11 @@ const (
 	KindAudience EntityKind = "audience"
 	KindFact     EntityKind = "fact"
 	KindSeries   EntityKind = "series"
+	// KindDistill is a brand reading: one distill run.
+	KindDistill EntityKind = "distill"
 )
 
-var kinds = []EntityKind{KindIdea, KindAsset, KindPost, KindCampaign, KindVoice, KindAudience, KindFact, KindSeries}
+var kinds = []EntityKind{KindIdea, KindAsset, KindPost, KindCampaign, KindVoice, KindAudience, KindFact, KindSeries, KindDistill}
 
 // Kinds lists every entity kind, in a stable order.
 func Kinds() []EntityKind { return slices.Clone(kinds) }
