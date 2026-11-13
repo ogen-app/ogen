@@ -3,9 +3,11 @@ package campaign_assistant
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
@@ -259,24 +261,36 @@ func TestDraftCard(t *testing.T) {
 		Platforms: []string{"LinkedIn"}, Count: 5, PublishDate: "2026-03-14",
 		Cited: []assistantkit.Source{{ID: "a1", Title: "Villa Aurora brochure 2026"}}, CitesKnown: true,
 	})
-	if card.Verb != "Draft 5 posts" || card.Meta != "from Villa Aurora brochure 2026" || len(card.Sources) != 1 ||
-		card.Rows[0] != (assistantkit.CardRow{Kind: assistantkit.CardRowDestination, Value: "LinkedIn in Spring reopening"}) ||
-		card.Rows[1].Start != "2026-03-14" || card.Rows[1].Value != "14 Mar 2026" {
+	if card.Verb != "Draft 5 posts" || card.Action != assistantkit.CardActionDraftPosts || card.Count != 5 ||
+		card.Meta != "from Villa Aurora brochure 2026" || card.DrawsOn != assistantkit.CardDrawsOnSources || len(card.Sources) != 1 ||
+		card.Rows[1].Start != "2026-03-14" || card.Rows[1].Value != "14 Mar 2026" || card.Rows[1].Spread ||
+		card.FootnoteKey != assistantkit.CardFootnoteDraftsLand || card.FootnoteCount != 5 {
 		t.Fatalf("card = %+v", card)
+	}
+	dest := assistantkit.CardRow{Kind: assistantkit.CardRowDestination, Value: "LinkedIn in Spring reopening", Platforms: []string{"LinkedIn"}, Campaign: "Spring reopening"}
+	if !reflect.DeepEqual(card.Rows[0], dest) {
+		t.Fatalf("destination = %+v", card.Rows[0])
 	}
 
 	// A platform named by id shows by its name, on both cards.
-	if card := draftCard(ctx, DraftPostInput{Platforms: []string{"pl2"}}); card.Rows[0].Value != "Threads in Spring reopening" {
-		t.Fatalf("destination = %q", card.Rows[0].Value)
+	if card := draftCard(ctx, DraftPostInput{Platforms: []string{"pl2"}}); card.Rows[0].Value != "Threads in Spring reopening" ||
+		!slices.Equal(card.Rows[0].Platforms, []string{"Threads"}) {
+		t.Fatalf("destination = %+v", card.Rows[0])
 	}
-	if card := generatePostsGate.Card(ctx, GeneratePostsInput{Platforms: []string{"pl1", "Threads"}}); card.Rows[0].Value != "LinkedIn, Threads" {
-		t.Fatalf("plan destination = %q", card.Rows[0].Value)
+	card = generatePostsGate.Card(ctx, GeneratePostsInput{Platforms: []string{"pl1", "Threads"}, Count: 4})
+	if card.Rows[0].Value != "LinkedIn, Threads" || !slices.Equal(card.Rows[0].Platforms, []string{"LinkedIn", "Threads"}) || card.Rows[0].Campaign != "" ||
+		card.Action != assistantkit.CardActionPlanIdeas || card.Count != 4 {
+		t.Fatalf("plan card = %+v", card)
 	}
 
-	// Research that quoted no asset says it isn't grounded; no date spreads.
+	// Research that quoted no asset says it isn't grounded; no date spreads
+	// the drafts over the two weeks from today.
 	card = draftCard(ctx, DraftPostInput{Platforms: []string{"LinkedIn"}, CitesKnown: true})
-	if card.Verb != "Draft 1 post" || card.Meta != "from the research in this chat" || len(card.Rows) != 3 ||
-		card.Rows[1].Start != "" || card.Rows[2].Kind != assistantkit.CardRowGrounding || !strings.HasPrefix(card.Footnote, "It lands") {
+	today := time.Now().UTC()
+	if card.Verb != "Draft 1 post" || card.Meta != "from the research in this chat" || card.DrawsOn != assistantkit.CardDrawsOnResearch || len(card.Rows) != 3 ||
+		!card.Rows[1].Spread || card.Rows[1].Start != today.Format(time.DateOnly) || card.Rows[1].End != today.AddDate(0, 0, 14).Format(time.DateOnly) ||
+		card.Rows[2].Kind != assistantkit.CardRowGrounding || !card.Rows[2].NotGrounded ||
+		!strings.HasPrefix(card.Footnote, "It lands") || card.FootnoteCount != 1 {
 		t.Fatalf("ungrounded card = %+v", card)
 	}
 }
