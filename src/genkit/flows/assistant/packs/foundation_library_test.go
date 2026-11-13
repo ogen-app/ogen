@@ -192,11 +192,11 @@ func TestBrandRetry(t *testing.T) {
 	edits := in.edits(Deps{}, nil, nil)
 	out := &EditBrandOutput{Done: 1, Failed: []BrandEditFailure{{What: "x", Reason: "already there"}}, Stopped: "remove voice v1 failed: timeout", left: edits[1:]}
 	in.Kept = []KeptFact{{FactID: "f1", Reason: "still true"}}
-	retry, notMade, ok := brandRetry(in, out)
-	if !ok || len(retry.Kept) != 1 || len(retry.AddFacts) != 0 || !slices.Equal(retry.RemoveVoices, []string{"v1"}) || len(retry.AddAudiences) != 1 || len(notMade) != 3 {
+	retry, notMade, made, ok := brandRetry(in, out)
+	if !ok || len(retry.Kept) != 1 || len(retry.AddFacts) != 0 || !slices.Equal(retry.RemoveVoices, []string{"v1"}) || len(retry.AddAudiences) != 1 || len(notMade) != 3 || made != 1 {
 		t.Fatalf("retry = %+v, notMade = %+v", retry, notMade)
 	}
-	if _, _, ok := brandRetry(in, &EditBrandOutput{Done: 3}); ok {
+	if _, _, _, ok := brandRetry(in, &EditBrandOutput{Done: 3}); ok {
 		t.Fatal("a whole edit offered a retry")
 	}
 }

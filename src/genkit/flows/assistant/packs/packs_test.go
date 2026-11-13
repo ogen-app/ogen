@@ -200,7 +200,7 @@ func TestBulkIdeaChanges_StoppedEarly(t *testing.T) {
 	}
 	// What the error left is retried; the rest is done.
 	move := ideaRetry(func(in MoveIdeasInput, ids []string) MoveIdeasInput { in.IdeaIDs = ids; return in })
-	if retry, notMade, ok := move(MoveIdeasInput{IdeaIDs: []string{"i1", "i2"}, CampaignID: "c1"}, out); !ok || !slices.Equal(retry.IdeaIDs, []string{"i2"}) || retry.CampaignID != "c1" || len(notMade) != 1 {
+	if retry, notMade, made, ok := move(MoveIdeasInput{IdeaIDs: []string{"i1", "i2"}, CampaignID: "c1"}, out); !ok || !slices.Equal(retry.IdeaIDs, []string{"i2"}) || retry.CampaignID != "c1" || len(notMade) != 1 || made != 1 {
 		t.Fatalf("retry = %+v, notMade = %+v", retry, notMade)
 	}
 	out, err = setIdeaVerdicts(ctx, d, SetIdeaVerdictsInput{IdeaIDs: []string{"i1", "i2"}, Verdict: "yes"})
@@ -209,7 +209,7 @@ func TestBulkIdeaChanges_StoppedEarly(t *testing.T) {
 	}
 	// A refusal that stopped it leaves nothing worth retrying.
 	refusedOut, _ := stoppedEarly(ctx, &BulkIdeasOutput{Done: 1}, []string{"i2"}, assistantkit.Refused("that campaign doesn't exist"))
-	if _, _, ok := move(MoveIdeasInput{}, refusedOut); ok {
+	if _, _, _, ok := move(MoveIdeasInput{}, refusedOut); ok {
 		t.Fatal("a refusal offered a retry")
 	}
 

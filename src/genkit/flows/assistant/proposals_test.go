@@ -165,11 +165,11 @@ func bulkPack(ran *int) Pack {
 						}
 						return in, nil, nil
 					},
-				}, func(in bulkIn, out *bulkOut) (bulkIn, []assistantkit.NotMade, bool) {
+				}, func(in bulkIn, out *bulkOut) (bulkIn, []assistantkit.NotMade, int, bool) {
 					if out.Done == in.N {
-						return in, nil, false
+						return in, nil, out.Done, false
 					}
-					return bulkIn{N: in.N - out.Done}, []assistantkit.NotMade{{ID: "rest", Reason: "engine hiccup"}}, true
+					return bulkIn{N: in.N - out.Done}, []assistantkit.NotMade{{ID: "rest", Reason: "engine hiccup"}}, out.Done, true
 				}, assistantkit.Wrap(func(ctx context.Context, in bulkIn) (*bulkOut, error) {
 					if in.N == brokenBulk {
 						return nil, errors.New("bulk engine down")
@@ -585,14 +585,20 @@ func TestProposals_AnswerFromTheCardDoneInPart(t *testing.T) {
 	}
 	var events []SSEEventKind
 	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "half", Confirm: true}, func(k SSEEventKind, _ any) { events = append(events, k) })
-	if err != nil || *ran != 10 || !strings.HasPrefix(resp.Explanation, "Done in part: Do 16 things. 1 not done") {
+	if err != nil || *ran != 10 || resp.Explanation != "Done in part: Do 16 things. 10 of 11 made, 1 not; the ones worth retrying are offered again." {
 		t.Fatalf("resp = %+v, err = %v, ran = %d", resp, err, *ran)
 	}
-	if len(resp.Proposals) != 1 || resp.Proposals[0].Summary != "Retry: Do 6 things" || store.rows[0].Status != models.ProposalConfirmed {
+	if len(resp.Proposals) != 1 || resp.Proposals[0].Summary != "Retry: Do 6 things" || resp.Proposals[0].RetryOf != "half" ||
+		store.rows[0].Status != models.ProposalConfirmed || store.rows[1].RetryOf != "half" {
 		t.Fatalf("cards = %+v", resp.Proposals)
 	}
 	if !slices.Equal(events, []SSEEventKind{SSEEventProposalCreated, SSEEventProposalResolved, SSEEventComplete}) {
 		t.Fatalf("events = %v", events)
+	}
+	// The thread says how much was made, so a reload can say it was partial.
+	thread, _ := h.msgs.ListRecent(t.Context(), models.AssistantScopeWorkspace, "", 10)
+	if len(thread) != 2 || thread[0].Content != "Confirmed: Do 16 things · 10 of 11 made" {
+		t.Fatalf("thread = %+v", thread)
 	}
 	// The retry runs just what was left.
 	if _, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: resp.Proposals[0].ID, Confirm: true}, nil); err != nil || *ran != 16 {
@@ -600,23 +606,24 @@ func TestProposals_AnswerFromTheCardDoneInPart(t *testing.T) {
 	}
 }
 
-// The recommended option is stored with the offer and shown on its card.
+// The recommended option and why are stored with the offer and shown on its
+// card.
 func TestProposals_RecommendedOptionOnTheCard(t *testing.T) {
 	store := &memProposals{}
 	st := newTurnState(&viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: "home",
 		Scope: viewcontext.Scope{Kind: models.AssistantScopeWorkspace}}}, nil)
 	sink := turnSink{st: st, repos: Repos{Proposals: store}}
 	_, err := sink.Propose(t.Context(), assistantkit.Proposal{Tool: "bulkThing", Args: bulkIn{N: 9}, Summary: "Over the goal", Options: []assistantkit.Option{
-		{ID: "fill", Title: "Add 2", Recommended: true, Tool: "bulkThing", Args: bulkIn{N: 2}},
+		{ID: "fill", Title: "Add 2", Recommended: true, Why: "It reaches the goal exactly.", Tool: "bulkThing", Args: bulkIn{N: 2}},
 		{ID: "anyway", Title: "Add all 9", Tool: "bulkThing", Args: bulkIn{N: 9}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !store.rows[0].Options[0].Recommended || store.rows[0].Options[1].Recommended {
-		t.Fatalf("stored = %+v", store.rows[0].Options)
+	if o := store.rows[0].Options; !o[0].Recommended || o[0].Why != "It reaches the goal exactly." || o[1].Recommended {
+		t.Fatalf("stored = %+v", o)
 	}
-	if cards := st.cardList(); !cards[0].Options[0].Recommended || cards[0].Options[1].Recommended {
+	if cards := st.cardList(); !cards[0].Options[0].Recommended || cards[0].Options[0].Why == "" || cards[0].Options[1].Recommended {
 		t.Fatalf("card = %+v", cards[0].Options)
 	}
 }

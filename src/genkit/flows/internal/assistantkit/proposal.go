@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/firebase/genkit/go/ai"
 )
@@ -228,10 +229,10 @@ func changedSince[Out any](r *Refusal, changes []string) Outcome[Out] {
 	return out
 }
 
-// Retry reads a run that did part of the job: what it left undone, and the
-// call that tries just the items worth trying again. ok is false when none
-// is.
-type Retry[In, Out any] func(in In, out Out) (retry In, notMade []NotMade, ok bool)
+// Retry reads a run that did part of the job: how many items it made, what
+// it left undone, in the same units, and the call that tries just the items
+// worth trying again. ok is false when none is.
+type Retry[In, Out any] func(in In, out Out) (retry In, notMade []NotMade, made int, ok bool)
 
 // GatedRetry is Gated for a tool that can do part of its job: a run that
 // left items undone says which, and offers the ones worth retrying on a
@@ -244,9 +245,9 @@ func GatedRetry[In any, Out PartialResult](tool string, gate Gate[In], retry Ret
 			return out, err
 		}
 		result := *out.Result
-		again, notMade, ok := retry(in, result)
+		again, notMade, made, ok := retry(in, result)
 		if !ok {
-			result.MarkPartial(notMade, "")
+			result.MarkPartial(made, notMade, "")
 			return out, nil
 		}
 		// The work has run either way: an offer that can't be stored loses
@@ -255,7 +256,7 @@ func GatedRetry[In any, Out PartialResult](tool string, gate Gate[In], retry Ret
 		if err != nil {
 			slog.WarnContext(ctx, "offer a retry failed", "tool", tool, "err", err)
 		}
-		result.MarkPartial(notMade, id)
+		result.MarkPartial(made, notMade, id)
 		return out, nil
 	})
 }
@@ -289,6 +290,9 @@ func Offer(ctx context.Context, p Proposal) (string, error) {
 func propose[Out any](ctx context.Context, p Proposal, status Status) (Outcome[Out], error) {
 	if n := countRecommended(p.Options); n > 1 {
 		return Outcome[Out]{}, fmt.Errorf("assistantkit: %s offers %d recommended options; at most one", p.Tool, n)
+	}
+	if slices.ContainsFunc(p.Options, func(o Option) bool { return o.Recommended && o.Why == "" }) {
+		return Outcome[Out]{}, fmt.Errorf("assistantkit: %s recommends an option without saying why", p.Tool)
 	}
 	sink, _ := ctx.Value(sinkKey{}).(ProposalSink)
 	if sink == nil {

@@ -68,7 +68,7 @@ func (o *PostFixOutput) failedAll(first error) error {
 
 // postRetry reads a post fix: the posts it skipped, and the ones an error
 // stopped, which the retried call takes again.
-func postRetry(in PostsRef, out *PostFixOutput) (PostsRef, []assistantkit.NotMade, bool) {
+func postRetry(in PostsRef, out *PostFixOutput) (PostsRef, []assistantkit.NotMade, int, bool) {
 	var notMade []assistantkit.NotMade
 	var ids []string
 	for _, p := range out.Skipped {
@@ -79,7 +79,7 @@ func postRetry(in PostsRef, out *PostFixOutput) (PostsRef, []assistantkit.NotMad
 		ids = append(ids, p.PostID)
 	}
 	in.PostIDs = ids
-	return in, notMade, len(ids) > 0
+	return in, notMade, out.Changed + out.Withdrawing, len(ids) > 0
 }
 
 // SkippedPost is a post a fix left, and why.

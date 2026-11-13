@@ -189,7 +189,7 @@ func TestGated_FailsClosedWithoutSink(t *testing.T) {
 	}
 }
 
-// A conflict leads with at most one recommended option.
+// A conflict leads with at most one recommended option, which says why.
 func TestGated_OneRecommendedOption(t *testing.T) {
 	conflict := func(options ...Option) ai.ToolFunc[countIn, Outcome[int]] {
 		return Gated("generate", Gate[countIn]{
@@ -197,14 +197,17 @@ func TestGated_OneRecommendedOption(t *testing.T) {
 		}, Wrap(func(context.Context, countIn) (int, error) { return 0, nil }))
 	}
 	ctx := &ai.ToolContext{Context: WithProposalSink(t.Context(), &memSink{})}
-	out, err := conflict(Option{ID: "fill", Title: "Fill", Recommended: true}, Option{ID: "anyway", Title: "Anyway"})(ctx, countIn{Count: 9})
+	out, err := conflict(Option{ID: "fill", Title: "Fill", Recommended: true, Why: "It fills the goal."}, Option{ID: "anyway", Title: "Anyway"})(ctx, countIn{Count: 9})
 	if err != nil || !out.Options[0].Recommended {
 		t.Fatalf("out = %+v, err = %v", out, err)
 	}
-	if b, _ := json.Marshal(out); !strings.Contains(string(b), `"recommended":true`) {
+	if b, _ := json.Marshal(out); !strings.Contains(string(b), `"recommended":true,"why":"It fills the goal."`) {
 		t.Fatalf("the model doesn't see the recommendation: %s", b)
 	}
-	if _, err := conflict(Option{ID: "a", Recommended: true}, Option{ID: "b", Recommended: true})(ctx, countIn{Count: 9}); err == nil {
+	if _, err := conflict(Option{ID: "a", Recommended: true, Why: "a"}, Option{ID: "b", Recommended: true, Why: "b"})(ctx, countIn{Count: 9}); err == nil {
 		t.Fatal("two recommended options were offered")
+	}
+	if _, err := conflict(Option{ID: "a", Recommended: true}, Option{ID: "b"})(ctx, countIn{Count: 9}); err == nil {
+		t.Fatal("a recommended option was offered without why")
 	}
 }

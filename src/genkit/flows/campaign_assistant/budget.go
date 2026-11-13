@@ -37,7 +37,7 @@ func draftOverGoal(ctx context.Context, in DraftPostInput) error {
 	ideas := assistantkit.Option{ID: "ideas", Title: fmt.Sprintf("Save the %d as ideas instead; ideas don't count toward the goal", count),
 		Tool: "generatePosts", Args: ideasOf(in)}
 	if g != nil && g.Unknown {
-		ideas.Recommended = true
+		ideas.Recommended, ideas.Why = true, "Ideas don't count toward the goal, so nothing can take the campaign past it."
 		reason := fmt.Sprintf("The campaign's posts could not be read, so it is unclear how much room is left under its goal of %d.", g.Target)
 		return assistantkit.Conflicted(reason, ideas,
 			assistantkit.Option{ID: "anyway", Title: fmt.Sprintf("Draft %d without checking the goal", count), Tool: "draftPost", Args: in})
@@ -69,8 +69,15 @@ func draftOverGoal(ctx context.Context, in DraftPostInput) error {
 			Title: fmt.Sprintf("Raise the goal to %d per %s and draft them", per, cmp.Or(st.campaign.GoalCadence, campaigngoal.DefaultCadence)),
 			Tool:  "setCampaignGoal", Args: SetCampaignGoalInput{PerPeriod: per, Draft: &in}})
 	}
-	opts[0].Recommended = true
+	opts[0].Recommended, opts[0].Why = true, overGoalWhy[opts[0].ID]
 	return assistantkit.Conflicted(reason, opts...)
+}
+
+// overGoalWhy is why each way past the goal that can lead is recommended.
+var overGoalWhy = map[string]string{
+	"fill":    "It reaches the goal exactly, without going over.",
+	"replace": "The campaign stays at its goal, and the new posts take the weakest drafts' place.",
+	"ideas":   "Ideas don't count toward the goal, so nothing takes the campaign past it.",
 }
 
 // ideasOf is a draftPost call as a generatePosts one: the same platforms,

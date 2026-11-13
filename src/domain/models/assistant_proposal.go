@@ -29,12 +29,14 @@ const (
 // a choice. When Tool is set, choosing the option runs that tool with Args
 // instead of the proposal's own call.
 type ProposalOption struct {
-	ID          string  `json:"id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description,omitempty"`
-	Recommended bool    `json:"recommended,omitempty"`
-	Tool        string  `json:"tool,omitempty"`
-	Args        JSONMap `json:"args,omitempty"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Recommended bool   `json:"recommended,omitempty"`
+	// Why says why the recommended option is the one to pick.
+	Why  string  `json:"why,omitempty"`
+	Tool string  `json:"tool,omitempty"`
+	Args JSONMap `json:"args,omitempty"`
 }
 
 // AssistantProposal is work the assistant offered but has not done: a

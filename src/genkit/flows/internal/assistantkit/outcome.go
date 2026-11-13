@@ -25,6 +25,9 @@ type Option struct {
 	// Recommended marks the way forward the card leads with; an offer has
 	// at most one.
 	Recommended bool `json:"recommended,omitempty"`
+	// Why says in one line why the recommended option is the one to pick;
+	// a recommended option must have it.
+	Why string `json:"why,omitempty"`
 	// Tool and Args are the call picking this option runs. They stay on the
 	// server: the model only needs the id to name the user's pick.
 	Tool string `json:"-"`
@@ -49,31 +52,37 @@ type Outcome[T any] struct {
 	Changes []string `json:"changes,omitempty"`
 }
 
-// Partial is what a run that did part of the job left undone, each item
-// with why, and RetryProposalID, an offer of just the items worth trying
-// again; it is empty when nothing is. A result embeds it, so every reader
-// of the result — the model, a chat turn's results, a card's answer — sees
-// it the same.
+// Partial is how much of the job a run did: Made of Total items, the ones
+// left undone each with why, and RetryProposalID, an offer of just the
+// items worth trying again; it is empty when nothing is. A result embeds
+// it, so every reader of the result — the model, a chat turn's results, a
+// card's answer — sees it the same.
 type Partial struct {
+	Made            int       `json:"made"`
+	Total           int       `json:"total"`
 	NotMade         []NotMade `json:"notMade,omitempty"`
 	RetryProposalID string    `json:"retryProposalId,omitempty"`
 }
 
-// MarkPartial records what the run left undone and the retry offered.
-func (p *Partial) MarkPartial(notMade []NotMade, retryProposalID string) {
-	p.NotMade, p.RetryProposalID = notMade, retryProposalID
+// MarkPartial records how much the run made, what it left undone and the
+// retry offered.
+func (p *Partial) MarkPartial(made int, notMade []NotMade, retryProposalID string) {
+	p.Made, p.Total, p.NotMade, p.RetryProposalID = made, made+len(notMade), notMade, retryProposalID
 }
 
 // PartialResult is a result that can say a run did part of the job.
 type PartialResult interface {
-	MarkPartial(notMade []NotMade, retryProposalID string)
+	MarkPartial(made int, notMade []NotMade, retryProposalID string)
 }
 
-// NotMade is an item a run left undone.
+// NotMade is an item a run left undone. Platform is the platform it was
+// for, when the item is one of several for one subject, e.g. an idea's
+// LinkedIn post.
 type NotMade struct {
-	ID     string `json:"id"`
-	Title  string `json:"title,omitempty"`
-	Reason string `json:"reason"`
+	ID       string `json:"id"`
+	Title    string `json:"title,omitempty"`
+	Platform string `json:"platform,omitempty"`
+	Reason   string `json:"reason"`
 }
 
 // OK wraps a successful result.

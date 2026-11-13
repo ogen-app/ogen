@@ -146,13 +146,13 @@ type halfOut struct {
 func halfTool() ai.ToolFunc[idsIn, Outcome[*halfOut]] {
 	return GatedRetry("halfIDs", Gate[idsIn]{
 		Summary: func(in idsIn) string { return "Do " + strings.Join(in.IDs, ",") },
-	}, func(in idsIn, out *halfOut) (idsIn, []NotMade, bool) {
+	}, func(in idsIn, out *halfOut) (idsIn, []NotMade, int, bool) {
 		left := in.IDs[len(out.Done):]
 		var notMade []NotMade
 		for _, id := range left {
 			notMade = append(notMade, NotMade{ID: id, Reason: "stopped early"})
 		}
-		return idsIn{IDs: left}, notMade, len(left) > 0
+		return idsIn{IDs: left}, notMade, len(out.Done), len(left) > 0
 	}, Wrap(func(_ context.Context, in idsIn) (*halfOut, error) {
 		out := &halfOut{}
 		for _, id := range in.IDs {
@@ -173,14 +173,14 @@ func TestGatedRetry_OffersWhatWasLeft(t *testing.T) {
 		t.Fatalf("out = %+v, err = %v", out, err)
 	}
 	// What the run left rides in its result, where every reader sees it.
-	if r := *out.Result; len(r.Done) != 1 || len(r.NotMade) != 2 || r.RetryProposalID != "prop-1" {
+	if r := *out.Result; len(r.Done) != 1 || len(r.NotMade) != 2 || r.RetryProposalID != "prop-1" || r.Made != 1 || r.Total != 3 {
 		t.Fatalf("result = %+v", r)
 	}
 	if len(sink.got) != 1 || sink.got[0].Summary != "Retry: Do x,b" || sink.got[0].Tool != "halfIDs" || sink.got[0].RetryOf != "offer-1" {
 		t.Fatalf("retry offer = %+v", sink.got)
 	}
 	// A run that did it all offers nothing.
-	if out, _ := halfTool()(ctx, idsIn{IDs: []string{"a"}}); out.Result == nil || (*out.Result).RetryProposalID != "" || (*out.Result).NotMade != nil || len(sink.got) != 1 {
+	if out, _ := halfTool()(ctx, idsIn{IDs: []string{"a"}}); out.Result == nil || (*out.Result).RetryProposalID != "" || (*out.Result).NotMade != nil || (*out.Result).Made != 1 || (*out.Result).Total != 1 || len(sink.got) != 1 {
 		t.Fatalf("whole run = %+v", out)
 	}
 }

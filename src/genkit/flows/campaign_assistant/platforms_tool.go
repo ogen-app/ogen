@@ -220,7 +220,8 @@ func offerPlatforms(ctx context.Context, names []string, postType string) error 
 	summary := platforms.Summary(plan.added)
 	return assistantkit.Conflicted(
 		fmt.Sprintf("The campaign doesn't publish to %s yet.", summary),
-		assistantkit.Option{ID: "add_platform", Title: "Add " + summary + " to the campaign", Recommended: true, Tool: "updateCampaignPlatforms", Args: in},
+		assistantkit.Option{ID: "add_platform", Title: "Add " + summary + " to the campaign", Recommended: true,
+			Why: "What you asked for needs it, and the rest of the campaign stays as it is.", Tool: "updateCampaignPlatforms", Args: in},
 	)
 }
 

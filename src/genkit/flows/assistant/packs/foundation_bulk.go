@@ -272,7 +272,7 @@ func (in EditBrandInput) size() int {
 
 // brandRetry reads a bulk edit: the changes refused, and the ones a stop
 // left, which the retried call makes again.
-func brandRetry(in EditBrandInput, out *EditBrandOutput) (EditBrandInput, []assistantkit.NotMade, bool) {
+func brandRetry(in EditBrandInput, out *EditBrandOutput) (EditBrandInput, []assistantkit.NotMade, int, bool) {
 	var notMade []assistantkit.NotMade
 	for _, f := range out.Failed {
 		notMade = append(notMade, assistantkit.NotMade{ID: f.What, Title: f.What, Reason: f.Reason})
@@ -282,7 +282,7 @@ func brandRetry(in EditBrandInput, out *EditBrandOutput) (EditBrandInput, []assi
 		notMade = append(notMade, assistantkit.NotMade{ID: e.what, Title: e.what, Reason: out.Stopped})
 		e.keep(&retry)
 	}
-	return retry, notMade, len(out.left) > 0
+	return retry, notMade, out.Done, len(out.left) > 0
 }
 
 // keptFacts are the facts kept, with their statements; one that doesn't
