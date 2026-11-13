@@ -41,10 +41,13 @@ type DraftRequest struct {
 // Written is a post the writer created. PublishDate (YYYY-MM-DD) is empty
 // for an unscheduled draft.
 type Written struct {
-	PostID      string `json:"postId"`
-	Title       string `json:"title"`
-	PlatformID  string `json:"platformId"`
-	PublishDate string `json:"publishDate,omitempty"`
+	PostID     string `json:"postId"`
+	Title      string `json:"title"`
+	PlatformID string `json:"platformId"`
+	// PlatformPostType is the post's type on its platform; empty for the
+	// platform's default.
+	PlatformPostType string `json:"platformPostType,omitempty"`
+	PublishDate      string `json:"publishDate,omitempty"`
 }
 
 // Drafter writes finished posts and persists them as drafts. Warnings are
@@ -77,12 +80,17 @@ type DraftPlan struct {
 type DraftJob struct {
 	Request DraftRequest
 	IdeaIDs []string
+	// DateFrom is where the job's date came from, for the posts it writes.
+	DateFrom string
 }
 
 // DraftedPost is a written post, the ideas it came from and the assets the
 // writer was given, its sources.
 type DraftedPost struct {
 	Written
+	// DateFrom is where PublishDate came from: asked or plan; empty for an
+	// undated post.
+	DateFrom     string   `json:"dateFrom,omitempty"`
 	IdeaIDs      []string `json:"ideaIds"`
 	UsedAssetIDs []string `json:"usedAssetIds"`
 }
@@ -149,7 +157,7 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 			ids[i] = idea.ID
 		}
 		for _, p := range platforms {
-			out.Jobs = append(out.Jobs, DraftJob{IdeaIDs: ids, Request: DraftRequest{
+			out.Jobs = append(out.Jobs, DraftJob{IdeaIDs: ids, DateFrom: dateFrom(in.TargetDate, plan.TargetDate), Request: DraftRequest{
 				CampaignID:     campaign.ID,
 				PlatformID:     p,
 				PostType:       postType,
@@ -180,6 +188,9 @@ func (s *Service) RunDraft(ctx context.Context, plan *DraftPlan, onPost func(Dra
 				return res, fmt.Errorf("link post %s to its ideas: %w", w.PostID, err)
 			}
 			p := DraftedPost{Written: w, IdeaIDs: job.IdeaIDs, UsedAssetIDs: slices.Clone(job.Request.UsedAssetIDs)}
+			if w.PublishDate != "" {
+				p.DateFrom = job.DateFrom
+			}
 			if p.UsedAssetIDs == nil {
 				p.UsedAssetIDs = []string{}
 			}

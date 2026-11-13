@@ -21329,6 +21329,10 @@ const docTemplate = `{
                 "platform_id": {
                     "type": "string"
                 },
+                "platform_post_type": {
+                    "description": "PlatformPostType is the post's type on its platform, e.g. carousel;\nempty when it has none yet.",
+                    "type": "string"
+                },
                 "scheduled_at": {
                     "type": "string",
                     "x-nullable": true
@@ -21937,6 +21941,10 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "idea_count": {
+                    "description": "IdeaCount is how many ideas the post was made from; 0 for a post\nwritten directly. Read-only, counted per response.",
+                    "type": "integer"
                 },
                 "media_urls": {
                     "type": "array",

@@ -279,6 +279,9 @@ type Post struct {
 	SocialAccount     *SocialAccount     `bun:"-" json:"social_account,omitempty"`
 	UsedAssets        []Asset            `bun:"-" json:"used_assets"`
 	CampaignTypePhase *CampaignTypePhase `bun:"-" json:"campaign_type_phase,omitempty"`
+	// IdeaCount is how many ideas the post was made from; 0 for a post
+	// written directly. Read-only, counted per response.
+	IdeaCount int `bun:"-" json:"idea_count"`
 	// CoverURL is the public URL of the picture a post card leads with — its
 	// first drawable attachment (see PostAttachmentRepository.CoverKeysByPostIDs).
 	// Minted per response by the posts handler and never accepted on writes, so

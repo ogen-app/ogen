@@ -49,10 +49,13 @@ const IdeaSlotKind = "idea"
 
 // IdeaPostRef is a post made from an idea, as the idea shows it.
 type IdeaPostRef struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Status      PostStatus `json:"status"`
-	CampaignID  string     `json:"campaign_id"`
-	PlatformID  string     `json:"platform_id"`
-	ScheduledAt *time.Time `json:"scheduled_at" extensions:"x-nullable"`
+	ID         string     `json:"id"`
+	Title      string     `json:"title"`
+	Status     PostStatus `json:"status"`
+	CampaignID string     `json:"campaign_id"`
+	PlatformID string     `json:"platform_id"`
+	// PlatformPostType is the post's type on its platform, e.g. carousel;
+	// empty when it has none yet.
+	PlatformPostType string     `json:"platform_post_type"`
+	ScheduledAt      *time.Time `json:"scheduled_at" extensions:"x-nullable"`
 }

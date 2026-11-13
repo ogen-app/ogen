@@ -734,6 +734,11 @@ func (r *postRepository) hydrateRelations(ctx context.Context, posts []models.Po
 		return err
 	}
 
+	ideaCounts, err := r.ideaCounts(ctx, collectIDs(posts, func(p models.Post) string { return p.ID }))
+	if err != nil {
+		return err
+	}
+
 	for i, p := range posts {
 		posts[i].Campaign = campaignByID[p.CampaignID]
 		posts[i].Platform = platformByID[p.PlatformID]
@@ -746,6 +751,32 @@ func (r *postRepository) hydrateRelations(ctx context.Context, posts []models.Po
 		if p.CampaignTypePhaseID != nil {
 			posts[i].CampaignTypePhase = phaseByID[*p.CampaignTypePhaseID]
 		}
+		posts[i].IdeaCount = ideaCounts[p.ID]
 	}
 	return nil
+}
+
+// ideaCounts is how many ideas each of postIDs was made from; posts made
+// from none are absent.
+func (r *postRepository) ideaCounts(ctx context.Context, postIDs []string) (map[string]int, error) {
+	out := map[string]int{}
+	if len(postIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		PostID string `bun:"post_id"`
+		N      int    `bun:"n"`
+	}
+	err := r.db.NewSelect().Model((*models.PostIdea)(nil)).
+		ColumnExpr("pi.post_id, count(*) AS n").
+		Where("pi.post_id IN (?)", bun.List(postIDs)).
+		GroupExpr("pi.post_id").
+		Scan(ctx, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("count posts' ideas: %w", err)
+	}
+	for _, row := range rows {
+		out[row.PostID] = row.N
+	}
+	return out, nil
 }

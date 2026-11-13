@@ -83,7 +83,7 @@ func TestCompileIdeas_Undo(t *testing.T) {
 	}
 
 	out, err = compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-3", "u-1"}, PlatformIDs: []string{"linkedin", "threads"}})
-	if err != nil || len(out.Posts) != 2 || out.Posts[1].PlatformID != "threads" || out.Posts[0].Date != "" ||
+	if err != nil || len(out.Posts) != 2 || out.Posts[1].PlatformID != "threads" || out.Posts[0].Date != "" || out.Posts[0].DateFrom != "" ||
 		out.Grounding.Mode != assistantkit.Grounded || len(out.Grounding.Sources) != 1 || out.Grounding.Sources[0].ID != "a9" || out.Grounding.Sources[0].IdeaID != "u-3" {
 		t.Fatalf("grounded compile for two platforms = %+v, %v", out, err)
 	}
@@ -95,6 +95,13 @@ func TestCompileIdeas_Undo(t *testing.T) {
 	}
 	if _, err := repository.NewPostRepository(db).GetByID(ctx, out.Posts[0].PostID); err != nil {
 		t.Fatalf("a refused undo deleted the unedited post: %v", err)
+	}
+
+	// A day named dates each post, and says so.
+	day := "2026-12-01"
+	dated, err := compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-1"}, PlatformIDs: []string{"linkedin"}, TargetDate: day})
+	if err != nil || dated.Posts[0].Date != day || dated.Posts[0].DateFrom != "asked" {
+		t.Fatalf("dated compile = %+v, %v", dated, err)
 	}
 
 	// Both posts as made: one undo deletes both.

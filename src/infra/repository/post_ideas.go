@@ -67,7 +67,7 @@ func (r *postIdeaRepository) PostsOfIdea(ctx context.Context, ideaID string) ([]
 	}
 	out := []models.IdeaPostRef{}
 	err := r.db.NewSelect().Model((*models.PostIdea)(nil)).
-		ColumnExpr("po.id, po.title, po.status, po.campaign_id, coalesce(po.platform_id, '') AS platform_id, po.scheduled_at").
+		ColumnExpr("po.id, po.title, po.status, po.campaign_id, coalesce(po.platform_id, '') AS platform_id, coalesce(po.platform_post_type, '') AS platform_post_type, po.scheduled_at").
 		Join("JOIN posts AS po ON po.id = pi.post_id AND po.tenant_id = ?", tenantID).
 		Where("pi.idea_id = ?", ideaID).
 		OrderExpr("po.created_at, po.id").

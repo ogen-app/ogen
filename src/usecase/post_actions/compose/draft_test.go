@@ -67,6 +67,11 @@ func TestPlanDraft(t *testing.T) {
 	if len(plan.Jobs) != 2 || !slices.Equal(plan.Jobs[1].IdeaIDs, []string{"b"}) {
 		t.Fatalf("jobs = %+v", plan.Jobs)
 	}
+	// The first idea's plan dates both posts; the second idea has no date of
+	// its own, but the draft is dated by the first plan that sets one.
+	if plan.Jobs[0].DateFrom != DateFromPlan || plan.Jobs[1].DateFrom != DateFromPlan {
+		t.Fatalf("dates from %q / %q; want the plan", plan.Jobs[0].DateFrom, plan.Jobs[1].DateFrom)
+	}
 	r := plan.Jobs[0].Request
 	if r.PlatformID != "linkedin" || r.PostType != "carousel" || r.WindowStart != "2026-11-20" || r.Count != 1 ||
 		r.PhaseID != "ph1" || r.CreatedBy != "user-2" || !slices.Equal(r.UsedAssetIDs, []string{"asset-1"}) {
@@ -86,6 +91,16 @@ func TestPlanDraft(t *testing.T) {
 	if len(plan.Jobs) != 2 || plan.Jobs[1].Request.PlatformID != "threads" || plan.Jobs[0].Request.PostType != "" ||
 		!slices.Equal(plan.Jobs[0].IdeaIDs, []string{"a", "b"}) || !strings.Contains(plan.Jobs[0].Request.SourceMaterial, "Idea: Idea b") {
 		t.Fatalf("together = %+v", plan.Jobs)
+	}
+
+	// A day named wins over the plan's; no date at all says nothing.
+	asked, _ := models.ParseCalendarDate("2026-12-05")
+	if plan, err := s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"a"}, TargetDate: &asked}, 5); err != nil ||
+		plan.Jobs[0].DateFrom != DateFromAsked || plan.Jobs[0].Request.WindowStart != "2026-12-05" {
+		t.Fatalf("asked = %+v, %v", plan, err)
+	}
+	if plan, err := s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"b"}, PlatformIDs: []string{"linkedin"}}, 5); err != nil || plan.Jobs[0].DateFrom != "" {
+		t.Fatalf("undated = %+v, %v", plan, err)
 	}
 
 	for name, tc := range map[string]struct {
@@ -115,12 +130,13 @@ func TestRunDraft_LinksEachPostAndKeepsWhatWasWritten(t *testing.T) {
 		if calls == 2 {
 			return nil, nil, errors.New("writer down")
 		}
-		return []Written{{PostID: "p1", Title: "T", PlatformID: req.PlatformID}}, []string{"one draft dropped"}, nil
+		return []Written{{PostID: "p1", Title: "T", PlatformID: req.PlatformID, PlatformPostType: "carousel", PublishDate: "2026-11-20"}}, []string{"one draft dropped"}, nil
 	})
 	plan, err := s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"a", "b"}}, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
+	plan.Jobs[0].DateFrom = DateFromPlan
 	var streamed []string
 	res, err := s.RunDraft(t.Context(), plan, func(p DraftedPost) { streamed = append(streamed, p.PostID) })
 	if err == nil || len(res.Posts) != 1 || !slices.Equal(streamed, []string{"p1"}) || len(res.Warnings) != 1 {
@@ -128,6 +144,10 @@ func TestRunDraft_LinksEachPostAndKeepsWhatWasWritten(t *testing.T) {
 	}
 	if !slices.Equal(links.links["p1"], []string{"a"}) {
 		t.Fatalf("links = %v", links.links)
+	}
+	// A dated post says where its date came from, and keeps its type.
+	if p := res.Posts[0]; p.DateFrom != DateFromPlan || p.PlatformPostType != "carousel" {
+		t.Fatalf("post = %+v", p)
 	}
 }
 
