@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 	"github.com/ogen-app/ogen/src/usecase/campaigngoal"
 	"github.com/ogen-app/ogen/src/usecase/settings"
 )
@@ -34,43 +37,59 @@ func draftOverGoal(ctx context.Context, in DraftPostInput) error {
 	st := getRequestState(ctx)
 	g := st.snapshot.Goal
 	count := draftTotal(ctx, in)
-	ideas := assistantkit.Option{ID: "ideas", Title: fmt.Sprintf("Save the %d as ideas instead; ideas don't count toward the goal", count),
-		Tool: "generatePosts", Args: ideasOf(in)}
+	ideasDesc := fmt.Sprintf("Nothing drafted; the %d wait in Ideas and don't count toward the goal.", count)
+	if in.PublishDate != "" {
+		ideasDesc = fmt.Sprintf("Nothing drafted; the %d wait in Ideas with %s as their target, and don't count toward the goal.", count, in.PublishDate)
+	}
+	ideas := assistantkit.Option{ID: "ideas", Title: fmt.Sprintf("Save the %d as ideas instead", count),
+		Description: ideasDesc, Tool: "generatePosts", Args: ideasOf(in)}
 	if g != nil && g.Unknown {
 		ideas.Recommended, ideas.Why = true, "Ideas don't count toward the goal, so nothing can take the campaign past it."
 		reason := fmt.Sprintf("The campaign's posts could not be read, so it is unclear how much room is left under its goal of %d.", g.Target)
-		return assistantkit.Conflicted(reason, ideas,
-			assistantkit.Option{ID: "anyway", Title: fmt.Sprintf("Draft %d without checking the goal", count), Tool: "draftPost", Args: in})
+		return assistantkit.ConflictedCard(reason,
+			&assistantkit.Card{Footnote: "Replace isn't offered: without the campaign's posts there are no drafts to rank."},
+			ideas,
+			assistantkit.Option{ID: "anyway", Title: fmt.Sprintf("Draft %d without checking the goal", count),
+				Description: "Draft them all, and check the goal once the posts can be read.", Tool: "draftPost", Args: in})
 	}
 	if g == nil || count <= g.Room {
 		return nil
 	}
 	reason := fmt.Sprintf("That would add %d posts, but the goal is %d and the campaign already has %d, so there is room for %d more.",
 		count, g.Target, g.Planned, g.Room)
+	cadence := cmp.Or(st.campaign.GoalCadence, campaigngoal.DefaultCadence)
 	var opts []assistantkit.Option
 	if g.Room > 0 && draftPlatforms(ctx, in) == 1 {
 		fill := in
 		fill.Count = g.Room
-		opts = append(opts, assistantkit.Option{ID: "fill", Title: fmt.Sprintf("Draft %d to reach the goal", g.Room), Tool: "draftPost", Args: fill})
+		opts = append(opts, assistantkit.Option{ID: "fill", Title: fmt.Sprintf("Draft %d to reach the goal", g.Room),
+			Description: fmt.Sprintf("The other %d aren't drafted, and the campaign reaches its goal of %d.", count-g.Room, g.Target),
+			Tool:        "draftPost", Args: fill})
 	}
+	var card *assistantkit.Card
 	if weakest := weakestDrafts(ctx, count); len(weakest) == count {
 		ids := make([]string, len(weakest))
 		for i, p := range weakest {
 			ids[i] = p.ID
 		}
 		opts = append(opts, assistantkit.Option{ID: "replace",
-			Title:       fmt.Sprintf("Replace the %d weakest drafts with them", count),
-			Description: "The drafts with the lowest quality scores are deleted for good once the new ones are written.",
-			Tool:        "replaceWeakestDrafts", Args: ReplaceDraftsInput{Delete: ids, Draft: in}})
+			Title: fmt.Sprintf("Replace the %d weakest drafts with them", count),
+			Description: fmt.Sprintf("Draft the %d and delete for good the %d lowest-scored drafts that aren't scheduled. The campaign stays at %d posts.",
+				count, count, g.Planned),
+			Tool: "replaceWeakestDrafts", Args: ReplaceDraftsInput{Delete: ids, Draft: in}})
+	} else if st.deletePost != nil {
+		card = &assistantkit.Card{Footnote: fmt.Sprintf("Replace isn't offered: only %d %s a quality score to rank against the %d new ones.",
+			len(weakest), plural(len(weakest), "draft has", "drafts have"), count)}
 	}
 	opts = append(opts, ideas)
 	if per := raisedGoal(st.campaign, g.Planned+count); per > 0 {
 		opts = append(opts, assistantkit.Option{ID: "raise",
-			Title: fmt.Sprintf("Raise the goal to %d per %s and draft them", per, cmp.Or(st.campaign.GoalCadence, campaigngoal.DefaultCadence)),
-			Tool:  "setCampaignGoal", Args: SetCampaignGoalInput{PerPeriod: per, Draft: &in}})
+			Title:       fmt.Sprintf("Raise the goal to %d per %s and draft them", per, cadence),
+			Description: fmt.Sprintf("Every %s plans %d from then on, since the goal is a rate.", cadence, per),
+			Tool:        "setCampaignGoal", Args: SetCampaignGoalInput{PerPeriod: per, Draft: &in}})
 	}
 	opts[0].Recommended, opts[0].Why = true, overGoalWhy[opts[0].ID]
-	return assistantkit.Conflicted(reason, opts...)
+	return assistantkit.ConflictedCard(reason, card, opts...)
 }
 
 // overGoalWhy is why each way past the goal that can lead is recommended.
@@ -235,12 +254,19 @@ type ReplaceDraftsInput struct {
 }
 
 // ReplaceDraftsOutput is what was drafted, and the drafts deleted for it.
+// Drafted is always an object; its posts are the new drafts.
 type ReplaceDraftsOutput struct {
 	Drafted DraftPostOutput `json:"drafted"`
 	Deleted int             `json:"deleted"`
+	// Removed are the drafts deleted, weakest first, with their scores.
+	Removed []PostRef `json:"removed,omitempty"`
 	// Kept are the drafts left: changed since the offer, or more than the
 	// posts written.
 	Kept []string `json:"kept,omitempty"`
+	// Period is the current goal period after the swap, e.g. "April stays
+	// at 20"; nil without a goal, outside its dates, or when the posts
+	// could not be read again.
+	Period *state.Period `json:"period,omitempty"`
 }
 
 // replaceDraftsGate always waits for a yes: it deletes posts for good.
@@ -294,6 +320,7 @@ func toolReplaceDrafts(ctx context.Context, in ReplaceDraftsInput) (assistantkit
 	}
 	out := ReplaceDraftsOutput{Drafted: *drafted.Result}
 	actor, _ := logging.UserIDFrom(ctx)
+	scores := draftScores(ctx, in.Delete)
 	for i, id := range in.Delete {
 		if out.Deleted >= drafted.Result.PostCount {
 			out.Kept = append(out.Kept, in.Delete[i:]...)
@@ -312,8 +339,46 @@ func toolReplaceDrafts(ctx context.Context, in ReplaceDraftsInput) (assistantkit
 		}
 		if deleted {
 			out.Deleted++
+			ref := PostRef{ID: id, Title: titleOf(*p), Platform: platformName(st.campaign, p.PlatformID)}
+			if s, ok := scores[id]; ok {
+				ref.FitPct = new(int(math.Round(s)))
+			}
+			out.Removed = append(out.Removed, ref)
 			assistantkit.Touch(ctx, "post", id)
 		}
 	}
+	out.Period = currentPeriod(ctx)
 	return assistantkit.OK(out), nil
+}
+
+// draftScores are the posts' overall quality scores; empty when they could
+// not be read.
+func draftScores(ctx context.Context, ids []string) map[string]float64 {
+	st := getRequestState(ctx)
+	if st.repos.Evaluations == nil {
+		return nil
+	}
+	scores, err := st.repos.Evaluations.OverallByPost(ctx, ids)
+	if err != nil {
+		return nil
+	}
+	return scores
+}
+
+// currentPeriod reads the campaign's posts again for the goal period today
+// falls in; nil without one, or when they could not be read.
+func currentPeriod(ctx context.Context) *state.Period {
+	st := getRequestState(ctx)
+	if st.repos.Posts == nil {
+		return nil
+	}
+	posts, err := st.repos.Posts.ListRowsByCampaign(ctx, st.campaign.ID, snapshotColumns...)
+	if err != nil {
+		return nil
+	}
+	p := calendarcheck.CurrentPeriod(st.campaign, posts, time.Now().UTC())
+	if p == nil {
+		return nil
+	}
+	return &state.Period{Label: p.Label, Target: p.Target, Planned: p.Planned, Left: max(p.Target-p.Planned, 0)}
 }

@@ -15,76 +15,77 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/settings"
 )
 
-// Snapshot is a campaign's state at the start of an assistant turn.
+// Snapshot is a campaign's state at the start of an assistant turn. Its JSON
+// is what the client cites under a reply.
 type Snapshot struct {
 	// Goal is nil when the campaign has no post goal.
-	Goal     *Goal
-	Posts    int
-	ByStatus []StatusCount
+	Goal     *Goal         `json:"goal,omitempty"`
+	Posts    int           `json:"posts"`
+	ByStatus []StatusCount `json:"byStatus"`
 	// PostsUnknown is set when the posts could not be read, so Posts and
 	// ByStatus are empty without meaning the campaign has none.
-	PostsUnknown bool
-	Platforms    []Platform
+	PostsUnknown bool       `json:"postsUnknown,omitzero"`
+	Platforms    []Platform `json:"platforms"`
 	// Sources is nil when the attached assets could not be counted.
-	Sources *Sources
+	Sources *Sources `json:"sources,omitempty"`
 	// Calendar is nil when the calendar could not be checked.
-	Calendar *Calendar
+	Calendar *Calendar `json:"calendar,omitempty"`
 }
 
 // Calendar summarises the calendar check's findings: how many, of what kind,
 // and the first few as the check orders them, warnings first.
 type Calendar struct {
-	Total int
-	Kinds []KindCount
-	Top   []string
+	Total int         `json:"total"`
+	Kinds []KindCount `json:"kinds"`
+	Top   []string    `json:"top"`
 }
 
 // KindCount is how many findings of one kind there are.
 type KindCount struct {
-	Kind  string
-	Count int
+	Kind  string `json:"kind"`
+	Count int    `json:"count"`
 }
 
 // Period is the goal period today falls in, against its share of the goal.
 type Period struct {
-	Label   string
-	Target  int
-	Planned int
+	Label   string `json:"label"`
+	Target  int    `json:"target"`
+	Planned int    `json:"planned"`
 	// Left is how many more posts fit in the period; 0 once it is met.
-	Left int
+	Left int `json:"left"`
 }
 
 // Goal is the campaign's post goal against the posts it already has.
 type Goal struct {
-	Cadence   string
-	PerPeriod int
-	Periods   int
+	Cadence   string `json:"cadence"`
+	PerPeriod int    `json:"perPeriod"`
+	Periods   int    `json:"periods"`
 	// Target is the posts the whole campaign aims for.
-	Target int
+	Target int `json:"target"`
 	// Planned counts the posts already in the campaign that could still
 	// publish: everything but failed and not-published.
-	Planned int
+	Planned int `json:"planned"`
 	// Room is how many more posts fit under the target; 0 once it is met.
-	Room int
+	Room int `json:"room"`
 	// Unknown is set when the posts could not be read: Planned and Room
 	// are then 0 and say nothing about the room left.
-	Unknown bool
+	Unknown bool `json:"unknown,omitzero"`
 	// Period is the current goal period; nil outside the campaign's dates,
 	// or when the posts could not be read.
-	Period *Period
+	Period *Period `json:"period,omitempty"`
 }
 
 // StatusCount is how many posts are in one status.
 type StatusCount struct {
-	Status models.PostStatus
-	Count  int
+	Status models.PostStatus `json:"status"`
+	Count  int               `json:"count"`
 }
 
 // Platform is a target platform and the post types the campaign may use on it.
 type Platform struct {
-	ID        string
-	Name      string
-	PostTypes []string
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	PostTypes []string `json:"postTypes"`
 }
 
 // Sources says what material generation has to draw on: the campaign's
@@ -93,11 +94,34 @@ type Platform struct {
 type Sources struct {
 	// WholeBank is set when the campaign attached no assets, so it draws on
 	// every asset in the workspace.
-	WholeBank bool
-	Attached  int
-	Ready     int
+	WholeBank bool `json:"wholeBank"`
+	Attached  int  `json:"attached"`
+	Ready     int  `json:"ready"`
 	// Analysed is -1 when the analyses could not be read.
-	Analysed int
+	Analysed int `json:"analysed"`
+	// Items are the campaign's attached sources one by one, up to
+	// MaxSourceItems, with how far each got; empty when it draws on the
+	// whole bank.
+	Items []SourceItem `json:"items,omitempty"`
+}
+
+// MaxSourceItems caps the sources a snapshot lists one by one.
+const MaxSourceItems = 20
+
+// The stages a source can be at, as SourceItem.Status names them.
+const (
+	SourceReady      = "ready"
+	SourceAnalysing  = "analysing"
+	SourceUnreadable = "unreadable"
+)
+
+// SourceItem is one attached source and how far it got: ready to write
+// from, still being read or analysed, or unreadable.
+type SourceItem struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Kind   string `json:"kind,omitempty"`
+	Status string `json:"status"`
 }
 
 var statusOrder = []models.PostStatus{

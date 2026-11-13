@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -39,6 +40,41 @@ func TestGeneratePosts_IdeasFillNoGoal(t *testing.T) {
 	}
 	if out.Summary != "Plan 10 ideas for Threads" {
 		t.Fatalf("summary = %q", out.Summary)
+	}
+}
+
+// savedIdeas reads ideas back by id.
+type savedIdeas struct {
+	repository.IdeaRepository
+	ids []string
+}
+
+func (s savedIdeas) GetByID(_ context.Context, id string) (*models.Idea, error) {
+	if !slices.Contains(s.ids, id) {
+		return nil, errors.New("not found")
+	}
+	return &models.Idea{ID: id, Title: "idea " + id}, nil
+}
+
+// Ideas a plan saves can be undone, and the result says the days they target.
+func TestGeneratePosts_IdeasCanBeUndone(t *testing.T) {
+	var generated int
+	st := proposalState(&memProposals{}, &generated)
+	st.generatePosts = func(context.Context, content_plan.GeneratePostsRequest, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
+		return &content_plan.ContentPlanResponse{Ideas: []content_plan.DraftPost{{IdeaID: "i1"}, {IdeaID: "i2"}}}, nil
+	}
+	actions := &memActions{}
+	st.repos.Actions, st.repos.Ideas = actions, savedIdeas{ids: []string{"i1", "i2"}}
+	if out := runTool(t, st, "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 2}); out.Status != assistantkit.StatusOK {
+		t.Fatalf("outcome = %+v", out)
+	}
+	r := st.generatedPostsResult
+	a := actions.rows[r.UndoID]
+	if a == nil || a.Kind != models.AssistantActionIdeasCreated || r.WindowStart == "" || r.WindowEnd == "" {
+		t.Fatalf("result = %+v, action = %+v", r, a)
+	}
+	if ideas, _ := a.After["ideas"].([]any); len(ideas) != 2 {
+		t.Fatalf("logged = %+v", a.After)
 	}
 }
 
@@ -246,6 +282,58 @@ func TestReplaceWeakestDrafts(t *testing.T) {
 		Draft: DraftPostInput{Platforms: []string{"LinkedIn"}, Count: 1}})
 	if err != nil || !out.Succeeded() || out.Result.Deleted != 1 || !slices.Equal(deleted, []string{"d2"}) || !slices.Equal(out.Result.Kept, []string{"d1", "d3"}) {
 		t.Fatalf("out = %+v, err = %v, deleted = %v", out, err, deleted)
+	}
+}
+
+// The replaced result lists both sides: the new drafts, and the deleted ones
+// with their scores; and the goal period as the swap left it.
+func TestReplaceWeakestDrafts_ListsBothSides(t *testing.T) {
+	var calls []draft_post.DraftPostRequest
+	st := newDraftState([]models.AssistantMessage{modelMsg(`{"action":"answered","explanation":"the research"}`)}, &calls)
+	now := time.Now().UTC()
+	st.campaign.ID, st.campaign.EstimatedPostCount, st.campaign.GoalCadence = "c1", new(4), "month"
+	st.campaign.StartDate, st.campaign.EndDate = new(now.AddDate(0, 0, -10)), new(now.AddDate(0, 0, 40))
+	pid := st.campaign.Platforms[0].ID
+	st.repos.Posts = postsByID{platformPosts{posts: []models.Post{
+		{ID: "d2", CampaignID: "c1", Title: "Wedding packages, 2026", PlatformID: pid, Status: models.PostStatusDraft, ScheduledAt: &now},
+	}}}
+	st.repos.Evaluations = scoredDrafts{scores: map[string]float64{"d2": 30.6}}
+	st.deletePost = func(context.Context, *models.Post, string) (bool, error) { return true, nil }
+
+	out, err := toolReplaceDrafts(withRequestState(t.Context(), st), ReplaceDraftsInput{Delete: []string{"d2"},
+		Draft: DraftPostInput{Platforms: []string{pid}, Count: 1}})
+	if err != nil || !out.Succeeded() {
+		t.Fatalf("out = %+v, err = %v", out, err)
+	}
+	r := out.Result
+	if len(r.Drafted.Posts) != 1 || r.Drafted.Posts[0].ID != pid+"-0" || r.Drafted.Posts[0].Platform != st.campaign.Platforms[0].Name {
+		t.Fatalf("drafted = %+v", r.Drafted.Posts)
+	}
+	if len(r.Removed) != 1 || r.Removed[0].Title != "Wedding packages, 2026" || r.Removed[0].FitPct == nil || *r.Removed[0].FitPct != 31 {
+		t.Fatalf("removed = %+v", r.Removed)
+	}
+	if r.Period == nil || r.Period.Target == 0 || r.Period.Label == "" {
+		t.Fatalf("period = %+v", r.Period)
+	}
+}
+
+// Each way forward says what it costs, and leaving replace out says why.
+func TestDraftOverGoal_CostLinesAndFootnote(t *testing.T) {
+	st := goalState(0)
+	st.deletePost = func(context.Context, *models.Post, string) (bool, error) { return true, nil }
+	st.repos.Posts = platformPosts{posts: []models.Post{{ID: "d1", Status: models.PostStatusDraft}}}
+	st.repos.Evaluations = scoredDrafts{scores: map[string]float64{"d1": 70}}
+	ce, _ := errors.AsType[*assistantkit.ConflictError](draftOverGoal(st.bind(t.Context()), DraftPostInput{Platforms: []string{"Threads"}, Count: 3, PublishDate: "2026-04-10"}))
+	if ce == nil || ce.Card == nil || ce.Card.Footnote != "Replace isn't offered: only 1 draft has a quality score to rank against the 3 new ones." {
+		t.Fatalf("conflict = %+v", ce)
+	}
+	for _, o := range ce.Options {
+		if o.Description == "" {
+			t.Fatalf("option %s has no cost line", o.ID)
+		}
+	}
+	if o := ce.Options[0]; o.ID != "ideas" || o.Description != "Nothing drafted; the 3 wait in Ideas with 2026-04-10 as their target, and don't count toward the goal." {
+		t.Fatalf("ideas = %+v", o)
 	}
 }
 
