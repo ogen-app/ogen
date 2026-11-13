@@ -97,6 +97,9 @@ const (
 	CardRowPlatform = "platform"
 	// CardRowFixes is what else the work puts right.
 	CardRowFixes = "fixes"
+	// CardRowPosts is posts the work leaves as they are, with what happens
+	// to them in Note, e.g. "they stay, flagged".
+	CardRowPosts = "posts"
 )
 
 // CardRow is one detail of an offer. Kind lets the client label and lay it
