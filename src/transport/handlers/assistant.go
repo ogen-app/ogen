@@ -117,10 +117,11 @@ type assistantTurnRequest struct {
 // @Description  {mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total,pileTotal (the filter's pile with no other filter; absent without a pile)}; setIdeaVerdict {idea,undoId};
 // @Description  setIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,ideas,verdict,remindAt,undoId}: ideas are the ideas a
 // @Description  triage or move changed, as they are now (none for a delete); verdict (yes|later|no|none), remindAt and undoId are a triage's;
-// @Description  compileIdeas {postId,title,status,campaignId,platformId,postType,date,posts,ideas,builtFrom,theses,grounding,undoId} (posts: each
-// @Description  {postId,title,status,platformId,postType,date}, one per platform; the flat fields are the first; date empty when undated;
+// @Description  compileIdeas {postId,title,status,campaignId,platformId,postType,date,dateFrom,posts,ideas,builtFrom,theses,grounding,undoId} (posts: each
+// @Description  {postId,title,status,platformId,postType,date,dateFrom}, one per platform; the flat fields are the first; date empty when undated;
+// @Description  dateFrom says where a date came from: asked, the day the call named, or plan, the ideas' plan date;
 // @Description  ideas the count, builtFrom [{id,title}] the ideas in their theses' order, theses [{title,points}] every post's, one per idea); draftIdeas
-// @Description  {posts[{postId,title,platformId,publishDate (none when unscheduled),excerpt,campaignId,ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
+// @Description  {posts[{postId,title,platformId,postType,publishDate (none when unscheduled),dateFrom (asked|plan, none when unscheduled),excerpt,campaignId,ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
 // @Description  rationale,sources,fit{score,lens,campaignId,criteria[{key,question,weight,level,means,why,phase,campaign}],
 // @Description  caps[{cap,meaning}]},sourceAsset{id,title},analysis{id,lens,gist,summary},posts,author,createdAt,explain};
 // @Description  ideasInCommon {ideas[{id,title,angle}],missing,theme,angle,assets,campaigns,origins,lenses,platforms,postTypes,phases,
