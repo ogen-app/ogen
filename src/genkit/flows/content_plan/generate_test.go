@@ -10,6 +10,19 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
+// A saved item carries the idea it was saved as, so the caller can undo it.
+func TestPostSink_KeepsTheIdeaID(t *testing.T) {
+	gen := &postGenerator{
+		validate: func(DraftPost) error { return nil },
+		persist:  func(context.Context, *DraftPost) (string, error) { return "idea-1", nil },
+	}
+	sink := &postSink{gen: gen, onEvent: func(SSEEventKind, any) {}, persisted: map[int]bool{}}
+	sink.add(t.Context(), DraftPost{Title: "A pool in the rock"}, 0)
+	if len(sink.posts) != 1 || sink.posts[0].IdeaID != "idea-1" {
+		t.Fatalf("posts = %+v", sink.posts)
+	}
+}
+
 // The streaming persist path stops at the batch's requested count, so
 // an over-producing model can't turn "generate exactly 1" into 3 persisted
 // posts. expectedCount <= 0 is the uncapped fallback (model decides the count).

@@ -54,7 +54,8 @@ type undoConflict struct {
 // @Description  made from ideas are deleted, all or none; entityId is the first of them, so refresh the post list
 // @Description  when a compile made several), brand_fact, brand_voice, brand_audience, brand_guardrails, series,
 // @Description  campaign_series, post_schedules and post_types (entityId: the campaign whose posts changed),
-// @Description  auto_publish, and asset_tags (the assets a tagging changed get their tags back). entityId is always
+// @Description  auto_publish, asset_tags (the assets a tagging changed get their tags back), and ideas_created (the
+// @Description  ideas a plan saved are deleted, all or none; entityId: the campaign). entityId is always
 // @Description  present: for idea_verdicts and asset_tags it is "", which names no single entity to refresh.
 // @Description  409 when it was already undone (reason "already_undone"), or when it was edited again since (reason
 // @Description  "changed_since"; for asset_tags with "changed" of "of" assets retagged since): undo never overwrites a

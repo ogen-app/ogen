@@ -225,3 +225,55 @@ func TestUndo_IdeaEdit(t *testing.T) {
 		t.Fatalf("idea = %+v, plan %+v", got, got.Plan)
 	}
 }
+
+// Undoing saved ideas deletes them all, but only while every one is as
+// made: one edited since leaves the change in place.
+func TestUndo_IdeasCreated(t *testing.T) {
+	f := newFixture(t)
+	day, err := models.ParseCalendarDate("2026-12-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ideas, svc := ideaFixture(t, f, &models.Idea{ID: "i1", Title: "A pool in the rock", Note: "- the view",
+		Plan: models.IdeaPlan{PlatformID: new("instagram"), TargetDate: &day}})
+	if err := ideas.Create(f.ctx, &models.Idea{ID: "i2", Title: "Breakfast before the first guest"}); err != nil {
+		t.Fatal(err)
+	}
+	var made []*models.Idea
+	for _, id := range []string{"i1", "i2"} {
+		i, err := ideas.GetByID(f.ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		made = append(made, i)
+	}
+	id, err := assistantundo.Record(f.ctx, f.actions, &models.AssistantAction{ScopeKind: models.AssistantScopeWorkspace,
+		Kind: models.AssistantActionIdeasCreated, Before: models.JSONMap{}, After: assistantundo.IdeasCreated(made), CreatedBy: "user-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	edited := *made[1]
+	edited.Title = "Breakfast, edited by hand"
+	if _, err := ideas.Update(f.ctx, &edited, "title"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) || f.undone(t, id) {
+		t.Fatalf("edited since: %v", err)
+	}
+	if _, err := ideas.GetByID(f.ctx, "i1"); err != nil {
+		t.Fatalf("the first idea went with a failed undo: %v", err)
+	}
+	edited.Title = made[1].Title
+	if _, err := ideas.Update(f.ctx, &edited, "title"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"i1", "i2"} {
+		if _, err := ideas.GetByID(f.ctx, id); err == nil {
+			t.Fatalf("idea %s is still there", id)
+		}
+	}
+}

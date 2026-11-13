@@ -433,6 +433,7 @@ func (s *postSink) add(ctx context.Context, post DraftPost, pos int) {
 		return
 	}
 	s.persisted[pos] = true
+	post.IdeaID = id
 	emit(s.onEvent, SSEEventIdea, IdeaEventPayload{Idea: post, Index: s.startIndex + len(s.posts), ID: id})
 	s.posts = append(s.posts, post)
 }
