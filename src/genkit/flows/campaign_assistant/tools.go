@@ -117,8 +117,12 @@ type requestState struct {
 	platformsResult      *PlatformsResult
 	goalResult           *GoalResult
 	redistributeResult   *RedistributeResult
-	briefReviewResult    *consistency.BriefReview
-	postsReviewResult    *consistency.PostsReview
+	// The reviews as the flow returned them, and as the tools returned
+	// them: findings keyed and offered, the dismissed set aside.
+	briefReviewResult *consistency.BriefReview
+	postsReviewResult *consistency.PostsReview
+	briefReviewOut    *ReviewOutput
+	postsReviewOut    *ReviewOutput
 }
 
 // reserveHeavyAction atomically claims the single heavy-action slot for this
@@ -1917,7 +1921,6 @@ func toolCheckBrief(ctx context.Context) (*ReviewOutput, error) {
 	if err != nil {
 		return nil, err
 	}
-	st.briefReviewResult = review
 	dismissed, err := DismissedKeys(ctx, st.repos.Dismissals, st.campaignID)
 	if err != nil {
 		return nil, err
@@ -1925,6 +1928,7 @@ func toolCheckBrief(ctx context.Context) (*ReviewOutput, error) {
 	if err := out.AddBrief(ctx, review, dismissed, reviewOffers()); err != nil {
 		return nil, err
 	}
+	st.briefReviewResult, st.briefReviewOut = review, out
 	return out, nil
 }
 
@@ -1946,7 +1950,6 @@ func toolCheckPostsConsistency(ctx context.Context, in CheckPostsInput) (*Review
 	if err != nil {
 		return nil, err
 	}
-	st.postsReviewResult = review
 	dismissed, err := DismissedKeys(ctx, st.repos.Dismissals, st.campaignID)
 	if err != nil {
 		return nil, err
@@ -1954,6 +1957,7 @@ func toolCheckPostsConsistency(ctx context.Context, in CheckPostsInput) (*Review
 	if err := out.AddPosts(ctx, review, dismissed, reviewOffers()); err != nil {
 		return nil, err
 	}
+	st.postsReviewResult, st.postsReviewOut = review, out
 	return out, nil
 }
 

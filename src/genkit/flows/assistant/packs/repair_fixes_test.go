@@ -319,6 +319,12 @@ func TestDeleteCard(t *testing.T) {
 	if r := card.Rows[1]; r.Kind != assistantkit.CardRowMedia || r.Value != "Its 2 files" {
 		t.Fatalf("media row = %+v", r)
 	}
+	// Files that can't be counted are said to go, not left out as none.
+	d.Attachments = nil
+	card = deleteCard(ctx, d, c, posts.posts, PostsRef{PostIDs: []string{"p1"}})
+	if len(card.Rows) != 2 || card.Rows[1].Value != "Its files, if any" {
+		t.Fatalf("uncounted card = %+v", card.Rows)
+	}
 }
 
 // A delete that fails for one post deletes the rest, and retries just it;
