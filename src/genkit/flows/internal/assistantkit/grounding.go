@@ -33,11 +33,36 @@ type Source struct {
 	IdeaID     string `json:"ideaId,omitempty"`
 }
 
+// UngroundedReason says why output came from general knowledge.
+type UngroundedReason string
+
+const (
+	// NoSources: there was nothing of the user's ready to draw on.
+	NoSources UngroundedReason = "no_sources"
+	// ChoseWithout: the user chose to go ahead without sources.
+	ChoseWithout UngroundedReason = "chosen"
+	// NoneRelevant: sources were there, but none of them was about it.
+	NoneRelevant UngroundedReason = "none_relevant"
+)
+
+// ungroundedNotes is the sentence the UI shows after "Not grounded" for
+// each reason.
+var ungroundedNotes = map[UngroundedReason]string{
+	NoSources:    "there are no documents to draw on yet",
+	ChoseWithout: "you chose to go ahead without sources",
+	NoneRelevant: "nothing in the documents is about this",
+}
+
 // Grounding is attached to every generating tool's result, so the UI can
 // badge exploratory output without relying on how the model words its reply.
 type Grounding struct {
 	Mode    GroundingMode `json:"mode"`
 	Sources []Source      `json:"sources,omitempty"`
+	// Reason and Note say why exploratory output is: a code, and the
+	// sentence that follows "Not grounded". Unset when grounded, or when
+	// why isn't known.
+	Reason UngroundedReason `json:"reason,omitempty"`
+	Note   string           `json:"note,omitempty"`
 }
 
 // GroundingFrom is grounded when any source informed the output.
@@ -46,6 +71,23 @@ func GroundingFrom(sources []Source) Grounding {
 		return Grounding{Mode: Exploratory}
 	}
 	return Grounding{Mode: Grounded, Sources: sources}
+}
+
+// Because says why exploratory output is; grounded output is left as it is.
+func (g Grounding) Because(reason UngroundedReason) Grounding {
+	if g.Mode == Exploratory {
+		g.Reason, g.Note = reason, ungroundedNotes[reason]
+	}
+	return g
+}
+
+// UngroundedBy is why output drew on none of the offered sources: there
+// were none, or none was about it.
+func UngroundedBy(offered int) UngroundedReason {
+	if offered == 0 {
+		return NoSources
+	}
+	return NoneRelevant
 }
 
 // WithAnalyses fills in the analysis each source's asset has, from lens:

@@ -13,7 +13,7 @@ import (
 // exploratory run is exploratory whatever it returned.
 func groundingOf(exploratory bool, offered []AssetRef, ideas []content_plan.DraftPost) assistantkit.Grounding {
 	if exploratory {
-		return assistantkit.GroundingFrom(nil)
+		return assistantkit.GroundingFrom(nil).Because(assistantkit.ChoseWithout)
 	}
 	cited := make(map[string]bool)
 	for _, p := range ideas {
@@ -27,7 +27,7 @@ func groundingOf(exploratory bool, offered []AssetRef, ideas []content_plan.Draf
 			sources = append(sources, assistantkit.Source{ID: a.ID, Title: a.Title})
 		}
 	}
-	return assistantkit.GroundingFrom(sources)
+	return assistantkit.GroundingFrom(sources).Because(assistantkit.UngroundedBy(len(offered)))
 }
 
 // traced names the campaign's analysis of each source, when it has a
@@ -49,6 +49,15 @@ const noSourcesReason = "This campaign has no sources yet, so anything I write w
 func lacksSources(ctx context.Context, explicit bool) bool {
 	src := getRequestState(ctx).snapshot.Sources
 	return !explicit && src != nil && src.Ready == 0
+}
+
+// ungroundedReason is why output that drew on none of the campaign's sources
+// did: it has none ready, else none was about it.
+func ungroundedReason(ctx context.Context) assistantkit.UngroundedReason {
+	if src := getRequestState(ctx).snapshot.Sources; src != nil && src.Ready == 0 {
+		return assistantkit.NoSources
+	}
+	return assistantkit.NoneRelevant
 }
 
 // needSources stops generation that would silently come from general

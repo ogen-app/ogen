@@ -27,6 +27,9 @@ type EnrichBriefResponse struct {
 	// Sources are the campaign's sources the brief drew on, as the model
 	// named them; empty when it drew on none.
 	Sources []Source `json:"sources,omitempty"`
+	// Offered is how many of the campaign's sources the brief was given,
+	// so a brief that drew on none says whether there were any.
+	Offered int `json:"-"`
 }
 
 // Source is one of the campaign's assets, and the analysis of it the brief

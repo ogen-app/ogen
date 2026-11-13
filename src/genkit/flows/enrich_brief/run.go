@@ -72,6 +72,7 @@ func runEnrichBrief(
 	}
 	named, _ := scanner.Values()["sources"].(string)
 	result.Sources = usedSources(named, bctx.Sources)
+	result.Offered = len(bctx.Sources)
 	slog.InfoContext(ctx, "done", logging.AttrComponent, logComponent, "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds())
 
 	// The caller emits the canonical `complete` event from the returned value;

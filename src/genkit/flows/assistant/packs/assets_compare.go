@@ -87,7 +87,7 @@ func compareAssets(ctx context.Context, d Deps, in CompareAssetsInput) (*Compare
 		out.Note = fmt.Sprintf("These ids name no asset and were left out: %s. Say the selection was incomplete.", strings.Join(out.Missing, ", "))
 	}
 	if len(sources) == 0 || (mode == asset_compare.ModeCompare && len(sources) < 2) {
-		out.Grounding = assistantkit.GroundingFrom(nil)
+		out.Grounding = assistantkit.GroundingFrom(nil).Because(assistantkit.NoSources)
 		out.Note = strings.TrimSpace(out.Note + " There's too little to read: the assets have no analysis for this lens and no passages yet.")
 		return out, nil
 	}

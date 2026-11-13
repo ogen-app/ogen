@@ -189,6 +189,9 @@ func TestToolDraftPost_GroundedInWhatTheResearchQuoted(t *testing.T) {
 			if g == nil || len(g.Sources) != len(tc.want) || (len(tc.want) == 0) != (g.Mode == assistantkit.Exploratory) {
 				t.Fatalf("grounding = %+v", g)
 			}
+			if len(tc.want) == 0 && g.Reason != assistantkit.NoneRelevant {
+				t.Fatalf("reason = %q", g.Reason)
+			}
 			if tc.name == "campaign ask" && (g.Sources[0].AnalysisID != "an-a1" || lens == nil || *lens != "c1") {
 				t.Fatalf("source = %+v, lens = %v", g.Sources[0], lens)
 			}
@@ -289,6 +292,10 @@ func TestToolDraftPost_PartialRefusalKeepsTheDrafts(t *testing.T) {
 	}
 	if !slices.ContainsFunc(out.Result.Warnings, func(w string) bool { return strings.HasPrefix(w, "Threads: ") }) {
 		t.Fatalf("warnings = %v, want the Threads refusal", out.Result.Warnings)
+	}
+	// The card lists each draft that was made, by its platform's name.
+	if rows := st.draftPostResult.Posts; len(rows) != 1 || rows[0].Platform != "LinkedIn" || rows[0].ID == "" || rows[0].Date == "" {
+		t.Fatalf("rows = %+v", rows)
 	}
 
 	refuse = "*"

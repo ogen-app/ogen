@@ -2,6 +2,7 @@ package packs
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"slices"
 	"strings"
@@ -35,6 +36,13 @@ type memPosts struct {
 
 func (r *memPosts) ListByCampaign(context.Context, string) ([]models.Post, error) {
 	return slices.Clone(r.posts), nil
+}
+
+func (r *memPosts) GetByID(_ context.Context, id string) (*models.Post, error) {
+	if i := slices.IndexFunc(r.posts, func(p models.Post) bool { return p.ID == id }); i >= 0 {
+		return new(r.posts[i]), nil
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (r *memPosts) MoveScheduledAt(_ context.Context, ms []repository.ScheduleMove, _ time.Time) ([]string, error) {
@@ -360,7 +368,8 @@ func TestCheckCalendar_DismissesOneFindingOfACode(t *testing.T) {
 // Each brief finding gets its own brief edit and one shared by all of them;
 // a post finding gets a rewrite and an open; a dismissed finding is left out.
 func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
-	d, _, dismissals := repairDeps()
+	d, posts, dismissals := repairDeps()
+	posts.posts[1].Content = "twelve chars"
 	fix := func(aspect string) []consistency.Fix {
 		return []consistency.Fix{{Kind: consistency.FixImproveBrief, Title: "Improve the brief's " + aspect, Instruction: "fix " + aspect}}
 	}
@@ -381,7 +390,7 @@ func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 	versioned := true
 	d.Revise = func(_ context.Context, id, instruction, _ string) (Revised, error) {
 		revised = append(revised, id+": "+instruction)
-		return Revised{Versioned: versioned}, nil
+		return Revised{Content: "short", Versioned: versioned}, nil
 	}
 	dismissals.keys["b3"] = true
 	sink := &offers{}
@@ -407,8 +416,10 @@ func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 		t.Fatalf("post fixes = %+v", post.Fixes)
 	}
 	rewrite := sink.got[slices.IndexFunc(sink.got, func(p assistantkit.Proposal) bool { return p.Tool == "revisePost" })]
-	if _, err := revisePost(ctx, d, rewrite.Args.(RevisePostInput)); err != nil || !slices.Equal(revised, []string{"p2: follow the brief"}) {
-		t.Fatalf("revise = %v, %v", revised, err)
+	// The rewrite says how long the copy was and is.
+	if out, err := revisePost(ctx, d, rewrite.Args.(RevisePostInput)); err != nil || !slices.Equal(revised, []string{"p2: follow the brief"}) ||
+		out.Length == nil || *out.Length != (Lengths{Before: 12, After: 5}) {
+		t.Fatalf("revise = %v, %+v, %v", revised, out, err)
 	}
 	// A rewrite whose version couldn't be saved says so.
 	versioned = false
