@@ -42,6 +42,9 @@ type DraftPost struct {
 	// BrandVoiceID is the resolved brand voice for this post, set
 	// server-side after generation. json:"-" keeps it out of the model schema.
 	BrandVoiceID *string `json:"-"`
+	// IdeaID is the idea the item was saved as, set once it is. json:"-"
+	// keeps it out of the model schema; the stream's idea event carries it.
+	IdeaID string `json:"-"`
 }
 
 // ContentPlanResponse is returned by the handler and the flow.

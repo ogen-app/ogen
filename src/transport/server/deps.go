@@ -407,6 +407,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Analyses:    r.assetAnalysisRepo,
 			Evaluations: r.postEvaluationRepo,
 			Links:       r.postIdeaRepo,
+			Ideas:       r.ideaRepo,
 		},
 		packDeps: packs.Deps{
 			Ideas:     ideas.New(r.ideaRepo, r.userRepo),

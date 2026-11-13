@@ -132,7 +132,7 @@ func generatedPostsOutcome(r *GeneratedPostsResult) outcome {
 		explanation: explanation,
 		attach:      func(resp *CampaignAssistantResponse) { resp.GeneratedPosts = r },
 		event:       SSEEventGeneratePostsComplete,
-		payload:     GeneratePostsCompleteEventPayload{IdeaCount: r.IdeaCount, Warnings: r.Warnings, Grounding: r.Grounding},
+		payload:     GeneratePostsCompleteEventPayload{IdeaCount: r.IdeaCount, Warnings: r.Warnings, Grounding: r.Grounding, UndoID: r.UndoID},
 	}
 }
 

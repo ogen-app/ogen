@@ -113,6 +113,12 @@ type GeneratedPostsResult struct {
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
 	// Grounding says whether the posts came from the campaign's sources.
 	Grounding assistantkit.Grounding `json:"grounding"`
+	// WindowStart and WindowEnd are the days the ideas target, YYYY-MM-DD.
+	WindowStart string `json:"windowStart,omitempty"`
+	WindowEnd   string `json:"windowEnd,omitempty"`
+	// UndoID deletes the ideas while they are as made; empty when they
+	// could not be logged.
+	UndoID string `json:"undoId,omitempty"`
 }
 
 // DraftPostResult summarises a draftPost tool invocation.
@@ -212,6 +218,9 @@ type CampaignAssistantRepos struct {
 	// Links maps the campaign's posts to their ideas, for the calendar
 	// check's "same idea close together"; nil skips that check.
 	Links repository.PostIdeaRepository
+	// Ideas reads back the ideas generatePosts saved, so they can be
+	// undone; nil leaves them without an undo.
+	Ideas repository.IdeaRepository
 }
 
 // CampaignAssistantFlowConfig holds the campaign pack's services and limits.
@@ -342,6 +351,7 @@ type GeneratePostsCompleteEventPayload struct {
 	IdeaCount int                    `json:"ideaCount"`
 	Warnings  []string               `json:"warnings,omitempty"`
 	Grounding assistantkit.Grounding `json:"grounding"`
+	UndoID    string                 `json:"undoId,omitempty"`
 }
 
 // DraftPostStartedEventPayload is emitted when the draftPost tool begins.
