@@ -108,7 +108,8 @@ var offerNoSources = &evalOffer{
 	offer: models.AssistantProposal{ID: "prop2", Tool: "generatePosts",
 		Summary: "This campaign has no sources yet, so anything I write would come from general knowledge, not your material.",
 		Options: []models.ProposalOption{
-			{ID: "add_source", Title: "Add a document or a link", Recommended: true},
+			{ID: "add_document", Title: "Add a document", Recommended: true, Tool: "openAddSource", Args: models.JSONMap{"via": "upload"}},
+			{ID: "import_page", Title: "Import a page", Tool: "importPage", Args: models.JSONMap{}, Input: &models.ProposalOptionInput{Kind: "url", Label: "Page link", Arg: "url"}},
 			{ID: "exploratory", Title: "Go ahead without sources (marked not grounded)"},
 		}},
 }
@@ -162,7 +163,7 @@ var evalCases = []evalCase{
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, hotel: true, say: "Let me add the brochure first.", offered: offerNoSources,
 		want: []string{"confirmOffer", "openAddSource"}, not: []string{"generatePosts", "runContentPlan", "draftPost"}},
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, hotel: true, say: "Use this page: https://www.roccofortehotels.com/hotels-and-resorts/hotel-de-russie/spa/",
-		offered: offerNoSources, want: []string{"importPage", "loadPack"}, not: []string{"generatePosts", "runContentPlan", "draftPost"}},
+		offered: offerNoSources, want: []string{"confirmOffer", "importPage", "loadPack"}, not: []string{"generatePosts", "runContentPlan", "draftPost"}},
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, hotel: true, say: "Go ahead without them.", offered: offerNoSources, want: []string{"confirmOffer"}},
 	// A post drafted from the answer just given draws on it.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, hotel: true, say: "Draft a LinkedIn post from that for next week.", offered: researchSpa,

@@ -3,6 +3,7 @@ package campaign_assistant
 import (
 	"context"
 
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -41,6 +42,28 @@ func traced(ctx context.Context, st *requestState, g assistantkit.Grounding) ass
 	})
 }
 
+// The options of the choice generation without sources becomes.
+const (
+	OptionAddDocument = "add_document"
+	OptionImportPage  = "import_page"
+	OptionExploratory = "exploratory"
+)
+
+// SourceOptions are the ways forward from generation that would come from
+// general knowledge: add a document, import a page, or run tool with
+// exploratory, its call with the exploratory flag set. Picking one of the
+// first two waits for the source, and the request is offered again once
+// the source is ready.
+func SourceOptions(tool string, exploratory any) []assistantkit.Option {
+	return []assistantkit.Option{
+		{ID: OptionAddDocument, Title: "Add a document", Description: "Opens the upload on the campaign's Assets tab.", Recommended: true,
+			Why: "Posts drawn from your own material say what's true of you, not what's true in general.", Tool: "openAddSource", Args: OpenAddSourceInput{Via: assistant.AddSourceUpload}},
+		{ID: OptionImportPage, Title: "Import a page", Description: "Reads a web page and adds it to the campaign's sources.",
+			Input: &assistantkit.OptionInput{Kind: assistantkit.OptionInputURL, Label: "Page link", Arg: "url"}, Tool: "importPage", Args: struct{}{}},
+		{ID: OptionExploratory, Title: "Go ahead without sources (marked not grounded)", Tool: tool, Args: exploratory},
+	}
+}
+
 const noSourcesReason = "This campaign has no sources yet, so anything I write would come from general knowledge, not your material."
 
 // lacksSources reports whether generation would silently come from general
@@ -68,10 +91,8 @@ func needSources(ctx context.Context, tool string, explicit bool, exploratory fu
 		return nil
 	}
 	return assistantkit.Conflicted(
-		noSourcesReason+" Offer to add a document or a link first, or to go ahead without them. If the user replies with a web page's link, import it with importPage (it is attached to this campaign) and, once it is read, run the request again.",
-		assistantkit.Option{ID: "add_source", Title: "Add a document or a link", Description: "Opens the campaign's Assets tab to upload a document or import a page.", Recommended: true,
-			Why: "Posts drawn from your own material say what's true of you, not what's true in general.", Tool: "openAddSource", Args: struct{}{}},
-		assistantkit.Option{ID: "exploratory", Title: "Go ahead without sources (marked not grounded)", Tool: tool, Args: exploratory()},
+		noSourcesReason+" Offer to add a document or import a page first, or to go ahead without them. If the user replies with a web page's link, pick import_page with it as input. Once the source is read, the request is offered again, grounded in it.",
+		SourceOptions(tool, exploratory())...,
 	)
 }
 

@@ -58,7 +58,18 @@ type UIAction struct {
 	// Connect opens the settings screen's connect flow for one platform, or
 	// the reconnect flow for one account. The client runs the flow.
 	Connect *UIConnect `json:"connect,omitempty"`
+	// Via is the way in an open_add_source opens: upload for the file
+	// upload, page for a page's import; empty offers both.
+	Via AddSourceVia `json:"via,omitempty" enums:"upload,page"`
 }
+
+// AddSourceVia is the way in to adding a source.
+type AddSourceVia string
+
+const (
+	AddSourceUpload AddSourceVia = "upload"
+	AddSourcePage   AddSourceVia = "page"
+)
 
 // UIConnect is the connect flow to open: a new account on Platform, or
 // AccountID's reconnect.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -46,7 +47,13 @@ func (h *AssistantProposalsHandler) Register(app *fiber.App) {
 type confirmProposalRequest struct {
 	// OptionID is the option the user picked, when the offer had options.
 	OptionID string `json:"optionId"`
+	// Input is the value the picked option asks for (its card's "input"),
+	// e.g. the link of the page to import.
+	Input string `json:"input,omitempty"`
 }
+
+// maxOptionInputLen bounds the value typed into an option's field.
+const maxOptionInputLen = 2048
 
 // Confirm godoc
 // @Summary      Confirm an assistant offer (SSE)
@@ -58,11 +65,13 @@ type confirmProposalRequest struct {
 // @Description  offer, whose card has "replaces"; the result carries the same as "changes". From then on only the
 // @Description  fresh offer can be confirmed. A run that did part of the job says so; its result lists "notMade"
 // @Description  and, when some items are worth retrying, an optional "retryProposalId" offering just those, whose
-// @Description  card has "retryOf".
+// @Description  card has "retryOf". An option whose card has "input" (e.g. {"kind":"url","label":"Page link"})
+// @Description  runs with the typed value sent as "input".
 // @Description  "error" carries {"message":"...","code":<http_code>,"reason":<optional>}: 404 when the offer does
 // @Description  not exist, 409 when it can't be answered (reason "offer_expired" — "proposal_resolved" says
 // @Description  "expired" the first time —, "offer_answered", or "offer_replaced" when a fresh offer replaced it),
-// @Description  names an unknown option, or the work itself was refused (no reason; the message says why).
+// @Description  names an unknown option, picks an option that asks for input without it (reason
+// @Description  "input_required"), or the work itself was refused (no reason; the message says why).
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream
@@ -83,10 +92,14 @@ func (h *AssistantProposalsHandler) Confirm(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
 	}
+	if utf8.RuneCountInString(req.Input) > maxOptionInputLen {
+		return fiber.NewError(fiber.StatusBadRequest, "input is too long")
+	}
 	// The stream writer outlives the request buffer; copy what it reads.
 	answerReq := assistant.AnswerRequest{
 		ProposalID: strings.Clone(c.Params("id")),
 		OptionID:   strings.Clone(req.OptionID),
+		Input:      strings.Clone(req.Input),
 		Confirm:    true,
 	}
 	answer := h.answer

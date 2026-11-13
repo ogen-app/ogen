@@ -18,6 +18,9 @@ type AssetsResult struct {
 	Compare  *CompareAssetsOutput      `json:"compare,omitempty"`
 	Campaign *CampaignFromAssetsOutput `json:"campaign,omitempty"`
 	Distill  *DistillMoreOutput        `json:"distill,omitempty"`
+	// Import is the page importPage is reading, for the card that follows it
+	// until it is ready.
+	Import *ImportPageOutput `json:"import,omitempty"`
 }
 
 // AskCard is an askAssets answer's sources: what was searched and the

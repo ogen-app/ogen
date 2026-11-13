@@ -357,20 +357,20 @@ func TestOpenConnect(t *testing.T) {
 	}
 }
 
-// OpenAddSource sends an open_add_source on the campaign's Assets tab, and
-// the turn is there after it.
+// OpenAddSource sends an open_add_source on the campaign's Assets tab, by
+// the way in asked for, and the turn is there after it.
 func TestOpenAddSource(t *testing.T) {
 	view := viewcontext.ViewContext{Version: viewcontext.Version, Screen: "campaign.overview", Scope: viewcontext.Scope{Kind: "campaign", ID: "c1"}}
 	ctx, _ := NewViewTurnContext(t.Context(), view, nil)
-	if err := OpenAddSource(ctx, "c1"); err != nil {
+	if err := OpenAddSource(ctx, "c1", AddSourceUpload); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := turnStateFrom(ctx)
 	ui := st.uiActions()
-	if len(ui) != 1 || ui[0].Type != UIOpenAddSource || ui[0].Screen != "campaign.assets" || ui[0].CampaignID != "c1" || st.currentScreen() != "campaign.assets" {
+	if len(ui) != 1 || ui[0].Type != UIOpenAddSource || ui[0].Screen != "campaign.assets" || ui[0].CampaignID != "c1" || ui[0].Via != AddSourceUpload || st.currentScreen() != "campaign.assets" {
 		t.Fatalf("ui = %+v", ui)
 	}
-	if err := OpenAddSource(t.Context(), "c1"); err == nil {
+	if err := OpenAddSource(t.Context(), "c1", ""); err == nil {
 		t.Fatal("opened outside a turn")
 	}
 }

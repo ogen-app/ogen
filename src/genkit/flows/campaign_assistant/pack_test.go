@@ -37,7 +37,11 @@ func (s memSink) Propose(ctx context.Context, p assistantkit.Proposal) (string, 
 		if err != nil {
 			return "", err
 		}
-		opts = append(opts, models.ProposalOption{ID: o.ID, Title: o.Title, Tool: o.Tool, Args: oargs})
+		opt := models.ProposalOption{ID: o.ID, Title: o.Title, Tool: o.Tool, Args: oargs}
+		if o.Input != nil {
+			opt.Input = &models.ProposalOptionInput{Kind: o.Input.Kind, Label: o.Input.Label, Arg: o.Input.Arg}
+		}
+		opts = append(opts, opt)
 	}
 	id, err := models.NewID()
 	if err != nil {
