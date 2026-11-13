@@ -1,6 +1,7 @@
 package packs
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -29,9 +31,9 @@ type Distiller interface {
 	Commit(ctx context.Context, in branddistill.CommitInput) (*branddistill.CommitResult, error)
 }
 
-// DistillRef names a run; the latest when empty.
+// DistillRef names a run; the open one, else the latest, when empty.
 type DistillRef struct {
-	RunID string `json:"runId,omitempty" jsonschema:"description=The run; the latest when omitted"`
+	RunID string `json:"runId,omitempty" jsonschema:"description=The run; the open reading, else the latest, when omitted"`
 }
 
 // DistillItem is one proposed item: its id to keep it by, and what it says.
@@ -69,14 +71,14 @@ type DistillAnswerInput struct {
 
 // AnswerDistillInput answers a ready run's questions.
 type AnswerDistillInput struct {
-	RunID   string               `json:"runId,omitempty" jsonschema:"description=The run; the latest when omitted"`
+	RunID   string               `json:"runId,omitempty" jsonschema:"description=The run; the open reading, else the latest, when omitted"`
 	Answers []DistillAnswerInput `json:"answers"`
 }
 
 // CommitDistillInput saves a ready run's proposal: every item, or only those
 // kept, less those skipped.
 type CommitDistillInput struct {
-	RunID string   `json:"runId,omitempty" jsonschema:"description=The run; the latest when omitted"`
+	RunID string   `json:"runId,omitempty" jsonschema:"description=The run; the open reading, else the latest, when omitted"`
 	Keep  []string `json:"keep,omitempty"  jsonschema:"description=Item ids to save; every item when empty"`
 	Skip  []string `json:"skip,omitempty"  jsonschema:"description=Item ids to leave out"`
 }
@@ -125,9 +127,10 @@ func tenantOf(ctx context.Context) string {
 	return t
 }
 
-// latestRun is run id, or the newest run that wasn't answered by another.
+// latestRun is run id, else the reading on screen, else the newest run that
+// wasn't answered by another.
 func latestRun(ctx context.Context, d Deps, id string) (*models.BrandDistillRun, error) {
-	if id = strings.TrimSpace(id); id != "" {
+	if id = cmp.Or(strings.TrimSpace(id), assistant.Focused(ctx, viewcontext.KindDistill)); id != "" {
 		run, err := d.Distill.Get(ctx, tenantOf(ctx), id)
 		return run, distillErr(err)
 	}
