@@ -46,6 +46,7 @@ type AssistantHandler struct {
 	available func() bool
 	resolve   func(ctx context.Context, v *viewcontext.ViewContext) (*viewresolve.Resolved, error)
 	messages  repository.AssistantMessageRepository
+	proposals repository.AssistantProposalRepository
 	activity  *activity.Recorder
 	auth      fiber.Handler
 }
@@ -61,6 +62,13 @@ func NewAssistantHandler(
 	auth fiber.Handler,
 ) *AssistantHandler {
 	return &AssistantHandler{run: run, available: available, resolve: resolve, messages: messages, activity: activityRec, auth: auth}
+}
+
+// WithProposals lets the thread's history say how each turn's offers stand
+// now.
+func (h *AssistantHandler) WithProposals(proposals repository.AssistantProposalRepository) *AssistantHandler {
+	h.proposals = proposals
+	return h
 }
 
 func (h *AssistantHandler) Register(app *fiber.App) {
@@ -203,7 +211,10 @@ func (h *AssistantHandler) Turn(c *fiber.Ctx) error {
 // @Summary      Universal assistant thread
 // @Description  Returns a thread's latest messages, oldest first. scope is "workspace", "campaign:<id>" or
 // @Description  "post:<id>". A user message carries the view_context it was sent from; a model message's
-// @Description  content is the JSON of that turn's "complete" event.
+// @Description  content is the JSON of that turn's "complete" event, and its "offers" are the offers the turn made
+// @Description  or answered as they stand now: {id, status: pending|confirmed|dismissed|expired (a pending one past
+// @Description  its expiry reads expired), chosen, expires_at, resolved_at, replaces, retry_of, replaced_by (the
+// @Description  fresh offer made when a yes found things changed; the stale offer stays pending)}.
 // @Tags         assistant
 // @Produce      json
 // @Security     CookieAuth
@@ -230,7 +241,49 @@ func (h *AssistantHandler) Messages(c *fiber.Ctx) error {
 	if msgs == nil {
 		msgs = []models.AssistantMessage{}
 	}
+	if err := h.withOffers(reqCtx(c), msgs); err != nil {
+		return err
+	}
 	return c.JSON(msgs)
+}
+
+// withOffers gives each model message the offers its turn made or answered,
+// as they stand now.
+func (h *AssistantHandler) withOffers(ctx context.Context, msgs []models.AssistantMessage) error {
+	if h.proposals == nil {
+		return nil
+	}
+	byMsg := make([][]string, len(msgs))
+	var ids []string
+	for i, m := range msgs {
+		if m.Role == "model" {
+			byMsg[i] = assistant.OfferIDs(m.Content)
+			ids = append(ids, byMsg[i]...)
+		}
+	}
+	rows, err := h.proposals.ListByIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	states := make(map[string]models.AssistantOfferState, len(rows))
+	for _, p := range rows {
+		states[p.ID] = p.State(now)
+	}
+	for _, p := range rows {
+		if s, ok := states[p.Replaces]; ok && p.Replaces != "" {
+			s.ReplacedBy = p.ID
+			states[p.Replaces] = s
+		}
+	}
+	for i, offerIDs := range byMsg {
+		for _, id := range offerIDs {
+			if s, ok := states[id]; ok {
+				msgs[i].Offers = append(msgs[i].Offers, s)
+			}
+		}
+	}
+	return nil
 }
 
 // assistantThreadRow is one thread in the list.

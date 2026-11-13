@@ -23,4 +23,7 @@ type AssistantMessage struct {
 	ViewContext JSONMap   `bun:"view_context,type:jsonb"                       json:"view_context,omitempty"`
 	CreatedBy   string    `bun:"created_by,notnull"                            json:"created_by,omitempty"`
 	CreatedAt   time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	// Offers are, on a model turn, the offers it made or answered, as they
+	// stand now; filled when the thread is read, not stored.
+	Offers []AssistantOfferState `bun:"-" json:"offers,omitempty"`
 }

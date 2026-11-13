@@ -68,8 +68,9 @@ func TestUndo_AssetTags(t *testing.T) {
 	if _, err := assets.ApplyTags(f.ctx, []string{"a2"}, []string{extra}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
-		t.Fatalf("undo over a later change = %v", err)
+	_, err := svc.Undo(f.ctx, id, "user-1")
+	if ce, ok := errors.AsType[*assistantundo.ChangedSinceError](err); !errors.Is(err, assistantundo.ErrChangedSince) || !ok || ce.Changed != 1 || ce.Of != 2 {
+		t.Fatalf("undo over a later change = %v; want 1 of the 2 changed since", err)
 	}
 	if !slices.Equal(tagsOf("a1"), []string{launch}) {
 		t.Fatalf("a1 = %v; want it left as it was", tagsOf("a1"))

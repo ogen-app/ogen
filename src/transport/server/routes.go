@@ -222,7 +222,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 	handlers.NewAssistantProposalsHandler(gk.AnswerProposal, gk.IsAnthropicAvailable, rec, d.auth).Register(app)
 	handlers.NewAssistantActionsHandler(assistantundo.New(d.db, r.actionRepo, r.campaignRepo).WithIdeas(r.ideaRepo).WithBrand(r.brandRepo).WithBrandLibrary(r.brandRepo).WithSeries(r.seriesRepo).WithPosts(r.postRepo).WithAutoPublish(r.autoPublishAllowlistRepo).WithAssets(r.pieceRepo).Undo, rec, d.auth).Register(app)
 	handlers.NewAssistantHandler(gk.RunAssistant, gk.IsAnthropicAvailable,
-		viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo, r.postRepo).Resolve, r.assistantMessageRepo, rec, d.auth).Register(app)
+		viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo, r.postRepo).Resolve, r.assistantMessageRepo, rec, d.auth).WithProposals(r.proposalRepo).Register(app)
 }
 
 // registerPostRoutes serves the platform and tag catalogs and everything
