@@ -77,9 +77,11 @@ type IdeaSourceAsset struct {
 	// Reading is the campaign lens the idea was read in; null for the
 	// workspace lens.
 	Reading *IdeaReading `json:"reading" extensions:"x-nullable"`
-	// ChunkID is the chunk the idea's first cited passage was read from. It
-	// and the passage fields below are null for ideas analysed before
-	// passages were kept and for bodies without chunks (web pages, notes).
+	// ChunkID is the chunk the idea's first cited passage was read from, as a
+	// hint only: re-ingesting the asset may reuse the id for other text, so
+	// open the asset at Page, Slide or StartMS, not by the chunk. It and the
+	// passage fields below are null for ideas analysed before passages were
+	// kept and for bodies without chunks (web pages, notes).
 	ChunkID *string `json:"chunk_id" extensions:"x-nullable"`
 	// Label is the passage as the idea cites it: "p. 12", "Slide 4",
 	// "12:03–12:47".

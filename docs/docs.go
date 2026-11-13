@@ -21414,7 +21414,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "chunk_id": {
-                    "description": "ChunkID is the chunk the idea's first cited passage was read from. It\nand the passage fields below are null for ideas analysed before\npassages were kept and for bodies without chunks (web pages, notes).",
+                    "description": "ChunkID is the chunk the idea's first cited passage was read from, as a\nhint only: re-ingesting the asset may reuse the id for other text, so\nopen the asset at Page, Slide or StartMS, not by the chunk. It and the\npassage fields below are null for ideas analysed before passages were\nkept and for bodies without chunks (web pages, notes).",
                     "type": "string",
                     "x-nullable": true
                 },
