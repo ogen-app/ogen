@@ -62,6 +62,9 @@ type turnState struct {
 	// window is the analytics window a set_window in the turn asked for;
 	// nil keeps the screen's.
 	window *viewcontext.Window
+	// filter is the list filter a set_filter in the turn asked for on the
+	// screen it is on; nil keeps the screen's.
+	filter *string
 	// loaded is the turn's packs, besides core; restarted is set once the
 	// turn restarted with a pack loadPack asked for (requested).
 	loaded    []string
@@ -263,6 +266,10 @@ func (st *turnState) addUI(a UIAction) {
 	// campaign's Assets tab.
 	if a.Type == UINavigate || a.Type == UIOpenSavedView || a.Type == UIOpenConnect || a.Type == UIOpenAddSource {
 		st.screen, st.campaign = a.Screen, a.CampaignID
+		st.filter = nil
+	}
+	if a.Type == UISetFilter {
+		st.filter = a.Filter
 	}
 	if a.Type == UISetWindow {
 		st.window = a.Window
@@ -270,8 +277,10 @@ func (st *turnState) addUI(a UIAction) {
 }
 
 // calendarOnScreen is the turn's view while the user is still on the
-// calendar it was sent from, with the days it shows; nil once the turn has
-// moved elsewhere, or off a calendar, where what is drawn isn't known.
+// calendar it was sent from: the days it shows, under the filter a
+// set_filter earlier in the turn put on it, since the screen applies the
+// actions in order. Nil once the turn has moved elsewhere, or off a
+// calendar, where what is drawn isn't known.
 func (st *turnState) calendarOnScreen() *viewcontext.ViewContext {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -281,6 +290,11 @@ func (st *turnState) calendarOnScreen() *viewcontext.ViewContext {
 	}
 	if st.screen != v.Screen || st.campaign != st.campaignID() {
 		return nil
+	}
+	if st.filter != nil {
+		shown := *v
+		shown.Filter = *st.filter
+		return &shown
 	}
 	return v
 }

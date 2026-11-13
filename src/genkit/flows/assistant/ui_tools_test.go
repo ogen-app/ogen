@@ -439,6 +439,37 @@ func TestSelectOnTheCalendarKeepsThePostsOnScreen(t *testing.T) {
 	}
 }
 
+// screenViews records the view each OnScreen was asked about.
+type screenViews struct {
+	memViews
+	asked []viewcontext.ViewContext
+}
+
+func (v *screenViews) OnScreen(ctx context.Context, view *viewcontext.ViewContext, ids []string) ([]string, error) {
+	v.asked = append(v.asked, *view)
+	return v.memViews.OnScreen(ctx, view, ids)
+}
+
+// The screen applies a turn's actions in order, so a select after a
+// set_filter reads the calendar under the new filter, on the same days.
+func TestSelectOnTheCalendarReadsTheTurnsFilter(t *testing.T) {
+	views := &screenViews{memViews: testViews()}
+	tools := &toolSet{deps: Repos{Views: views}}
+	ctx, _ := onScreen(t, `{"version":1,"screen":"campaign.calendar","scope":{"kind":"campaign","id":"c1"},"filter":"status=draft","window":{"from":"2026-04-20","to":"2026-04-26"}}`)
+	for _, filter := range []string{"status=scheduled", ""} {
+		if _, err := tools.setFilter(ctx, SetFilterInput{Filter: filter}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tools.selectItems(ctx, SelectInput{IDs: []string{"p1"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(views.asked) != 2 || views.asked[0].Filter != "status=scheduled" || views.asked[1].Filter != "" ||
+		views.asked[1].Window == nil || views.asked[1].Window.From != "2026-04-20" {
+		t.Fatalf("asked = %+v; want each select under the filter set before it, on the screen's days", views.asked)
+	}
+}
+
 func TestSelectPostsNeedsACampaign(t *testing.T) {
 	h := newHarness(t)
 	ctx, st := onScreen(t, workspaceHome)
