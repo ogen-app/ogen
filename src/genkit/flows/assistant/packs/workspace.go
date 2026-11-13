@@ -139,11 +139,7 @@ func activityExtras(ctx context.Context, d Deps, out *ActivityOutput, campaign s
 			out.Campaign = &CampaignName{ID: c.ID, Name: c.Name}
 		}
 	}
-	days := 1
-	if ferr == nil && terr == nil {
-		days = int(to.Sub(from).Hours()/24) + 1
-	}
-	out.Step = &assistantkit.Step{Subject: activitySubject(out.From, out.To, days)}
+	out.Step = &assistantkit.Step{Subject: activitySubject(out.From, out.To)}
 	return nil
 }
 
@@ -156,8 +152,8 @@ func failedIDs(posts []report.FailedPost) []string {
 }
 
 // activitySubject is the range the step read: a day, or its first and last.
-func activitySubject(from, to string, days int) string {
-	if days == 1 {
+func activitySubject(from, to string) string {
+	if from == to {
 		return from
 	}
 	return from + " – " + to

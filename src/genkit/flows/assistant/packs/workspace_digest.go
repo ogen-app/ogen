@@ -147,7 +147,9 @@ func emailWeeklyDigest(ctx context.Context, d Deps, in EmailDigestInput) (*Email
 		out.NotSent = append(out.NotSent, DigestSkip{Recipient: o, Reason: digestNotMember})
 	}
 	for _, m := range members {
-		_, err := d.Digest.EmailTo(ctx, m.ID, in.Week)
+		// The week built above, so a batch crossing midnight on Monday
+		// still sends the week it reports.
+		_, err := d.Digest.EmailTo(ctx, m.ID, wk.Start)
 		switch {
 		case err == nil:
 			out.Sent = append(out.Sent, DigestRecipient{UserID: m.ID, Name: cmp.Or(m.Name, m.Email), Role: m.Role, Email: m.Email})
@@ -197,19 +199,48 @@ func digestRecipients(ctx context.Context, d Deps, named []string) (members []mo
 	seen := map[string]bool{}
 	for _, n := range named {
 		n = strings.TrimSpace(n)
-		i := slices.IndexFunc(users, func(u models.User) bool {
-			return u.ID == n || strings.EqualFold(u.Email, n) || (u.Name != "" && strings.EqualFold(u.Name, n))
-		})
+		if n == "" {
+			continue
+		}
+		u, err := digestMember(users, n)
+		if err != nil {
+			return nil, nil, err
+		}
 		switch {
-		case n == "":
-		case i < 0:
+		case u == nil:
 			outsiders = append(outsiders, n)
-		case !seen[users[i].ID]:
-			seen[users[i].ID] = true
-			members = append(members, users[i])
+		case !seen[u.ID]:
+			seen[u.ID] = true
+			members = append(members, *u)
 		}
 	}
 	return members, outsiders, nil
+}
+
+// digestMember is the member n names: by id or email, else by a name only
+// one member has. nil when none does; a name two members share is refused,
+// so the report never goes to the wrong one.
+func digestMember(users []models.User, n string) (*models.User, error) {
+	if i := slices.IndexFunc(users, func(u models.User) bool { return u.ID == n || strings.EqualFold(u.Email, n) }); i >= 0 {
+		return &users[i], nil
+	}
+	var match []models.User
+	for _, u := range users {
+		if u.Name != "" && strings.EqualFold(u.Name, n) {
+			match = append(match, u)
+		}
+	}
+	switch len(match) {
+	case 0:
+		return nil, nil
+	case 1:
+		return &match[0], nil
+	}
+	emails := make([]string, len(match))
+	for i, u := range match {
+		emails[i] = u.Email
+	}
+	return nil, assistantkit.Refused(fmt.Sprintf("%d members are called %s; say which by email", len(match), n), emails...)
 }
 
 // checkDigestEmail refuses a call no one could be emailed by: a bad week, or
