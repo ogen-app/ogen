@@ -375,6 +375,12 @@ func (t *trailSources) idea(ctx context.Context, id, title string) (TrailIdea, e
 		}
 		if ti.Asset == nil {
 			assetID = ""
+		} else if assetID == deref(idea.SourceAssetID) {
+			// The cached asset is shared by the trail; the passage is this
+			// idea's own.
+			a := *ti.Asset
+			a.Passage = passageOf(idea.SourceLocator)
+			ti.Asset = &a
 		}
 	}
 	if an := t.analysisVia["idea:"+id]; an != "" && assetID != "" {
