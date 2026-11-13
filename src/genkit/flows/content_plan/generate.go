@@ -433,7 +433,6 @@ func (s *postSink) add(ctx context.Context, post DraftPost, pos int) {
 		return
 	}
 	s.persisted[pos] = true
-	post.IdeaID = id
 	emit(s.onEvent, SSEEventIdea, IdeaEventPayload{Idea: post, Index: s.startIndex + len(s.posts), ID: id})
 	s.posts = append(s.posts, post)
 }
@@ -545,6 +544,8 @@ func persistIdea(ctx context.Context, dp *DraftPost, campaign *models.Campaign, 
 	if err := ideas.Create(ctx, idea); err != nil {
 		return "", err
 	}
+	saved := *idea
+	dp.Saved = &saved
 	return id, nil
 }
 

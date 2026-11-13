@@ -24066,6 +24066,10 @@ const docTemplate = `{
                         "$ref": "#/definitions/state.SourceItem"
                     }
                 },
+                "notReady": {
+                    "description": "NotReady counts the attached sources not yet ready to write from,\nover all of them, not only those Items lists.",
+                    "type": "integer"
+                },
                 "ready": {
                     "type": "integer"
                 },

@@ -3,6 +3,7 @@ package campaign_assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -239,8 +240,14 @@ func TestUpdateCampaignPlatforms_ScheduledPostBlocks(t *testing.T) {
 	if later.ID != "later" || later.Recommended || later.Description != "Keep Threads until the scheduled post is out; ask again after Wed Apr 22." {
 		t.Fatalf("later = %+v", later)
 	}
-	if o, _ := store.rows[0].Option("unschedule"); o.Args["scheduled"] != scheduledUnschedule {
+	if o, _ := store.rows[0].Option("unschedule"); o.Args["scheduled"] != scheduledUnschedule || fmt.Sprint(o.Args["unschedule"]) != "[t1]" {
 		t.Fatalf("stored unschedule args = %+v", o.Args)
+	}
+	// The model can't make the pick itself: an offer carrying one would
+	// confirm what its card doesn't show.
+	out = runTool(t, st, "updateCampaignPlatforms", map[string]any{"remove": []map[string]any{{"platform": "Threads"}}, "scheduled": "unschedule"})
+	if out.Status != assistantkit.StatusRefused {
+		t.Fatalf("model-set pick = %+v", out)
 	}
 	err := updatePlatformsGate.Precheck(withRequestState(t.Context(), st), UpdateCampaignPlatformsInput{Remove: []platforms.Request{{Platform: "Threads"}}})
 	ce, ok := errors.AsType[*assistantkit.ConflictError](err)
@@ -274,7 +281,7 @@ func TestUpdateCampaignPlatforms_ScheduledChoices(t *testing.T) {
 		st := &requestState{campaignID: "c1", campaign: c,
 			cancelPost: func(_ context.Context, id, _ string) error { cancelled = append(cancelled, id); return nil },
 			repos:      CampaignAssistantRepos{Platforms: catalogRepo{}, Posts: posts, Campaigns: &storedCampaign{c: c}}}
-		got, err := toolUpdateCampaignPlatforms(withRequestState(t.Context(), st), UpdateCampaignPlatformsInput{Remove: remove, Scheduled: scheduledUnschedule})
+		got, err := toolUpdateCampaignPlatforms(withRequestState(t.Context(), st), UpdateCampaignPlatformsInput{Remove: remove, Scheduled: scheduledUnschedule, Unschedule: []string{"t1"}})
 		if err != nil || got.Unscheduled != 1 || !slices.Equal(cancelled, []string{"t1"}) || len(c.TargetPlatforms) != 1 {
 			t.Fatalf("out = %+v, err = %v, cancelled = %v", got, err, cancelled)
 		}
@@ -287,9 +294,34 @@ func TestUpdateCampaignPlatforms_ScheduledChoices(t *testing.T) {
 		st := &requestState{campaignID: "c1", campaign: c,
 			cancelPost: func(context.Context, string, string) error { return errors.New("queue down") },
 			repos:      CampaignAssistantRepos{Platforms: catalogRepo{}, Posts: posts, Campaigns: &storedCampaign{c: c}}}
-		_, err := toolUpdateCampaignPlatforms(withRequestState(t.Context(), st), UpdateCampaignPlatformsInput{Remove: remove, Scheduled: scheduledUnschedule})
+		_, err := toolUpdateCampaignPlatforms(withRequestState(t.Context(), st), UpdateCampaignPlatformsInput{Remove: remove, Scheduled: scheduledUnschedule, Unschedule: []string{"t1"}})
 		if _, ok := errors.AsType[*assistantkit.Refusal](err); !ok || len(c.TargetPlatforms) != 2 || st.platformsResult != nil {
 			t.Fatalf("err = %v, platforms = %+v", err, c.TargetPlatforms)
+		}
+	})
+	t.Run("a post scheduled since the choice is not withdrawn", func(t *testing.T) {
+		c, posts := scheduledOnThreads()
+		at := time.Date(2026, 4, 23, 9, 0, 0, 0, time.UTC)
+		posts.posts = append(posts.posts, models.Post{ID: "t3", PlatformID: "pl2", Status: models.PostStatusScheduled, ScheduledAt: &at})
+		var cancelled []string
+		st := &requestState{campaignID: "c1", campaign: c,
+			cancelPost: func(_ context.Context, id, _ string) error { cancelled = append(cancelled, id); return nil },
+			repos:      CampaignAssistantRepos{Platforms: catalogRepo{}, Posts: posts, Campaigns: &storedCampaign{c: c}}}
+		_, err := toolUpdateCampaignPlatforms(withRequestState(t.Context(), st), UpdateCampaignPlatformsInput{Remove: remove, Scheduled: scheduledUnschedule, Unschedule: []string{"t1"}})
+		if r, ok := errors.AsType[*assistantkit.Refusal](err); !ok || !strings.HasPrefix(r.Reason, assistantkit.ChangedSince) || len(cancelled) != 0 || len(c.TargetPlatforms) != 2 {
+			t.Fatalf("err = %v, cancelled = %v", err, cancelled)
+		}
+	})
+	t.Run("posts that can't be read remove nothing", func(t *testing.T) {
+		c, _ := scheduledOnThreads()
+		st := &requestState{campaignID: "c1", campaign: c,
+			repos: CampaignAssistantRepos{Proposals: &memProposals{}, Platforms: catalogRepo{}, Posts: failingRows{}, Campaigns: &storedCampaign{c: c}}}
+		if out := runTool(t, st, "updateCampaignPlatforms", map[string]any{"remove": []map[string]any{{"platform": "Threads"}}}); out.Status != assistantkit.StatusRefused {
+			t.Fatalf("offer = %+v", out)
+		}
+		_, err := toolUpdateCampaignPlatforms(withRequestState(t.Context(), st), UpdateCampaignPlatformsInput{Remove: remove})
+		if _, ok := errors.AsType[*assistantkit.Refusal](err); !ok || len(c.TargetPlatforms) != 2 {
+			t.Fatalf("err = %v", err)
 		}
 	})
 	t.Run("later", func(t *testing.T) {

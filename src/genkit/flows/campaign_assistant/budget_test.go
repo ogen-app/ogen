@@ -43,28 +43,18 @@ func TestGeneratePosts_IdeasFillNoGoal(t *testing.T) {
 	}
 }
 
-// savedIdeas reads ideas back by id.
-type savedIdeas struct {
-	repository.IdeaRepository
-	ids []string
-}
-
-func (s savedIdeas) GetByID(_ context.Context, id string) (*models.Idea, error) {
-	if !slices.Contains(s.ids, id) {
-		return nil, errors.New("not found")
-	}
-	return &models.Idea{ID: id, Title: "idea " + id}, nil
-}
-
 // Ideas a plan saves can be undone, and the result says the days they target.
 func TestGeneratePosts_IdeasCanBeUndone(t *testing.T) {
 	var generated int
 	st := proposalState(&memProposals{}, &generated)
 	st.generatePosts = func(context.Context, content_plan.GeneratePostsRequest, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
-		return &content_plan.ContentPlanResponse{Ideas: []content_plan.DraftPost{{IdeaID: "i1"}, {IdeaID: "i2"}}}, nil
+		return &content_plan.ContentPlanResponse{Ideas: []content_plan.DraftPost{
+			{Saved: &models.Idea{ID: "i1", CampaignID: new("c1"), Title: "idea i1"}},
+			{Saved: &models.Idea{ID: "i2", CampaignID: new("c1"), Title: "idea i2"}},
+		}}, nil
 	}
 	actions := &memActions{}
-	st.repos.Actions, st.repos.Ideas = actions, savedIdeas{ids: []string{"i1", "i2"}}
+	st.repos.Actions = actions
 	if out := runTool(t, st, "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 2}); out.Status != assistantkit.StatusOK {
 		t.Fatalf("outcome = %+v", out)
 	}

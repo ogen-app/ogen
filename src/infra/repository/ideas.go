@@ -67,7 +67,7 @@ type IdeaRepository interface {
 	// in one statement. Returns false when they differ or the idea is gone.
 	SetEditIf(ctx context.Context, db bun.IDB, idea, was *models.Idea) (bool, error)
 	// DeleteAsMadeIf deletes the idea on db (nil uses the repository's DB)
-	// only while it still holds was's title, note and plan, has no verdict,
+	// only while it still holds was's campaign, title, note and plan, has no verdict,
 	// isn't merged and no post was made from it, in one statement. Returns
 	// false when any of that changed or the idea is gone.
 	DeleteAsMadeIf(ctx context.Context, db bun.IDB, was *models.Idea) (bool, error)
@@ -422,6 +422,7 @@ func (r *ideaRepository) DeleteAsMadeIf(ctx context.Context, db bun.IDB, was *mo
 	res, err := db.NewDelete().
 		Model((*models.Idea)(nil)).
 		Where("i.id = ?", was.ID).
+		Where("i.campaign_id IS NOT DISTINCT FROM ?", was.CampaignID).
 		Where("i.title = ?", was.Title).
 		Where("i.note = ?", was.Note).
 		Where("i.plan_platform_id IS NOT DISTINCT FROM ?", was.Plan.PlatformID).

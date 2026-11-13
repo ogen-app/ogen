@@ -225,9 +225,6 @@ type CampaignAssistantRepos struct {
 	// Links maps the campaign's posts to their ideas, for the calendar
 	// check's "same idea close together"; nil skips that check.
 	Links repository.PostIdeaRepository
-	// Ideas reads back the ideas generatePosts saved, so they can be
-	// undone; nil leaves them without an undo.
-	Ideas repository.IdeaRepository
 }
 
 // CampaignAssistantFlowConfig holds the campaign pack's services and limits.

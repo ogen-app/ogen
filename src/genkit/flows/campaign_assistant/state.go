@@ -65,21 +65,10 @@ func starters(s state.Snapshot) []Starter {
 		out = append(out, Starter{Kind: starterCalendar, Label: fmt.Sprintf("Fix %d calendar %s", cal.Total, plural(cal.Total, "problem", "problems")),
 			Instruction: "Review the campaign's calendar problems and fix them."})
 	}
-	if src := s.Sources; src != nil && !src.WholeBank && notReady(src) > 0 {
-		n := notReady(src)
+	if src := s.Sources; src != nil && !src.WholeBank && src.NotReady > 0 {
+		n := src.NotReady
 		out = append(out, Starter{Kind: starterSources, Label: fmt.Sprintf("%d %s not ready", n, plural(n, "source", "sources")),
 			Instruction: "Which of the campaign's sources aren't ready to write from, and why?"})
 	}
 	return out[:min(len(out), maxStarters)]
-}
-
-// notReady counts the listed sources not ready to write from.
-func notReady(src *state.Sources) int {
-	n := 0
-	for _, it := range src.Items {
-		if it.Status != state.SourceReady {
-			n++
-		}
-	}
-	return n
 }

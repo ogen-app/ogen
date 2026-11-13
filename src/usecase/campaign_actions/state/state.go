@@ -99,6 +99,9 @@ type Sources struct {
 	Ready     int  `json:"ready"`
 	// Analysed is -1 when the analyses could not be read.
 	Analysed int `json:"analysed"`
+	// NotReady counts the attached sources not yet ready to write from,
+	// over all of them, not only those Items lists.
+	NotReady int `json:"notReady"`
 	// Items are the campaign's attached sources one by one, up to
 	// MaxSourceItems, with how far each got; empty when it draws on the
 	// whole bank.
@@ -125,6 +128,7 @@ type SourceItem struct {
 }
 
 var statusOrder = []models.PostStatus{
+	models.PostStatusPlanned,
 	models.PostStatusDraft,
 	models.PostStatusReadyForPublish,
 	models.PostStatusScheduled,
