@@ -36,6 +36,16 @@ type undoResponse struct {
 	EntityID string `json:"entityId"`
 }
 
+// undoConflict is why a change can't be undone: reason already_undone, or
+// changed_since, with Changed of Of entities changed again since when the
+// change was to several (asset_tags).
+type undoConflict struct {
+	Error   string `json:"error"`
+	Reason  string `json:"reason" enums:"already_undone,changed_since"`
+	Changed int    `json:"changed,omitzero"`
+	Of      int    `json:"of,omitzero"`
+}
+
 // Undo godoc
 // @Summary      Undo an assistant change
 // @Description  Restores what a reversible assistant change replaced. kind and entityId name what to refresh:
@@ -46,7 +56,9 @@ type undoResponse struct {
 // @Description  campaign_series, post_schedules and post_types (entityId: the campaign whose posts changed),
 // @Description  auto_publish, and asset_tags (the assets a tagging changed get their tags back). entityId is always
 // @Description  present: for idea_verdicts and asset_tags it is "", which names no single entity to refresh.
-// @Description  409 when it was already undone, or when it was edited again since: undo never overwrites a later edit.
+// @Description  409 when it was already undone (reason "already_undone"), or when it was edited again since (reason
+// @Description  "changed_since"; for asset_tags with "changed" of "of" assets retagged since): undo never overwrites a
+// @Description  later edit.
 // @Tags         assistant
 // @Produce      json
 // @Security     CookieAuth
@@ -54,7 +66,7 @@ type undoResponse struct {
 // @Success      200  {object}  undoResponse
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
-// @Failure      409  {object}  map[string]string
+// @Failure      409  {object}  undoConflict
 // @Failure      503  {object}  map[string]string
 // @Router       /api/assistant/actions/{id}/undo [post]
 func (h *AssistantActionsHandler) Undo(c *fiber.Ctx) error {
@@ -69,8 +81,14 @@ func (h *AssistantActionsHandler) Undo(c *fiber.Ctx) error {
 	switch {
 	case errors.Is(err, assistantundo.ErrNotFound):
 		return fiber.NewError(fiber.StatusNotFound, "This change no longer exists.")
-	case errors.Is(err, assistantundo.ErrAlreadyUndone), errors.Is(err, assistantundo.ErrChangedSince):
-		return fiber.NewError(fiber.StatusConflict, err.Error())
+	case errors.Is(err, assistantundo.ErrAlreadyUndone):
+		return c.Status(fiber.StatusConflict).JSON(undoConflict{Error: err.Error(), Reason: "already_undone"})
+	case errors.Is(err, assistantundo.ErrChangedSince):
+		body := undoConflict{Error: err.Error(), Reason: "changed_since"}
+		if ce, ok := errors.AsType[*assistantundo.ChangedSinceError](err); ok {
+			body.Changed, body.Of = ce.Changed, ce.Of
+		}
+		return c.Status(fiber.StatusConflict).JSON(body)
 	case err != nil:
 		return err
 	}

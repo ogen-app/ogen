@@ -71,6 +71,34 @@ type AssistantProposal struct {
 	ResolvedAt *time.Time `bun:"resolved_at"                                   json:"resolved_at,omitempty"`
 }
 
+// AssistantOfferState is an offer as it stands now, for a thread's history,
+// so a reload shows each card as it is rather than as its turn left it.
+type AssistantOfferState struct {
+	ID string `json:"id"`
+	// Status is pending, confirmed, dismissed or expired; a pending offer
+	// past its expiry reads expired.
+	Status     AssistantProposalStatus `json:"status" swaggertype:"string" enums:"pending,confirmed,dismissed,expired"`
+	Chosen     string                  `json:"chosen,omitempty"`
+	ExpiresAt  time.Time               `json:"expires_at"`
+	ResolvedAt *time.Time              `json:"resolved_at,omitempty"`
+	// Replaces and RetryOf are the offers this one follows; ReplacedBy is
+	// the fresh offer of what still held when this one's yes found things
+	// changed, which is then the one to answer.
+	Replaces   string `json:"replaces,omitempty"`
+	RetryOf    string `json:"retry_of,omitempty"`
+	ReplacedBy string `json:"replaced_by,omitempty"`
+}
+
+// State is the proposal as it stands at now.
+func (p *AssistantProposal) State(now time.Time) AssistantOfferState {
+	s := AssistantOfferState{ID: p.ID, Status: p.Status, Chosen: p.Chosen, ExpiresAt: p.ExpiresAt, ResolvedAt: p.ResolvedAt,
+		Replaces: p.Replaces, RetryOf: p.RetryOf}
+	if p.Status == ProposalPending && !now.Before(p.ExpiresAt) {
+		s.Status = ProposalExpired
+	}
+	return s
+}
+
 // Open reports whether the proposal can still be confirmed or dismissed.
 func (p *AssistantProposal) Open(now time.Time) bool {
 	return p.Status == ProposalPending && now.Before(p.ExpiresAt)

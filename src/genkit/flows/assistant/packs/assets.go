@@ -1,6 +1,7 @@
 package packs
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -492,11 +493,45 @@ func tagCard(ctx context.Context, d Deps, in TagAssetsInput) *assistantkit.Card 
 	return c
 }
 
-// TagAssetsOutput is how many assets were tagged.
+// TagAssetsOutput is how many assets were tagged, with which tags, and what
+// changed on each.
 type TagAssetsOutput struct {
 	Tagged int `json:"tagged"`
+	// Changed counts the assets whose tags changed; the rest already were
+	// as asked, and undo leaves them alone.
+	Changed int `json:"changed"`
+	// Add and Remove are the tags' names, as the tag list has them.
+	Add    []string `json:"add,omitempty"`
+	Remove []string `json:"remove,omitempty"`
+	// Assets are the first few assets with what changed on each; More
+	// counts the rest.
+	Assets []TaggedAsset `json:"assets"`
+	More   int           `json:"more,omitzero"`
 	// UndoID puts the tags back on the assets the call changed, all at once.
 	UndoID string `json:"undoId,omitempty"`
+}
+
+// TaggedAsset is one asset a tagging was for: the tags it gained and lost,
+// by name; neither when it already was as asked.
+type TaggedAsset struct {
+	ID      string   `json:"id"`
+	Title   string   `json:"title"`
+	Added   []string `json:"added,omitempty"`
+	Removed []string `json:"removed,omitempty"`
+}
+
+// taggedShown is how many assets a tagging's result lists.
+const taggedShown = 5
+
+// tagNames names the tag ids in has but not in hadNot, by names.
+func tagNames(names map[string]string, has, hadNot []string) []string {
+	var out []string
+	for _, id := range has {
+		if !slices.Contains(hadNot, id) {
+			out = append(out, cmp.Or(names[id], id))
+		}
+	}
+	return out
 }
 
 func tagAssets(ctx context.Context, d Deps, in TagAssetsInput) (*TagAssetsOutput, error) {
@@ -507,12 +542,14 @@ func tagAssets(ctx context.Context, d Deps, in TagAssetsInput) (*TagAssetsOutput
 		return nil, assistantkit.Refused("name the tags to add or remove")
 	}
 	var add, remove []string
+	names := map[string]string{}
+	out := &TagAssetsOutput{Assets: []TaggedAsset{}}
 	for _, name := range dedupe(in.Add) {
 		t, err := d.Tags.FindOrCreateByName(ctx, name, "", actor(ctx))
 		if err != nil {
 			return nil, fmt.Errorf("tag %q: %w", name, err)
 		}
-		add = append(add, t.ID)
+		add, names[t.ID], out.Add = append(add, t.ID), t.Name, append(out.Add, t.Name)
 	}
 	if len(in.Remove) > 0 {
 		all, err := d.Tags.List(ctx)
@@ -521,7 +558,7 @@ func tagAssets(ctx context.Context, d Deps, in TagAssetsInput) (*TagAssetsOutput
 		}
 		for _, t := range all {
 			if slices.ContainsFunc(in.Remove, func(n string) bool { return strings.EqualFold(strings.TrimSpace(n), t.Name) }) {
-				remove = append(remove, t.ID)
+				remove, names[t.ID], out.Remove = append(remove, t.ID), t.Name, append(out.Remove, t.Name)
 			}
 		}
 	}
@@ -530,7 +567,7 @@ func tagAssets(ctx context.Context, d Deps, in TagAssetsInput) (*TagAssetsOutput
 		return nil, err
 	}
 	assistantkit.Touch(ctx, "asset", "")
-	out := &TagAssetsOutput{Tagged: len(updated)}
+	out.Tagged = len(updated)
 	// Only the assets whose tags changed are put back, so one the call left
 	// as it was can't block the undo.
 	before, after := map[string][]string{}, map[string][]string{}
@@ -538,7 +575,14 @@ func tagAssets(ctx context.Context, d Deps, in TagAssetsInput) (*TagAssetsOutput
 		if !slices.Equal(was[a.ID], a.TagIDs) {
 			before[a.ID], after[a.ID] = was[a.ID], a.TagIDs
 		}
+		if len(out.Assets) == taggedShown {
+			out.More++
+			continue
+		}
+		out.Assets = append(out.Assets, TaggedAsset{ID: a.ID, Title: a.Title,
+			Added: tagNames(names, a.TagIDs, was[a.ID]), Removed: tagNames(names, was[a.ID], a.TagIDs)})
 	}
+	out.Changed = len(after)
 	if len(after) > 0 {
 		out.UndoID = recordUndo(ctx, d, models.AssistantActionAssetTags, "", assistantundo.AssetTags(before), assistantundo.AssetTags(after))
 	}

@@ -27,6 +27,19 @@ var (
 	ErrChangedSince = errors.New("this was changed again since, so it can't be undone")
 )
 
+// ChangedSinceError is ErrChangedSince for a change to several entities,
+// saying how many of them were changed again since: Changed of Of.
+type ChangedSinceError struct {
+	Changed, Of int
+}
+
+func (e *ChangedSinceError) Error() string {
+	return fmt.Sprintf("%d of the %d were changed again since, so it can't be undone", e.Changed, e.Of)
+}
+
+// Is makes a ChangedSinceError match ErrChangedSince.
+func (e *ChangedSinceError) Is(target error) bool { return target == ErrChangedSince }
+
 // Undoer restores one kind of change.
 type Undoer interface {
 	// Undo restores a.Before on the entity within tx, or returns

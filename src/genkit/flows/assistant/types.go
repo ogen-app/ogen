@@ -6,6 +6,8 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -61,6 +63,28 @@ const (
 	actionAnswered = "answered"
 	actionDeclined = "declined"
 )
+
+// OfferIDs are the offers a stored model turn made or answered, read from
+// its content, the JSON of its Response; none when it isn't one.
+func OfferIDs(content string) []string {
+	var r struct {
+		Proposals []struct{ ID string } `json:"proposals"`
+		Resolved  []struct{ ID string } `json:"resolved"`
+	}
+	if json.Unmarshal([]byte(content), &r) != nil {
+		return nil
+	}
+	var ids []string
+	for _, p := range r.Proposals {
+		ids = append(ids, p.ID)
+	}
+	for _, p := range r.Resolved {
+		if !slices.Contains(ids, p.ID) {
+			ids = append(ids, p.ID)
+		}
+	}
+	return ids
+}
 
 // SSEEventKind names an event the turn streams. In order:
 //

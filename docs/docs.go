@@ -1159,7 +1159,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Restores what a reversible assistant change replaced. kind and entityId name what to refresh:\ncampaign_dates, campaign_brief, campaign_platforms, campaign_assets, campaign_goal, campaign_created (the campaign is\ndeleted), idea_verdict, idea_edit, idea_verdicts (no entityId: several ideas), post_created (the posts\nmade from ideas are deleted, all or none; entityId is the first of them, so refresh the post list\nwhen a compile made several), brand_fact, brand_voice, brand_audience, brand_guardrails, series,\ncampaign_series, post_schedules and post_types (entityId: the campaign whose posts changed),\nauto_publish, and asset_tags (the assets a tagging changed get their tags back). entityId is always\npresent: for idea_verdicts and asset_tags it is \"\", which names no single entity to refresh.\n409 when it was already undone, or when it was edited again since: undo never overwrites a later edit.",
+                "description": "Restores what a reversible assistant change replaced. kind and entityId name what to refresh:\ncampaign_dates, campaign_brief, campaign_platforms, campaign_assets, campaign_goal, campaign_created (the campaign is\ndeleted), idea_verdict, idea_edit, idea_verdicts (no entityId: several ideas), post_created (the posts\nmade from ideas are deleted, all or none; entityId is the first of them, so refresh the post list\nwhen a compile made several), brand_fact, brand_voice, brand_audience, brand_guardrails, series,\ncampaign_series, post_schedules and post_types (entityId: the campaign whose posts changed),\nauto_publish, and asset_tags (the assets a tagging changed get their tags back). entityId is always\npresent: for idea_verdicts and asset_tags it is \"\", which names no single entity to refresh.\n409 when it was already undone (reason \"already_undone\"), or when it was edited again since (reason\n\"changed_since\"; for asset_tags with \"changed\" of \"of\" assets retagged since): undo never overwrites a\nlater edit.",
                 "produces": [
                     "application/json"
                 ],
@@ -1204,10 +1204,7 @@ const docTemplate = `{
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/handlers.undoConflict"
                         }
                     },
                     "503": {
@@ -1426,7 +1423,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns a thread's latest messages, oldest first. scope is \"workspace\", \"campaign:\u003cid\u003e\" or\n\"post:\u003cid\u003e\". A user message carries the view_context it was sent from; a model message's\ncontent is the JSON of that turn's \"complete\" event.",
+                "description": "Returns a thread's latest messages, oldest first. scope is \"workspace\", \"campaign:\u003cid\u003e\" or\n\"post:\u003cid\u003e\". A user message carries the view_context it was sent from; a model message's\ncontent is the JSON of that turn's \"complete\" event, and its \"offers\" are the offers the turn made\nor answered as they stand now: {id, status: pending|confirmed|dismissed|expired (a pending one past\nits expiry reads expired), chosen, expires_at, resolved_at, replaces, retry_of, replaced_by (the\nfresh offer made when a yes found things changed; the stale offer stays pending)}.",
                 "produces": [
                     "application/json"
                 ],
@@ -19053,6 +19050,27 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.undoConflict": {
+            "type": "object",
+            "properties": {
+                "changed": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "of": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string",
+                    "enum": [
+                        "already_undone",
+                        "changed_since"
+                    ]
+                }
+            }
+        },
         "handlers.undoResponse": {
             "type": "object",
             "properties": {
@@ -19954,6 +19972,13 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "offers": {
+                    "description": "Offers are, on a model turn, the offers it made or answered, as they\nstand now; filled when the thread is read, not stored.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AssistantOfferState"
+                    }
+                },
                 "role": {
                     "type": "string"
                 },
@@ -19969,6 +19994,43 @@ const docTemplate = `{
                         {
                             "$ref": "#/definitions/models.JSONMap"
                         }
+                    ]
+                }
+            }
+        },
+        "models.AssistantOfferState": {
+            "type": "object",
+            "properties": {
+                "chosen": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "replaced_by": {
+                    "type": "string"
+                },
+                "replaces": {
+                    "description": "Replaces and RetryOf are the offers this one follows; ReplacedBy is\nthe fresh offer of what still held when this one's yes found things\nchanged, which is then the one to answer.",
+                    "type": "string"
+                },
+                "resolved_at": {
+                    "type": "string"
+                },
+                "retry_of": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is pending, confirmed, dismissed or expired; a pending offer\npast its expiry reads expired.",
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "confirmed",
+                        "dismissed",
+                        "expired"
                     ]
                 }
             }

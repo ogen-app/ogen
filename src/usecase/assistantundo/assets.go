@@ -42,12 +42,12 @@ func (u assetTags) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantActi
 	if err := fromMap(a.After, &after); err != nil {
 		return err
 	}
-	ok, err := u.assets.SetTagsIf(ctx, tx, after.Assets, before.Assets)
+	moved, err := u.assets.SetTagsIf(ctx, tx, after.Assets, before.Assets)
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return ErrChangedSince
+	if len(moved) > 0 {
+		return &ChangedSinceError{Changed: len(moved), Of: len(after.Assets)}
 	}
 	return nil
 }

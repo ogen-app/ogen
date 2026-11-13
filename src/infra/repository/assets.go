@@ -91,7 +91,9 @@ type AssetRepository interface {
 	ApplyTagsBefore(ctx context.Context, assetIDs, add, remove []string) ([]models.Asset, map[string][]string, error)
 	// SetTagsIf gives each asset of to its tag ids, all or none, while every
 	// one still has the tag ids from gives it (in any order) and exists.
-	SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) (bool, error)
+	// Otherwise it changes nothing and returns the ids of the assets that
+	// moved since: retagged or gone.
+	SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) (moved []string, err error)
 	Delete(ctx context.Context, id string) (bool, error)
 }
 
@@ -365,22 +367,21 @@ func (r *assetRepository) ApplyTagsBefore(ctx context.Context, assetIDs, add, re
 	return updated, before, nil
 }
 
-func (r *assetRepository) SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) (bool, error) {
+func (r *assetRepository) SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) ([]string, error) {
 	if len(to) == 0 {
-		return true, nil
+		return nil, nil
 	}
 	ids := slices.Sorted(maps.Keys(to))
 	var assets []models.Asset
 	if err := tx.NewSelect().Model(&assets).Where("a.id IN (?)", bun.List(ids)).For("UPDATE").Scan(ctx); err != nil {
-		return false, err
+		return nil, err
 	}
-	if len(assets) != len(ids) {
-		return false, nil
-	}
-	for _, a := range assets {
-		if !sameIDs(a.TagIDs, from[a.ID]) {
-			return false, nil
-		}
+	moved := slices.DeleteFunc(slices.Clone(ids), func(id string) bool {
+		i := slices.IndexFunc(assets, func(a models.Asset) bool { return a.ID == id })
+		return i >= 0 && sameIDs(assets[i].TagIDs, from[id])
+	})
+	if len(moved) > 0 {
+		return moved, nil
 	}
 	now := time.Now().UTC()
 	for i := range assets {
@@ -389,10 +390,10 @@ func (r *assetRepository) SetTagsIf(ctx context.Context, tx bun.IDB, from, to ma
 			assets[i].TagIDs = models.StringSlice{}
 		}
 		if _, err := tx.NewUpdate().Model(&assets[i]).Column("tag_ids", "updated_at").WherePK().Exec(ctx); err != nil {
-			return false, err
+			return nil, err
 		}
 	}
-	return true, nil
+	return nil, nil
 }
 
 // sameIDs reports whether a and b hold the same ids, in any order.
