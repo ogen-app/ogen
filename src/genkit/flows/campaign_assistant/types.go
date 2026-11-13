@@ -229,9 +229,6 @@ type CampaignAssistantRepos struct {
 	// Dismissals leaves the findings the user dismissed out of the brief
 	// and posts reviews; nil leaves them all in.
 	Dismissals repository.AssistantDismissalRepository
-	// Ideas reads back the ideas generatePosts saved, so they can be
-	// undone; nil leaves them without an undo.
-	Ideas repository.IdeaRepository
 }
 
 // CampaignAssistantFlowConfig holds the campaign pack's services and limits.
