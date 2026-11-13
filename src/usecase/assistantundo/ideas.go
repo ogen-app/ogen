@@ -91,13 +91,16 @@ func ideaEdited(id string, m models.JSONMap) (*models.Idea, error) {
 func IdeasCreated(ideas []*models.Idea) models.JSONMap {
 	list := make([]madeIdea, len(ideas))
 	for i, idea := range ideas {
-		list[i] = madeIdea{ID: idea.ID, ideaText: ideaText{Title: idea.Title, Note: idea.Note, Plan: idea.Plan}}
+		list[i] = madeIdea{ID: idea.ID, CampaignID: idea.CampaignID, ideaText: ideaText{Title: idea.Title, Note: idea.Note, Plan: idea.Plan}}
 	}
 	return toMap(madeIdeas{Ideas: list})
 }
 
 type madeIdea struct {
 	ID string `json:"id"`
+	// CampaignID is the campaign it was made in, nil for the workspace: an
+	// idea moved since stays.
+	CampaignID *string `json:"campaignId"`
 	ideaText
 }
 
@@ -115,7 +118,7 @@ func (u ideasCreated) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantA
 		return fmt.Errorf("read made ideas: %w", err)
 	}
 	for _, m := range made.Ideas {
-		ok, err := u.ideas.DeleteAsMadeIf(ctx, tx, &models.Idea{ID: m.ID, Title: m.Title, Note: m.Note, Plan: m.Plan})
+		ok, err := u.ideas.DeleteAsMadeIf(ctx, tx, &models.Idea{ID: m.ID, CampaignID: m.CampaignID, Title: m.Title, Note: m.Note, Plan: m.Plan})
 		if err != nil {
 			return err
 		}

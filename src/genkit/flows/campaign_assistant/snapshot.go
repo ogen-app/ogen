@@ -87,17 +87,24 @@ func sources(ctx context.Context, repos CampaignAssistantRepos, c *models.Campai
 	if len(ready) == 0 {
 		src.Analysed = 0
 	}
-	src.Items = sourceItems(c, metas, digests, digests != nil)
+	items := sourceItems(c, metas, digests, digests != nil)
+	for _, it := range items {
+		if it.Status != state.SourceReady {
+			src.NotReady++
+		}
+	}
+	src.Items = items[:min(len(items), state.MaxSourceItems)]
 	return src
 }
 
-// sourceItems lists the campaign's attached assets in its order, up to
-// state.MaxSourceItems: unreadable when the asset failed or is gone, ready
-// once it is processed and, when the analyses were read, analysed through
-// the campaign's lens; analysing until then.
+// sourceItems lists every one of the campaign's attached assets in its
+// order: unreadable when the asset or its campaign analysis failed, or the
+// asset is gone; ready once it is processed and, when the analyses were
+// read, its analysis finished or was skipped (its text is still there to
+// write from); analysing until then.
 func sourceItems(c *models.Campaign, metas []models.Asset, digests map[string]repository.LensDigest, analysesRead bool) []state.SourceItem {
 	var items []state.SourceItem
-	for _, id := range c.AssetIDs[:min(len(c.AssetIDs), state.MaxSourceItems)] {
+	for _, id := range c.AssetIDs {
 		item := state.SourceItem{ID: id, Status: state.SourceUnreadable}
 		i := slices.IndexFunc(metas, func(a models.Asset) bool { return a.ID == id })
 		if i >= 0 {
@@ -106,9 +113,11 @@ func sourceItems(c *models.Campaign, metas []models.Asset, digests map[string]re
 			if a.Type != nil {
 				item.Kind = *a.Type
 			}
+			analysis := digests[id].Status
 			switch {
 			case a.Status == models.AssetStatusFailed || a.Status == models.AssetStatusPartial:
-			case a.Status == models.AssetStatusReady && (!analysesRead || digests[id].Status == models.AssetAnalysisStatusReady):
+			case analysesRead && analysis == models.AssetAnalysisStatusFailed:
+			case a.Status == models.AssetStatusReady && (!analysesRead || analysis == models.AssetAnalysisStatusReady || analysis == models.AssetAnalysisStatusSkipped):
 				item.Status = state.SourceReady
 			default:
 				item.Status = state.SourceAnalysing

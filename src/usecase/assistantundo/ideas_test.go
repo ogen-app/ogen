@@ -268,6 +268,19 @@ func TestUndo_IdeasCreated(t *testing.T) {
 	if _, err := ideas.Update(f.ctx, &edited, "title"); err != nil {
 		t.Fatal(err)
 	}
+	// Moved into a campaign since, as made otherwise: it stays too.
+	f.seedCampaign(t, nil)
+	edited.CampaignID = new("c1")
+	if _, err := ideas.Update(f.ctx, &edited, "campaign_id"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) || f.undone(t, id) {
+		t.Fatalf("moved since: %v", err)
+	}
+	edited.CampaignID = nil
+	if _, err := ideas.Update(f.ctx, &edited, "campaign_id"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.Undo(f.ctx, id, "user-1"); err != nil {
 		t.Fatal(err)
 	}

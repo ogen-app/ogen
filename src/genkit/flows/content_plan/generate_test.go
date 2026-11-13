@@ -10,15 +10,18 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// A saved item carries the idea it was saved as, so the caller can undo it.
-func TestPostSink_KeepsTheIdeaID(t *testing.T) {
+// A saved item keeps the idea it was saved as, so the caller can undo it.
+func TestPostSink_KeepsTheSavedIdea(t *testing.T) {
 	gen := &postGenerator{
 		validate: func(DraftPost) error { return nil },
-		persist:  func(context.Context, *DraftPost) (string, error) { return "idea-1", nil },
+		persist: func(_ context.Context, dp *DraftPost) (string, error) {
+			dp.Saved = &models.Idea{ID: "idea-1"}
+			return "idea-1", nil
+		},
 	}
 	sink := &postSink{gen: gen, onEvent: func(SSEEventKind, any) {}, persisted: map[int]bool{}}
 	sink.add(t.Context(), DraftPost{Title: "A pool in the rock"}, 0)
-	if len(sink.posts) != 1 || sink.posts[0].IdeaID != "idea-1" {
+	if len(sink.posts) != 1 || sink.posts[0].Saved == nil || sink.posts[0].Saved.ID != "idea-1" {
 		t.Fatalf("posts = %+v", sink.posts)
 	}
 }
@@ -84,6 +87,11 @@ func TestPersistIdea_SavesThePlan(t *testing.T) {
 	}
 	if len(i.AssetIDs) != 2 || *i.SourceAssetID != "asset-1" || *i.GroundingMode != models.GroundingGrounded {
 		t.Errorf("sources = %v / %v, grounding %v", i.AssetIDs, i.SourceAssetID, i.GroundingMode)
+	}
+	// The item keeps the idea as saved, for its undo; a later change to the
+	// stored row doesn't reach it.
+	if dp.Saved == nil || dp.Saved.ID != id || dp.Saved.Note != i.Note || dp.Saved == i {
+		t.Errorf("saved = %+v", dp.Saved)
 	}
 }
 

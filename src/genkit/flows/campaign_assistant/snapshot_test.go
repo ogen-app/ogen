@@ -3,6 +3,7 @@ package campaign_assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -189,6 +190,48 @@ func TestSnapshot_PeriodSourcesCalendar(t *testing.T) {
 	s.Goal, s.Calendar = nil, nil
 	if got := starters(s); len(got) != 1 || got[0].Kind != starterSources || got[0].Label != "2 sources not ready" {
 		t.Fatalf("sources starter = %+v", got)
+	}
+}
+
+// A failed campaign analysis is unreadable, not analysing forever; a skipped
+// one leaves the source ready to write from.
+func TestSourceItems_AnalysisOutcomes(t *testing.T) {
+	c := &models.Campaign{AssetIDs: models.StringSlice{"a1", "a2", "a3"}}
+	metas := []models.Asset{{ID: "a1", Status: models.AssetStatusReady}, {ID: "a2", Status: models.AssetStatusReady}, {ID: "a3", Status: models.AssetStatusReady}}
+	digests := map[string]repository.LensDigest{
+		"a1": {Status: models.AssetAnalysisStatusFailed},
+		"a2": {Status: models.AssetAnalysisStatusSkipped},
+		"a3": {Status: models.AssetAnalysisStatusRunning},
+	}
+	items := sourceItems(c, metas, digests, true)
+	want := []string{state.SourceUnreadable, state.SourceReady, state.SourceAnalysing}
+	for i, it := range items {
+		if it.Status != want[i] {
+			t.Fatalf("items = %+v, want %v", items, want)
+		}
+	}
+}
+
+// The sources not ready are counted over every attached source, past the
+// ones listed.
+func TestSources_NotReadyCountsPastTheList(t *testing.T) {
+	c := &models.Campaign{ID: "c1"}
+	var all []models.Asset
+	for i := range state.MaxSourceItems + 1 {
+		id := fmt.Sprintf("a%d", i)
+		c.AssetIDs = append(c.AssetIDs, id)
+		status := models.AssetStatusReady
+		if i == state.MaxSourceItems {
+			status = models.AssetStatusFailed
+		}
+		all = append(all, models.Asset{ID: id, Status: status})
+	}
+	src := sources(t.Context(), CampaignAssistantRepos{Assets: readyAssets{all: all}}, c)
+	if src == nil || len(src.Items) != state.MaxSourceItems || src.NotReady != 1 {
+		t.Fatalf("sources = %+v", src)
+	}
+	if got := starters(state.Snapshot{Sources: src}); len(got) != 1 || got[0].Label != "1 source not ready" {
+		t.Fatalf("starters = %+v", got)
 	}
 }
 

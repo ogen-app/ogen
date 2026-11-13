@@ -42,6 +42,9 @@ type UpdateCampaignPlatformsInput struct {
 	// Scheduled is the user's pick when posts scheduled to publish on what
 	// is removed held the removal back.
 	Scheduled string `json:"scheduled,omitempty" jsonschema:"description=Leave empty: set by the server when the user picks how to handle posts scheduled on what is removed."`
+	// Unschedule is the scheduled posts the choice offered to withdraw; a
+	// post scheduled there since is not among them.
+	Unschedule []string `json:"unschedule,omitempty" jsonschema:"description=Leave empty: set by the server with the posts the user agreed to unschedule."`
 }
 
 // UpdateCampaignPlatformsOutput reports what changed.
@@ -151,6 +154,11 @@ var updatePlatformsGate = assistantkit.Gate[UpdateCampaignPlatformsInput]{
 		if err != nil {
 			return err
 		}
+		// Only the choice's own options carry a pick, and they run
+		// confirmed: an offer must never hide one its card doesn't show.
+		if (in.Scheduled != "" || len(in.Unschedule) > 0) && !assistantkit.Confirmed(ctx) {
+			return assistantkit.Refused("Leave scheduled and unschedule empty: they are set by the choice offered to the user.")
+		}
 		switch in.Scheduled {
 		case "", scheduledLater:
 		case scheduledUnschedule:
@@ -165,7 +173,7 @@ var updatePlatformsGate = assistantkit.Gate[UpdateCampaignPlatformsInput]{
 		}
 		left, ok := removedPosts(ctx, plan.removed)
 		if !ok {
-			return nil
+			return errPostsUnread(plan.removed)
 		}
 		if blocking := publishing(left); len(blocking) > 0 {
 			return scheduledConflict(ctx, in, plan, left, blocking)
@@ -226,6 +234,11 @@ func flagOf(removed []platforms.Removed) string {
 	return "not a post type of this campaign"
 }
 
+// errPostsUnread refuses a removal whose posts could not be read.
+func errPostsUnread(removed []platforms.Removed) error {
+	return assistantkit.Refused(fmt.Sprintf("The posts on %s couldn't be checked for scheduled ones, so nothing was removed. Try again in a moment.", removedLabel(removed)))
+}
+
 // publishing are the posts that publish on their own unless withdrawn.
 func publishing(posts []models.Post) []models.Post {
 	return slices.DeleteFunc(slices.Clone(posts), func(p models.Post) bool { return p.Status != models.PostStatusScheduled })
@@ -241,6 +254,9 @@ func scheduledConflict(ctx context.Context, in UpdateCampaignPlatformsInput, pla
 	if st.cancelPost != nil {
 		unschedule := in
 		unschedule.Scheduled = scheduledUnschedule
+		for _, p := range blocking {
+			unschedule.Unschedule = append(unschedule.Unschedule, p.ID)
+		}
 		desc := fmt.Sprintf("%d posts scheduled up to %s go back to ready to publish.", n, when(st.campaign, lastScheduled(blocking)))
 		if n == 1 {
 			desc = fmt.Sprintf("“%s” is scheduled for %s and goes back to ready to publish.", titleOf(blocking[0]), when(st.campaign, blocking[0].ScheduledAt))
@@ -520,6 +536,11 @@ func toolUpdateCampaignPlatforms(ctx context.Context, in UpdateCampaignPlatforms
 	}
 	next, catalog := plan.next, plan.catalog
 	left, read := removedPosts(ctx, plan.removed)
+	if len(plan.removed) > 0 && !read {
+		// Without the posts, a scheduled one could publish where the
+		// campaign no longer is.
+		return nil, errPostsUnread(plan.removed)
+	}
 	blocking := publishing(left)
 	unscheduled := 0
 	switch {
@@ -529,9 +550,10 @@ func toolUpdateCampaignPlatforms(ctx context.Context, in UpdateCampaignPlatforms
 			later.Until = t.UTC().Format(time.RFC3339)
 		}
 		return &UpdateCampaignPlatformsOutput{Later: later}, nil
-	case len(blocking) > 0 && in.Scheduled == "":
-		// Offered before a post was scheduled there; the choice is the user's.
-		return nil, assistantkit.Refused(fmt.Sprintf("%sa post was scheduled on %s since, so nothing was removed. Ask again to choose what happens to it.",
+	case len(blocking) > 0 && (in.Scheduled == "" || slices.ContainsFunc(blocking, func(p models.Post) bool { return !slices.Contains(in.Unschedule, p.ID) })):
+		// A post was scheduled there after the offer: what to do with it
+		// is the user's choice, not this offer's.
+		return nil, assistantkit.Refused(fmt.Sprintf("%sa post was scheduled on %s since, so nothing was withdrawn or removed. Ask again to choose what happens to it.",
 			assistantkit.ChangedSince, removedLabel(plan.removed)))
 	case len(blocking) > 0:
 		n, err := unschedule(ctx, blocking)
@@ -550,7 +572,7 @@ func toolUpdateCampaignPlatforms(ctx context.Context, in UpdateCampaignPlatforms
 	before := assistantundo.CampaignPlatforms(c)
 	saved := &models.Campaign{ID: c.ID, TargetPlatforms: next}
 	if err := st.repos.Campaigns.UpdateColumns(ctx, nil, saved, "target_platforms"); err != nil {
-		return nil, fmt.Errorf("update campaign platforms: %w", err)
+		return nil, fmt.Errorf("update campaign platforms after withdrawing %d scheduled posts: %w", unscheduled, err)
 	}
 	// Later tools in this turn resolve platforms from the hydrated list.
 	hydrated := slices.DeleteFunc(slices.Clone(c.Platforms), func(p models.Platform) bool {
