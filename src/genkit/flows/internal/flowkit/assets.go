@@ -21,10 +21,17 @@ type SkippedAsset struct {
 // chunks they already have. skipped lists the explicit IDs left out, so a
 // caller can warn about them. One query either way.
 func ReadyCampaignAssetIDs(ctx context.Context, assets repository.AssetRepository, campaign *models.Campaign) (ready []string, skipped []SkippedAsset, err error) {
+	ready, skipped, _, err = CampaignAssets(ctx, assets, campaign)
+	return ready, skipped, err
+}
+
+// CampaignAssets is ReadyCampaignAssetIDs with the rows it read: the
+// explicit assets' id, title, status and type, nil for the whole bank.
+func CampaignAssets(ctx context.Context, assets repository.AssetRepository, campaign *models.Campaign) (ready []string, skipped []SkippedAsset, metas []models.Asset, err error) {
 	if len(campaign.AssetIDs) == 0 {
 		all, err := assets.ListMeta(ctx, nil)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		ready = make([]string, 0, len(all))
 		for _, a := range all {
@@ -32,12 +39,12 @@ func ReadyCampaignAssetIDs(ctx context.Context, assets repository.AssetRepositor
 				ready = append(ready, a.ID)
 			}
 		}
-		return ready, nil, nil
+		return ready, nil, nil, nil
 	}
 
-	metas, err := assets.ListMeta(ctx, campaign.AssetIDs)
+	metas, err = assets.ListMeta(ctx, campaign.AssetIDs)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	status := make(map[string]string, len(metas))
 	for _, a := range metas {
@@ -55,7 +62,7 @@ func ReadyCampaignAssetIDs(ctx context.Context, assets repository.AssetRepositor
 			ready = append(ready, id)
 		}
 	}
-	return ready, skipped, nil
+	return ready, skipped, metas, nil
 }
 
 func usableAssetStatus(status string) bool {

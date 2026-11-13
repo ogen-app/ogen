@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -282,6 +283,12 @@ func (r *genkitRuntime) RunAssistant(ctx context.Context, req assistant.Request,
 		return nil, ErrAnthropicUnavailable
 	}
 	return fn(ctx, req, onEvent)
+}
+
+// CampaignState reads what the campaign assistant knows of a campaign before
+// it is asked: no model call, so it needs no provider.
+func (r *genkitRuntime) CampaignState(ctx context.Context, campaignID string) (*campaign_assistant.CampaignState, error) {
+	return campaign_assistant.ReadState(ctx, r.campaignAssistRepos, campaignID, time.Now().UTC())
 }
 
 // AnswerProposal confirms or dismisses an assistant offer from its card,

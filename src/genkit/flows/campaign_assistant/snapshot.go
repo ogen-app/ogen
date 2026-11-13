@@ -9,6 +9,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
@@ -52,39 +53,70 @@ func snapshot(ctx context.Context, repos CampaignAssistantRepos, c *models.Campa
 // assets, or the whole bank when it attached none, how many are ready, and
 // how many have a finished analysis — through the campaign's lens for its
 // own assets, the workspace lens for the bank. nil when they could not be
-// read; Analysed is -1 when only the analyses could not.
+// read; Analysed is -1 when only the analyses could not. A campaign's own
+// assets are listed one by one too.
 func sources(ctx context.Context, repos CampaignAssistantRepos, c *models.Campaign) *state.Sources {
 	if repos.Assets == nil {
 		return nil
 	}
-	ready, skipped, err := flowkit.ReadyCampaignAssetIDs(ctx, repos.Assets, c)
+	ready, skipped, metas, err := flowkit.CampaignAssets(ctx, repos.Assets, c)
 	if err != nil {
 		warnState(ctx, c, "count campaign assets", err)
 		return nil
 	}
 	src := &state.Sources{WholeBank: len(c.AssetIDs) == 0, Attached: len(ready) + len(skipped), Ready: len(ready), Analysed: -1}
-	if repos.Analyses == nil || len(ready) == 0 {
-		if len(ready) == 0 {
+	var digests map[string]repository.LensDigest
+	if repos.Analyses != nil && len(ready) > 0 {
+		var lens *string
+		if !src.WholeBank {
+			lens = &c.ID
+		}
+		digests, err = repos.Analyses.LensDigests(ctx, ready, lens)
+		if err != nil {
+			warnState(ctx, c, "count analysed sources", err)
+			digests = nil
+		} else {
 			src.Analysed = 0
-		}
-		return src
-	}
-	var lens *string
-	if !src.WholeBank {
-		lens = &c.ID
-	}
-	digests, err := repos.Analyses.LensDigests(ctx, ready, lens)
-	if err != nil {
-		warnState(ctx, c, "count analysed sources", err)
-		return src
-	}
-	src.Analysed = 0
-	for _, d := range digests {
-		if d.Status == models.AssetAnalysisStatusReady {
-			src.Analysed++
+			for _, d := range digests {
+				if d.Status == models.AssetAnalysisStatusReady {
+					src.Analysed++
+				}
+			}
 		}
 	}
+	if len(ready) == 0 {
+		src.Analysed = 0
+	}
+	src.Items = sourceItems(c, metas, digests, digests != nil)
 	return src
+}
+
+// sourceItems lists the campaign's attached assets in its order, up to
+// state.MaxSourceItems: unreadable when the asset failed or is gone, ready
+// once it is processed and, when the analyses were read, analysed through
+// the campaign's lens; analysing until then.
+func sourceItems(c *models.Campaign, metas []models.Asset, digests map[string]repository.LensDigest, analysesRead bool) []state.SourceItem {
+	var items []state.SourceItem
+	for _, id := range c.AssetIDs[:min(len(c.AssetIDs), state.MaxSourceItems)] {
+		item := state.SourceItem{ID: id, Status: state.SourceUnreadable}
+		i := slices.IndexFunc(metas, func(a models.Asset) bool { return a.ID == id })
+		if i >= 0 {
+			a := metas[i]
+			item.Title = a.Title
+			if a.Type != nil {
+				item.Kind = *a.Type
+			}
+			switch {
+			case a.Status == models.AssetStatusFailed || a.Status == models.AssetStatusPartial:
+			case a.Status == models.AssetStatusReady && (!analysesRead || digests[id].Status == models.AssetAnalysisStatusReady):
+				item.Status = state.SourceReady
+			default:
+				item.Status = state.SourceAnalysing
+			}
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 // calendar runs the calendar check over the posts and summarises it: the

@@ -14,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
@@ -59,6 +60,12 @@ type CampaignAssistantResponse struct {
 	// the last answer's sources, for the client's card. It doesn't change
 	// Action.
 	Ask *AskResult `json:"ask,omitempty" jsonschema:"-"`
+	// State is the campaign as the turn read it before acting, with a goal
+	// the turn raised already counted: the figures the client cites under
+	// the reply. Set on every campaign turn.
+	State *state.Snapshot `json:"state,omitempty" jsonschema:"-"`
+	// Starters lead with the state's numbers, for the client's chips.
+	Starters []Starter `json:"starters,omitempty" jsonschema:"-"`
 }
 
 // What an askCampaignAssets answer searched: the asset open on screen, the

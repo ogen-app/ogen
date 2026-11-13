@@ -3846,6 +3846,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/campaigns/{id}/assistant-state": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "The snapshot the campaign assistant reads at the top of every campaign turn — the goal and the\ncurrent goal period's slots left, posts by status, platforms, the calendar's problems, and the\nsources attached, analysed and ready, each attached source with its status — and the starters\nthat lead with those numbers. Every campaign turn's results.campaign carries the same state and\nstarters; this read serves the panel before the first turn. No model call.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assistant"
+                ],
+                "summary": "Campaign assistant state",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/campaign_assistant.CampaignState"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/campaigns/{id}/brief-review": {
             "post": {
                 "security": [
@@ -15309,6 +15361,40 @@ const docTemplate = `{
                 "SeverityInfo"
             ]
         },
+        "campaign_assistant.CampaignState": {
+            "type": "object",
+            "properties": {
+                "starters": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/campaign_assistant.Starter"
+                    }
+                },
+                "state": {
+                    "$ref": "#/definitions/state.Snapshot"
+                }
+            }
+        },
+        "campaign_assistant.Starter": {
+            "type": "object",
+            "properties": {
+                "instruction": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "fill",
+                        "draft",
+                        "calendar",
+                        "sources"
+                    ]
+                },
+                "label": {
+                    "type": "string"
+                }
+            }
+        },
         "campaignphase.Source": {
             "type": "string",
             "enum": [
@@ -23791,6 +23877,212 @@ const docTemplate = `{
                 },
                 "expires_at": {
                     "type": "string"
+                }
+            }
+        },
+        "state.Calendar": {
+            "type": "object",
+            "properties": {
+                "kinds": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/state.KindCount"
+                    }
+                },
+                "top": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "state.Goal": {
+            "type": "object",
+            "properties": {
+                "cadence": {
+                    "type": "string"
+                },
+                "perPeriod": {
+                    "type": "integer"
+                },
+                "period": {
+                    "description": "Period is the current goal period; nil outside the campaign's dates,\nor when the posts could not be read.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/state.Period"
+                        }
+                    ]
+                },
+                "periods": {
+                    "type": "integer"
+                },
+                "planned": {
+                    "description": "Planned counts the posts already in the campaign that could still\npublish: everything but failed and not-published.",
+                    "type": "integer"
+                },
+                "room": {
+                    "description": "Room is how many more posts fit under the target; 0 once it is met.",
+                    "type": "integer"
+                },
+                "target": {
+                    "description": "Target is the posts the whole campaign aims for.",
+                    "type": "integer"
+                },
+                "unknown": {
+                    "description": "Unknown is set when the posts could not be read: Planned and Room\nare then 0 and say nothing about the room left.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "state.KindCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                }
+            }
+        },
+        "state.Period": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "left": {
+                    "description": "Left is how many more posts fit in the period; 0 once it is met.",
+                    "type": "integer"
+                },
+                "planned": {
+                    "type": "integer"
+                },
+                "target": {
+                    "type": "integer"
+                }
+            }
+        },
+        "state.Platform": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "postTypes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "state.Snapshot": {
+            "type": "object",
+            "properties": {
+                "byStatus": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/state.StatusCount"
+                    }
+                },
+                "calendar": {
+                    "description": "Calendar is nil when the calendar could not be checked.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/state.Calendar"
+                        }
+                    ]
+                },
+                "goal": {
+                    "description": "Goal is nil when the campaign has no post goal.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/state.Goal"
+                        }
+                    ]
+                },
+                "platforms": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/state.Platform"
+                    }
+                },
+                "posts": {
+                    "type": "integer"
+                },
+                "postsUnknown": {
+                    "description": "PostsUnknown is set when the posts could not be read, so Posts and\nByStatus are empty without meaning the campaign has none.",
+                    "type": "boolean"
+                },
+                "sources": {
+                    "description": "Sources is nil when the attached assets could not be counted.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/state.Sources"
+                        }
+                    ]
+                }
+            }
+        },
+        "state.SourceItem": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "state.Sources": {
+            "type": "object",
+            "properties": {
+                "analysed": {
+                    "description": "Analysed is -1 when the analyses could not be read.",
+                    "type": "integer"
+                },
+                "attached": {
+                    "type": "integer"
+                },
+                "items": {
+                    "description": "Items are the campaign's attached sources one by one, up to\nMaxSourceItems, with how far each got; empty when it draws on the\nwhole bank.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/state.SourceItem"
+                    }
+                },
+                "ready": {
+                    "type": "integer"
+                },
+                "wholeBank": {
+                    "description": "WholeBank is set when the campaign attached no assets, so it draws on\nevery asset in the workspace.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "state.StatusCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "status": {
+                    "$ref": "#/definitions/models.PostStatus"
                 }
             }
         },

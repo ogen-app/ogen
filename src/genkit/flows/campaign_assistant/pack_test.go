@@ -151,8 +151,14 @@ func TestPack_EndReportsTheWork(t *testing.T) {
 		t.Fatalf("fallback = %q, touched = %v", res.Fallback, touched())
 	}
 
-	// Nothing committed: nothing to report.
-	if res, err := end(withRequestState(ctx, &requestState{campaign: timelineCampaign()})); err != nil || res != nil {
+	// Nothing committed: only the state the turn read, with its starters.
+	idle := &requestState{campaign: timelineCampaign(), snapshot: state.Snapshot{Goal: &state.Goal{Target: 20, Planned: 14, Room: 6}}}
+	res, err = end(withRequestState(ctx, idle))
+	if err != nil || res == nil || res.Fallback != "" {
 		t.Fatalf("idle end = %+v, %v", res, err)
+	}
+	if r := res.Value.(*CampaignAssistantResponse); r.Action != actionAnswered || r.State == nil || r.State.Goal.Room != 6 ||
+		len(r.Starters) != 1 || r.Starters[0].Label != "Draft 6 posts" {
+		t.Fatalf("idle result = %+v", r)
 	}
 }

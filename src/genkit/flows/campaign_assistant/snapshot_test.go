@@ -173,4 +173,29 @@ func TestSnapshot_PeriodSourcesCalendar(t *testing.T) {
 		!slices.ContainsFunc(s.Calendar.Kinds, func(k state.KindCount) bool { return k.Kind == "crowded day" }) {
 		t.Fatalf("calendar = %+v", s.Calendar)
 	}
+	// Each attached source says how far it got: analysed, still being
+	// analysed, or unreadable.
+	want := []string{state.SourceReady, state.SourceAnalysing, state.SourceUnreadable}
+	if items := s.Sources.Items; len(items) != 3 || !slices.Equal([]string{items[0].Status, items[1].Status, items[2].Status}, want) {
+		t.Fatalf("items = %+v", s.Sources.Items)
+	}
+	// The starters lead with the slots left, then the room under the goal,
+	// then the calendar; sources not ready come after, past the cap here.
+	got := starters(s)
+	if len(got) != 3 || got[0].Label != "Fill Week 1" || got[0].Instruction != "Draft 2 posts for Week 1, the slots left in this goal period." ||
+		got[1].Kind != starterDraft || got[2].Kind != starterCalendar {
+		t.Fatalf("starters = %+v", got)
+	}
+	s.Goal, s.Calendar = nil, nil
+	if got := starters(s); len(got) != 1 || got[0].Kind != starterSources || got[0].Label != "2 sources not ready" {
+		t.Fatalf("sources starter = %+v", got)
+	}
+}
+
+// A campaign with nothing left to do offers no starters.
+func TestStarters_NoneWhenNothingIsLeft(t *testing.T) {
+	s := state.Snapshot{Goal: &state.Goal{Target: 10, Planned: 10}, Calendar: &state.Calendar{}, Sources: &state.Sources{WholeBank: true}}
+	if got := starters(s); len(got) != 0 {
+		t.Fatalf("starters = %+v", got)
+	}
 }
