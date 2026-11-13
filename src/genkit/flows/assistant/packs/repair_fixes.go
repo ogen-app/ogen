@@ -78,15 +78,19 @@ type ChangedPost struct {
 	// ScheduledAt is the date it keeps, when it has one.
 	ScheduledAt *time.Time `json:"scheduledAt,omitempty"`
 	// FromType and ToType are a conversion's post types; Kept is what of
-	// the post carried over: "caption", "media".
+	// the post carried over: "caption", "media". Kept is left out when the
+	// post's media couldn't be read, rather than claim it had none.
 	FromType string   `json:"fromType,omitempty"`
 	ToType   string   `json:"toType,omitempty"`
 	Kept     []string `json:"kept,omitempty"`
 }
 
 // kept is what of p a conversion carries over: its caption and its media,
-// media counting its attachments.
-func kept(p models.Post, media int) []string {
+// media counting its attachments; nil when the count isn't known.
+func kept(p models.Post, media int, known bool) []string {
+	if !known && len(p.MediaURLs) == 0 {
+		return nil
+	}
 	out := []string{}
 	if strings.TrimSpace(p.Content) != "" {
 		out = append(out, "caption")
@@ -97,21 +101,25 @@ func kept(p models.Post, media int) []string {
 	return out
 }
 
-// mediaCounts counts the posts' attachments by post; nil when there is no
-// way to, or the read failed, since the counts only dress a card.
-func mediaCounts(ctx context.Context, d Deps, ids []string) map[string]int {
-	if d.Attachments == nil || len(ids) == 0 {
-		return nil
+// mediaCounts counts the posts' attachments by post. known is false when
+// there is no way to count them or the read failed: the counts only dress
+// a card, but no count must not read as none.
+func mediaCounts(ctx context.Context, d Deps, ids []string) (counts map[string]int, known bool) {
+	if len(ids) == 0 {
+		return map[string]int{}, true
+	}
+	if d.Attachments == nil {
+		return nil, false
 	}
 	atts, err := d.Attachments.ListByPostIDs(ctx, ids)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	out := map[string]int{}
+	counts = map[string]int{}
 	for _, a := range atts {
-		out[a.PostID]++
+		counts[a.PostID]++
 	}
-	return out
+	return counts, true
 }
 
 // changed is p as a fix's row, before the fix.
@@ -380,7 +388,7 @@ func changePostType(ctx context.Context, d Deps, in ChangePostTypeInput) (*PostF
 		return nil, fmt.Errorf("change post types: %w", err)
 	}
 	var before, after []assistantundo.PostState
-	media := mediaCounts(ctx, d, set)
+	media, known := mediaCounts(ctx, d, set)
 	for _, ch := range changes {
 		if !slices.Contains(set, ch.PostID) {
 			out.Skipped = append(out.Skipped, SkippedPost{PostID: ch.PostID, Reason: "it changed since the offer"})
@@ -390,7 +398,7 @@ func changePostType(ctx context.Context, d Deps, in ChangePostTypeInput) (*PostF
 		after = append(after, assistantundo.PostState{ID: ch.PostID, PostType: ch.To, Status: ch.ToStatus})
 		p := posts[slices.IndexFunc(posts, func(p models.Post) bool { return p.ID == ch.PostID })]
 		row := changed(c, p)
-		row.ToStatus, row.ScheduledAt, row.FromType, row.ToType, row.Kept = ch.ToStatus, p.ScheduledAt, ch.From, ch.To, kept(p, media[p.ID])
+		row.ToStatus, row.ScheduledAt, row.FromType, row.ToType, row.Kept = ch.ToStatus, p.ScheduledAt, ch.From, ch.To, kept(p, media[p.ID], known)
 		out.Posts = append(out.Posts, row)
 	}
 	out.Changed = len(set)

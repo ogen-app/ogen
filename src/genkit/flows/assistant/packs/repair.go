@@ -293,7 +293,7 @@ func slotChoice(c *models.Campaign, p models.Post, fix calendarcheck.Fix) (Apply
 		if !ok {
 			continue
 		}
-		m.ToAt = &at
+		m.ToAt, m.FreeSlot = &at, true
 		description := "Free slot"
 		if ph, ok := campaignphase.PhaseAt(c, at); ok && ph.Name != "" {
 			description += " · inside the " + ph.Name + " phase"
@@ -345,7 +345,7 @@ func reAddCard(c *models.Campaign, posts []models.Post, fix calendarcheck.Fix) *
 // platform and date, what goes with its media, and that it is final.
 func deleteCard(ctx context.Context, d Deps, c *models.Campaign, posts []models.Post, in PostsRef) *assistantkit.Card {
 	loc := calendarcheck.Location(c)
-	media := mediaCounts(ctx, d, in.PostIDs)
+	media, known := mediaCounts(ctx, d, in.PostIDs)
 	card := &assistantkit.Card{Verb: "Delete " + plural(len(in.PostIDs), "post", "posts"),
 		Footnote: "Deleting is final. Nothing in the product brings a post back."}
 	if len(in.PostIDs) == 1 {
@@ -368,11 +368,16 @@ func deleteCard(ctx context.Context, d Deps, c *models.Campaign, posts []models.
 		card.Rows = append(card.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowPost, Value: p.Title, Note: strings.Join(note, " · ")})
 		total += media[id]
 	}
-	if total > 0 {
-		owner := "Its"
-		if len(in.PostIDs) > 1 {
-			owner = "Their"
-		}
+	owner := "Its"
+	if len(in.PostIDs) > 1 {
+		owner = "Their"
+	}
+	switch {
+	case !known:
+		// The files couldn't be counted: say they go, not that there are none.
+		card.Rows = append(card.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowMedia, Value: owner + " files, if any",
+			Note: "Copies on the post go; the asset in Assets stays"})
+	case total > 0:
 		card.Rows = append(card.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowMedia, Value: owner + " " + plural(total, "file", "files"),
 			Note: "Copies on the post; the asset in Assets stays"})
 	}
@@ -447,6 +452,9 @@ type Move struct {
 	ToAt *time.Time `json:"toAt,omitempty"`
 	// Status is the post's when offered, so a run can count what it moved.
 	Status models.PostStatus `json:"status,omitempty"`
+	// FreeSlot marks a move to a day offered as free on the post's
+	// platform: it holds only while no other post took that day.
+	FreeSlot bool `json:"freeSlot,omitzero"`
 }
 
 // moves is how reschedule would even the campaign out, as moves; dates are
@@ -494,8 +502,8 @@ func offerMoves(ctx context.Context, c *models.Campaign, posts []models.Post) (s
 type OptimiseOutput struct {
 	CampaignID string `json:"campaignId"`
 	ProposalID string `json:"proposalId,omitempty"`
-	// Window is the dates the moves spread over: the campaign's, from
-	// today on.
+	// Window is the dates the moves spread over: the campaign's, as the
+	// redistribution plans over all of them.
 	Window    Window       `json:"window"`
 	Moves     []Move       `json:"moves"`
 	Locked    []LockedPost `json:"locked"`
@@ -549,9 +557,6 @@ func optimiseCalendar(ctx context.Context, d Deps, in CampaignRef) (*OptimiseOut
 	now := time.Now().UTC()
 	out := &OptimiseOutput{CampaignID: c.ID, Moves: moves(c, posts), Locked: locked(c, posts), CheckedAt: now,
 		Window: Window{From: campaignphase.Date(*c.StartDate).Format(time.DateOnly), To: campaignphase.Date(*c.EndDate).Format(time.DateOnly)}}
-	if today := now.In(calendarcheck.Location(c)).Format(time.DateOnly); today > out.Window.From && today <= out.Window.To {
-		out.Window.From = today
-	}
 	if len(out.Moves) == 0 {
 		out.Note = "the calendar is already even; nothing would move"
 		return out, nil
@@ -600,10 +605,11 @@ func applyMoves(ctx context.Context, d Deps, in ApplyMovesInput) (*ApplyMovesOut
 	out := &ApplyMovesOutput{Moves: []Move{}, ByStatus: map[models.PostStatus]int{}, Locked: len(locked(c, posts))}
 	var batch []repository.ScheduleMove
 	made := map[string]Move{}
+	claimed := map[string]bool{}
 	for _, m := range in.Moves {
 		p := byID[m.PostID]
 		at, ok := moveHolds(c, p, m)
-		if !ok {
+		if !ok || slotTaken(c, posts, p, m, claimed) {
 			out.Skipped = append(out.Skipped, m.PostID)
 			continue
 		}
@@ -650,6 +656,27 @@ func moveHolds(c *models.Campaign, p *models.Post, m Move) (time.Time, bool) {
 	return at, true
 }
 
+// slotTaken reports whether a free-slot move's day has another post on the
+// post's platform now, or was claimed by an earlier move of the batch, which
+// it then claims. A move that isn't to a free slot is never taken.
+func slotTaken(c *models.Campaign, posts []models.Post, p *models.Post, m Move, claimed map[string]bool) bool {
+	if !m.FreeSlot || p == nil {
+		return false
+	}
+	key := p.PlatformID + "|" + m.To
+	if claimed[key] {
+		return true
+	}
+	loc := calendarcheck.Location(c)
+	if slices.ContainsFunc(posts, func(o models.Post) bool {
+		return o.ID != p.ID && o.PlatformID == p.PlatformID && o.ScheduledAt != nil && o.ScheduledAt.In(loc).Format(time.DateOnly) == m.To
+	}) {
+		return true
+	}
+	claimed[key] = true
+	return false
+}
+
 // movesThatHold narrows confirmed moves to the ones that still hold, saying
 // why each other one doesn't; none is a refusal.
 func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesInput, []string, error) {
@@ -663,17 +690,22 @@ func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesI
 	}
 	var changes []string
 	deleted := 0
+	claimed := map[string]bool{}
 	keep := slices.DeleteFunc(slices.Clone(in.Moves), func(m Move) bool {
 		i := slices.IndexFunc(posts, func(p models.Post) bool { return p.ID == m.PostID })
 		if i < 0 {
 			deleted++
 			return true
 		}
-		if _, ok := moveHolds(c, &posts[i], m); ok {
-			return false
+		if _, ok := moveHolds(c, &posts[i], m); !ok {
+			changes = append(changes, whyMoveFails(c, &posts[i], m))
+			return true
 		}
-		changes = append(changes, whyMoveFails(c, &posts[i], m))
-		return true
+		if slotTaken(c, posts, &posts[i], m, claimed) {
+			changes = append(changes, whySlotTaken(&posts[i], m))
+			return true
+		}
+		return false
 	})
 	switch {
 	case deleted == 1:
@@ -705,6 +737,15 @@ func whyMoveFails(c *models.Campaign, p *models.Post, m Move) string {
 		return title + " was moved since"
 	}
 	return title + " can't go to " + m.To + " any more: the campaign doesn't publish then"
+}
+
+// whySlotTaken says that a free slot a move chose has a post on it now.
+func whySlotTaken(p *models.Post, m Move) string {
+	title := "A post"
+	if p.Title != "" {
+		title = "“" + p.Title + "”"
+	}
+	return title + " can't go to " + m.To + " any more: another post on its platform is there now"
 }
 
 // moveTarget is the instant a move lands on: its date, at the campaign's

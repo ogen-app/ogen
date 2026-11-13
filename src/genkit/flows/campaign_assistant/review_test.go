@@ -76,6 +76,16 @@ func TestReviewTools_OfferFixesAndSetDismissedAside(t *testing.T) {
 		t.Fatalf("brief review = %+v", brief)
 	}
 
+	// The finished turn reports the review the tool returned: the dismissed
+	// finding neither counted nor listed as open.
+	o := briefReviewOutcome(st.briefReviewResult, st.briefReviewOut)
+	resp := &CampaignAssistantResponse{}
+	o.attach(resp)
+	if resp.BriefReview == nil || len(resp.BriefReview.Findings) != 1 || o.explanation != "I found 1 consistency issue(s) in the brief." ||
+		o.payload.(CheckBriefCompleteEventPayload).FindingCount != 1 {
+		t.Fatalf("outcome = %q, %+v, response %+v", o.explanation, o.payload, resp.BriefReview)
+	}
+
 	st.heavyReserved = false
 	posts := run("checkPostsConsistency")
 	if len(posts.Findings) != 1 || posts.Findings[0].PostID != "p1" || posts.Findings[0].Fixes[0].Kind != consistency.FixOpenPost ||
