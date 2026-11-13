@@ -303,6 +303,33 @@ func TestApplyMoves_SkipsPostsChangedSince(t *testing.T) {
 	}
 }
 
+// A move to a slot offered as free holds only while the day is still free
+// on the post's platform, and only one move of a batch takes it.
+func TestApplyMoves_FreeSlotStillFree(t *testing.T) {
+	d, posts, _ := repairDeps()
+	ctx, _ := turn(t, campaign1, nil)
+	out, err := applyMoves(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: []Move{
+		{PostID: "p1", From: "2027-02-20", FromAt: day("2027-02-20"), To: "2027-03-03", FreeSlot: true}, // p2 is there now
+	}})
+	if err != nil || out.Moved != 0 || !slices.Equal(out.Skipped, []string{"p1"}) {
+		t.Fatalf("taken slot = %+v, %v", out, err)
+	}
+	out, err = applyMoves(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: []Move{
+		{PostID: "p1", From: "2027-02-20", FromAt: day("2027-02-20"), To: "2027-03-08", FreeSlot: true},
+		{PostID: "p2", From: "2027-03-03", FromAt: day("2027-03-03"), To: "2027-03-08", FreeSlot: true},
+	}})
+	if err != nil || out.Moved != 1 || !slices.Equal(out.Skipped, []string{"p2"}) || posts.moved[0].PostID != "p1" {
+		t.Fatalf("one slot, two moves = %+v, %v", out, err)
+	}
+	// Confirming narrows the offer the same way.
+	in, changes, err := movesThatHold(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: []Move{
+		{PostID: "p2", From: "2027-03-03", FromAt: day("2027-03-03"), To: "2027-03-04", FreeSlot: true}, // p3 is there
+	}})
+	if !isRefusal(err) || len(changes) != 1 || !strings.Contains(changes[0], "another post on its platform") {
+		t.Fatalf("narrowed = %+v, %v, %v", in, changes, err)
+	}
+}
+
 // A run says what it moved, from and to which times, by the posts' status,
 // how many scheduled posts it left, and can be undone.
 func TestApplyMoves_SaysWhatMovedAndUndoes(t *testing.T) {
