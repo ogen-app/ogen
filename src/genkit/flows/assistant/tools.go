@@ -269,6 +269,22 @@ func (st *turnState) addUI(a UIAction) {
 	}
 }
 
+// calendarOnScreen is the turn's view while the user is still on the
+// calendar it was sent from, with the days it shows; nil once the turn has
+// moved elsewhere, or off a calendar, where what is drawn isn't known.
+func (st *turnState) calendarOnScreen() *viewcontext.ViewContext {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	v := st.view.View
+	if v.Window == nil || (v.Screen != "calendar" && v.Screen != "campaign.calendar") {
+		return nil
+	}
+	if st.screen != v.Screen || st.campaign != st.campaignID() {
+		return nil
+	}
+	return v
+}
+
 // currentWindow is the analytics window the turn reads: the one a
 // set_window asked for, else the screen's.
 func (st *turnState) currentWindow() *viewcontext.Window {
@@ -435,7 +451,7 @@ func defineTools(g *genkit.Genkit, deps Repos, packs []Pack) (*toolSet, error) {
 		spec(genkit.DefineTool(g, "select",
 			"Selects items on the list on the user's screen — the Ideas, Assets or posts list, the calendar, or the Foundation's voices, audiences, facts or series — replacing the selection. Takes their ids.",
 			assistantkit.Wrap(t.selectItems)),
-			`Call this when the user asks you to select or tick items on the list — e.g. "select the pricing ones". Pass ids you have from getSelection, getFocus or a pack's tools; never invent them.`),
+			`Call this when the user asks you to select or tick items on the list — e.g. "select the pricing ones". Pass ids you have from getSelection, getFocus or a pack's tools; never invent them. On the calendar only the posts on screen can be ticked — its days and its filter; for others, navigate to their week or change the filter first.`),
 		spec(genkit.DefineTool(g, "openSavedView",
 			"Opens one of the user's saved views of the Ideas or Assets list. Takes the saved view's id.",
 			assistantkit.Wrap(t.openSavedView)),

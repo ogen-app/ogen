@@ -416,6 +416,29 @@ func TestSelectOnTheCalendarAndFoundation(t *testing.T) {
 }
 
 // Without a campaign there are no campaign posts to tick.
+func TestSelectOnTheCalendarKeepsThePostsOnScreen(t *testing.T) {
+	h := newHarness(t)
+	ctx, st := onScreen(t, `{"version":1,"screen":"campaign.calendar","scope":{"kind":"campaign","id":"c1"},"window":{"from":"2026-04-20","to":"2026-04-26"}}`)
+	res, err := h.tools.selectItems(ctx, SelectInput{IDs: []string{"p1", "p-later"}})
+	if err != nil || res.Done != "selecting 1 post" || !strings.Contains(res.Note, "aren't on the calendar on screen") {
+		t.Fatalf("select = %+v, %v", res, err)
+	}
+	if got := st.uiActions(); len(got) != 1 || !slices.Equal(got[0].Selection.IDs, []string{"p1"}) {
+		t.Fatalf("actions = %+v; want only the post on screen", got)
+	}
+	_, err = h.tools.selectItems(ctx, SelectInput{IDs: []string{"p-later"}})
+	refusal(t, err, "none of those posts are on the calendar on screen")
+
+	// Once the turn has moved to the list, what the calendar draws is moot.
+	if _, err := h.tools.navigate(ctx, NavigateInput{Screen: "campaign.list"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err = h.tools.selectItems(ctx, SelectInput{IDs: []string{"p1", "p-later"}})
+	if err != nil || res.Done != "selecting 2 posts" {
+		t.Fatalf("select after navigate = %+v, %v", res, err)
+	}
+}
+
 func TestSelectPostsNeedsACampaign(t *testing.T) {
 	h := newHarness(t)
 	ctx, st := onScreen(t, workspaceHome)

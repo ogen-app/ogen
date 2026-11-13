@@ -150,6 +150,9 @@ type ViewReader interface {
 	Items(ctx context.Context, kind viewcontext.EntityKind, ids []string) ([]viewresolve.Item, error)
 	CampaignItems(ctx context.Context, kind viewcontext.EntityKind, campaignID string, ids []string) ([]viewresolve.Item, error)
 	CheckFilter(kind viewcontext.EntityKind, filter string) error
+	// OnScreen keeps the post ids a calendar's view draws: its filter on its
+	// window's days.
+	OnScreen(ctx context.Context, v *viewcontext.ViewContext, ids []string) ([]string, error)
 }
 
 // SavedViewReader reads one saved view; repository.SavedViewRepository.

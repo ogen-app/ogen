@@ -316,6 +316,37 @@ func (r *Resolver) CampaignItems(ctx context.Context, kind viewcontext.EntityKin
 	return refs.items(kind, ids), nil
 }
 
+// OnScreen keeps the post ids a calendar draws, in their order: the posts
+// matching v's filter on the days of its window, in the thread's campaign.
+// A tick on any other post would land on nothing the user can see. Weekdays
+// the user hides aren't known here, so their posts count as on screen.
+func (r *Resolver) OnScreen(ctx context.Context, v *viewcontext.ViewContext, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return []string{}, nil
+	}
+	parsed, err := r.parseFilter(viewcontext.KindPost, v.Filter)
+	if err != nil {
+		return nil, err
+	}
+	q := parsed.(models.PostQuery)
+	if v.Scope.Kind == models.AssistantScopeCampaign {
+		q.ScopeCampaign = v.Scope.ID
+	}
+	if !within(&q, v.Window) {
+		return []string{}, nil
+	}
+	q.IDs = ids
+	got, _, err := r.posts.QueryIDs(ctx, q, len(ids))
+	if err != nil {
+		return nil, fmt.Errorf("query posts on screen: %w", err)
+	}
+	shown := make(map[string]bool, len(got))
+	for _, id := range got {
+		shown[id] = true
+	}
+	return slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return !shown[id] }), nil
+}
+
 // filterError maps a list-query parse error to an InvalidError on filter.
 func filterError(err error) error {
 	if le, ok := errors.AsType[*listquery.Error](err); ok {
