@@ -28,10 +28,25 @@ type Option struct {
 	// Why says in one line why the recommended option is the one to pick;
 	// a recommended option must have it.
 	Why string `json:"why,omitempty"`
+	// Input is a value the option asks for before it runs, typed into its
+	// card or given in the chat: a page's link for an import.
+	Input *OptionInput `json:"input,omitempty"`
 	// Tool and Args are the call picking this option runs. They stay on the
 	// server: the model only needs the id to name the user's pick.
 	Tool string `json:"-"`
 	Args any    `json:"-"`
+}
+
+// OptionInputURL is an input that takes a web address.
+const OptionInputURL = "url"
+
+// OptionInput is the value an option asks for: its kind, e.g. url, and
+// the label of its field. Arg is the argument of the option's call the
+// value fills; it stays on the server.
+type OptionInput struct {
+	Kind  string `json:"kind" enums:"url"`
+	Label string `json:"label"`
+	Arg   string `json:"-"`
 }
 
 // Outcome is what every assistant tool returns to the model. Expected

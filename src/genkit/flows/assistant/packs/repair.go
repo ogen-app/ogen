@@ -282,8 +282,8 @@ func offerGapIdeas(ctx context.Context, d Deps, c *models.Campaign, fix calendar
 			exploratory := in
 			exploratory.Exploratory = true
 			p.Summary = "This campaign has no sources yet, so these ideas would come from general knowledge, not your material. " +
-				"Add a document or a link on the campaign's Assets tab, or go ahead without them."
-			p.Options = []assistantkit.Option{{ID: "exploratory", Title: "Go ahead without sources (marked not grounded)", Tool: "generatePosts", Args: exploratory}}
+				"Add a document or import a page first, or go ahead without them."
+			p.Options = campaign_assistant.SourceOptions("generatePosts", exploratory)
 		}
 	}
 	return assistantkit.Offer(ctx, p)

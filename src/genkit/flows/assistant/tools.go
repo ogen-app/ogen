@@ -474,7 +474,7 @@ func defineTools(g *genkit.Genkit, deps Repos, packs []Pack) (*toolSet, error) {
 	if deps.Proposals != nil {
 		specs = append(specs,
 			spec(genkit.DefineTool(g, "confirmOffer",
-				"Runs an offer that is waiting for the user's answer, exactly as it was offered. Takes the offer's id, and optionId when it has options.",
+				"Runs an offer that is waiting for the user's answer, exactly as it was offered. Takes the offer's id, optionId when it has options, and input when the option picked needs a value.",
 				func(ctx *ai.ToolContext, in AnswerProposalInput) (any, error) {
 					out, err := t.confirmProposal(ctx, in)
 					if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {

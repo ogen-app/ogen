@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -71,6 +72,9 @@ type ProposalChoice struct {
 	Recommended bool `json:"recommended,omitempty"`
 	// Why says in one line why the recommended option is the one to pick.
 	Why string `json:"why,omitempty"`
+	// Input is the value the option asks for before it runs: the card shows
+	// its field, and confirming sends what was typed as input.
+	Input *assistantkit.OptionInput `json:"input,omitempty"`
 }
 
 // ProposalResolved is an offer answered this turn, or found changed or
@@ -100,6 +104,9 @@ const (
 	codeOfferExpired  = "offer_expired"
 	codeOfferAnswered = "offer_answered"
 	codeOfferReplaced = "offer_replaced"
+	// codeInputRequired is an option that asks for a value picked without
+	// one.
+	codeInputRequired = "input_required"
 )
 
 // turnSink stores the turn's held-back calls as the thread's offers.
@@ -141,7 +148,10 @@ func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string,
 			return "", fmt.Errorf("encode %s proposal option: %w", p.Tool, err)
 		}
 		stored[i] = models.ProposalOption{ID: o.ID, Title: o.Title, Description: o.Description, Recommended: o.Recommended, Why: o.Why, Tool: o.Tool, Args: oargs}
-		choices[i] = ProposalChoice{ID: o.ID, Title: o.Title, Description: o.Description, Recommended: o.Recommended, Why: o.Why}
+		if o.Input != nil {
+			stored[i].Input = &models.ProposalOptionInput{Kind: o.Input.Kind, Label: o.Input.Label, Arg: o.Input.Arg}
+		}
+		choices[i] = ProposalChoice{ID: o.ID, Title: o.Title, Description: o.Description, Recommended: o.Recommended, Why: o.Why, Input: o.Input}
 	}
 	id, err := models.NewID()
 	if err != nil {
@@ -183,6 +193,7 @@ func toJSONMap(v any) (models.JSONMap, error) {
 type AnswerProposalInput struct {
 	ProposalID string `json:"proposalId"         jsonschema:"description=The offer's id, from the offers waiting for an answer"`
 	OptionID   string `json:"optionId,omitempty" jsonschema:"description=The option the user picked, when the offer has options"`
+	Input      string `json:"input,omitempty"    jsonschema:"description=The value the picked option asks for, e.g. the page link the user gave for an import"`
 }
 
 // DismissProposalOutput confirms a dismissal.
@@ -213,7 +224,7 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 	if err := t.notReplaced(ctx, p.ID); err != nil {
 		return nil, err
 	}
-	tool, args, optionID, err := pick(p, in.OptionID)
+	tool, args, optionID, err := pick(p, in.OptionID, in.Input)
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +281,9 @@ func (t *toolSet) notReplaced(ctx context.Context, id string) error {
 }
 
 // pick is the call confirming p with optionID runs, and the option it
-// picks: an offer's only option is picked without naming it.
-func pick(p *models.AssistantProposal, optionID string) (string, models.JSONMap, string, error) {
+// picks: an offer's only option is picked without naming it. An option that
+// asks for a value runs with input in its argument, and is refused without.
+func pick(p *models.AssistantProposal, optionID, input string) (string, models.JSONMap, string, error) {
 	if optionID == "" && len(p.Options) == 1 {
 		optionID = p.Options[0].ID
 	}
@@ -284,6 +296,18 @@ func pick(p *models.AssistantProposal, optionID string) (string, models.JSONMap,
 	o, ok := p.Option(optionID)
 	if !ok {
 		return "", nil, "", assistantkit.Refused(fmt.Sprintf("%q is not one of the options offered.", optionID), optionIDs(p)...)
+	}
+	if o.Input != nil {
+		input = strings.TrimSpace(input)
+		if input == "" {
+			return "", nil, "", assistantkit.RefusedCode(codeInputRequired, fmt.Sprintf("That option needs a %s: ask the user for it, then pick it again with input.", strings.ToLower(o.Input.Label)))
+		}
+		args := maps.Clone(o.Args)
+		if args == nil {
+			args = models.JSONMap{}
+		}
+		args[o.Input.Arg] = input
+		return o.Tool, args, optionID, nil
 	}
 	if o.Tool != "" {
 		return o.Tool, o.Args, optionID, nil
@@ -384,7 +408,9 @@ func (t *toolSet) openProposals(ctx context.Context, scope viewcontext.Scope) []
 type AnswerRequest struct {
 	ProposalID string
 	OptionID   string
-	Confirm    bool
+	// Input is the value the picked option asks for.
+	Input   string
+	Confirm bool
 }
 
 // Owns reports whether this assistant made an offer for tool.
@@ -418,7 +444,7 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	}
 	ctx = t.bind(withTurnState(ctx, st), st)
 
-	in := AnswerProposalInput{ProposalID: p.ID, OptionID: req.OptionID}
+	in := AnswerProposalInput{ProposalID: p.ID, OptionID: req.OptionID, Input: req.Input}
 	var result any
 	if req.Confirm {
 		result, err = t.confirmProposal(ctx, in)

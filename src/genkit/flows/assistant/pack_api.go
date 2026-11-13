@@ -93,15 +93,16 @@ func OpenConnect(ctx context.Context, c UIConnect) error {
 }
 
 // OpenAddSource asks the client to open the campaign's Assets tab ready to
-// upload a document or import a link. The user adds the source.
-func OpenAddSource(ctx context.Context, campaignID string) error {
+// upload a document or import a link, by via when it names one. The user
+// adds the source.
+func OpenAddSource(ctx context.Context, campaignID string, via AddSourceVia) error {
 	st, err := turnStateFrom(ctx)
 	if err != nil {
 		return err
 	}
 	st.planning.Lock()
 	defer st.planning.Unlock()
-	st.addUI(UIAction{Type: UIOpenAddSource, Screen: "campaign.assets", CampaignID: campaignID})
+	st.addUI(UIAction{Type: UIOpenAddSource, Screen: "campaign.assets", CampaignID: campaignID, Via: via})
 	return nil
 }
 

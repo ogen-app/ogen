@@ -101,7 +101,8 @@ type assistantTurnRequest struct {
 // @Description  "focus" {kind,id}, "filter", "selection" {kind,ids}, "savedViewId", "window" {from,to,platforms,campaignId},
 // @Description  "connect" {platform,accountId,reconnect}}, every reference already checked; open_connect opens the settings
 // @Description  screen's connect flow (reconnect for an account), which the client runs; open_add_source opens the
-// @Description  campaign's Assets tab ready to upload a document or import a link;
+// @Description  campaign's Assets tab ready to upload a document or import a link, by "via" when set: upload opens the
+// @Description  upload, page the import of a page;
 // @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs","results"}, where
 // @Description  touched names what changed (no id: every entity of the kind) for the client to refresh, and results
 // @Description  (omitted when empty) holds each pack's tools' last successful output, by pack then tool name. The
@@ -129,7 +130,8 @@ type assistantTurnRequest struct {
 // @Description  among them) run straight away, so a client can't rely on an offer before every write. "proposal_created" {"id","tool","summary",
 // @Description  "expiresAt","options","card","replaces","retryOf"} streams once the reply is final; "options" is an array of
 // @Description  {"id","title"} with optional "description", "recommended" and "why" (at most one option is recommended:
-// @Description  the card leads with it, and its "why" says in a line why it's the one to pick). "proposal_resolved" {"id","status","chosen","reasons","replacedBy"} streams when one is
+// @Description  the card leads with it, and its "why" says in a line why it's the one to pick) and "input" {"kind": url,"label"}
+// @Description  for an option that asks for a value, sent with its confirm. "proposal_resolved" {"id","status","chosen","reasons","replacedBy"} streams when one is
 // @Description  answered in chat; "complete" lists them again as "resolved". Cards answer through POST
 // @Description  /api/assistant/proposals/{id}/confirm or /dismiss. A confirmed offer re-checks first: when what it was made on
 // @Description  changed, nothing runs, the offer stays open and resolves "stale" with "reasons", and what still holds

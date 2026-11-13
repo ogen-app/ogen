@@ -658,10 +658,13 @@ type ImportPageInput struct {
 	URL string `json:"url"`
 }
 
-// ImportPageOutput is the asset holding the page.
+// ImportPageOutput is the asset holding the page, and how far it is read:
+// the asset's status, processing until the page is read and ready after.
 type ImportPageOutput struct {
 	AssetID  string `json:"assetId"`
 	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Status   string `json:"status" enums:"pending,processing,ready,partial,failed"`
 	Created  bool   `json:"created"`
 	Attached bool   `json:"attached"`
 	// AttachError says why the page was imported but not attached to the
@@ -687,7 +690,7 @@ func importPage(ctx context.Context, d Deps, in ImportPageInput) (*ImportPageOut
 	if err != nil {
 		return nil, assistantkit.Refused("couldn't import that page: " + err.Error())
 	}
-	out := &ImportPageOutput{AssetID: res.Asset.ID, Title: res.Asset.Title, Created: res.Created}
+	out := &ImportPageOutput{AssetID: res.Asset.ID, Title: res.Asset.Title, URL: pageURL, Status: res.Asset.Status, Created: res.Created}
 	assistantkit.Touch(ctx, "asset", res.Asset.ID)
 	if assistant.CampaignID(ctx) != "" {
 		_, err := attachAssets(ctx, d, AttachAssetsInput{AssetIDs: []string{res.Asset.ID}})
@@ -701,5 +704,6 @@ func importPage(ctx context.Context, d Deps, in ImportPageInput) (*ImportPageOut
 			out.AttachError = "imported, but attaching it to the campaign failed; retry with attachAssets and this assetId"
 		}
 	}
+	recordAssets(ctx, func(r *AssetsResult) { r.Import = out })
 	return out, nil
 }

@@ -208,19 +208,20 @@ func TestCheckCalendar_GapOfferPhase(t *testing.T) {
 	}
 }
 
-// With no sources, a silence's fix is the choice to go ahead from general
-// knowledge, not a plan that runs without asking.
+// With no sources, a silence's fix is the choice to add a source or go
+// ahead from general knowledge, not a plan that runs without asking.
 func TestCheckCalendar_GapOfferWithoutSources(t *testing.T) {
 	d, _, _ := repairDeps()
 	d.Assets = memAssets{}
 	_, plans := gapOffers(t, d)
-	if len(plans) != 1 || len(plans[0].Options) != 1 {
+	if len(plans) != 1 || len(plans[0].Options) != 3 || plans[0].Options[0].ID != campaign_assistant.OptionAddDocument ||
+		plans[0].Options[1].ID != campaign_assistant.OptionImportPage {
 		t.Fatalf("plans = %+v", plans)
 	}
 	if base := plans[0].Args.(campaign_assistant.GeneratePostsInput); base.Exploratory {
 		t.Fatal("the offer itself plans without sources")
 	}
-	if o := plans[0].Options[0]; o.Tool != "generatePosts" || !o.Args.(campaign_assistant.GeneratePostsInput).Exploratory {
+	if o := plans[0].Options[2]; o.Tool != "generatePosts" || !o.Args.(campaign_assistant.GeneratePostsInput).Exploratory {
 		t.Fatalf("option = %+v", o)
 	}
 

@@ -68,9 +68,14 @@ func TestGeneratePosts_NoSourcesOffersExploratory(t *testing.T) {
 	gen := &generation{}
 	st := sourcesState(store, gen, 0)
 	out := runTool(t, st, "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 2})
-	if out.Status != assistantkit.StatusConflict || len(out.Options) != 2 || out.Options[0].ID != "add_source" || !out.Options[0].Recommended ||
-		out.Options[1].ID != "exploratory" || gen.count != 0 {
+	if out.Status != assistantkit.StatusConflict || len(out.Options) != 3 || out.Options[0].ID != "add_document" || !out.Options[0].Recommended ||
+		out.Options[1].ID != "import_page" || out.Options[1].Input == nil || out.Options[1].Input.Kind != assistantkit.OptionInputURL ||
+		out.Options[2].ID != "exploratory" || gen.count != 0 {
 		t.Fatalf("outcome = %+v, generated = %d", out, gen.count)
+	}
+	// The import's link is the value its card asks for.
+	if o, _ := store.rows[0].Option("import_page"); o.Tool != "importPage" || o.Input == nil || o.Input.Arg != "url" {
+		t.Fatalf("import option = %+v", o)
 	}
 	if o, _ := store.rows[0].Option("exploratory"); o.Args["exploratory"] != true {
 		t.Fatalf("exploratory option args = %+v", o.Args)
@@ -86,14 +91,17 @@ func TestGeneratePosts_NoSourcesOffersExploratory(t *testing.T) {
 	}
 }
 
-// Adding a source runs nothing: outside the assistant's chat there is no
-// screen to open, so it says where to add one.
-func TestNoSources_AddSourceOption(t *testing.T) {
+// Adding a document opens the upload and generates nothing: outside the
+// assistant's chat there is no screen to open, so it says where to add one.
+func TestNoSources_AddDocumentOption(t *testing.T) {
 	store := &memProposals{}
 	gen := &generation{}
 	st := sourcesState(store, gen, 0)
 	runTool(t, st, "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 2})
-	confirm(t, st, store, "add_source")
+	if o, _ := store.rows[0].Option("add_document"); o.Tool != "openAddSource" || o.Args["via"] != "upload" {
+		t.Fatalf("add document option = %+v", o)
+	}
+	confirm(t, st, store, "add_document")
 	if gen.count != 0 || st.generatedPostsResult != nil {
 		t.Fatalf("adding a source generated %d", gen.count)
 	}
@@ -164,7 +172,7 @@ func TestRunContentPlan_NoSourcesOffersExploratory(t *testing.T) {
 			store := &memProposals{}
 			st := sourcesState(store, gen, 0)
 			out := runTool(t, st, "runContentPlan", map[string]any{})
-			if out.Status != assistantkit.StatusConflict || out.Options[0].ID != "add_source" || out.Options[1].ID != "exploratory" || gen.count != 0 {
+			if out.Status != assistantkit.StatusConflict || out.Options[0].ID != "add_document" || out.Options[2].ID != "exploratory" || gen.count != 0 {
 				t.Fatalf("outcome = %+v", out)
 			}
 

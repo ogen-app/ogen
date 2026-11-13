@@ -410,6 +410,12 @@ type AskCampaignAssetsOutput struct {
 	OpenAssetOnly bool `json:"openAssetOnly,omitempty"`
 }
 
+// OpenAddSourceInput is the way in to open: the upload, a page's import, or
+// both.
+type OpenAddSourceInput struct {
+	Via assistant.AddSourceVia `json:"via,omitempty" jsonschema:"enum=upload,enum=page,description=upload opens the file upload; page the import of a web page; omit to offer both"`
+}
+
 // OpenAddSourceOutput says whether the Assets tab was opened for the user
 // to add a source.
 type OpenAddSourceOutput struct {
@@ -420,9 +426,9 @@ type OpenAddSourceOutput struct {
 // toolOpenAddSource opens the campaign's Assets tab for the user to add a
 // source; outside the assistant's chat there is no screen to drive, so it
 // says where to go instead.
-func toolOpenAddSource(ctx context.Context) (*OpenAddSourceOutput, error) {
+func toolOpenAddSource(ctx context.Context, in OpenAddSourceInput) (*OpenAddSourceOutput, error) {
 	st := getRequestState(ctx)
-	if err := assistant.OpenAddSource(ctx, st.campaignID); err != nil {
+	if err := assistant.OpenAddSource(ctx, st.campaignID, in.Via); err != nil {
 		return &OpenAddSourceOutput{Note: "Open the campaign's Assets tab to upload a document or import a link."}, nil
 	}
 	return &OpenAddSourceOutput{Opened: true, Note: "The campaign's Assets tab is open to upload a document or import a link. Once it is read, ask again and the posts will draw on it."}, nil
@@ -595,7 +601,9 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 
 	openAddSource := genkit.DefineTool(g, "openAddSource",
 		"Opens the campaign's Assets tab ready for the user to upload a document or import a link as a source.",
-		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*OpenAddSourceOutput, error) { return toolOpenAddSource(ctx) }),
+		assistantkit.Wrap(func(ctx context.Context, in OpenAddSourceInput) (*OpenAddSourceOutput, error) {
+			return toolOpenAddSource(ctx, in)
+		}),
 		ai.WithStrictSchema(false),
 	)
 

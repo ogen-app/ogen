@@ -34,9 +34,20 @@ type ProposalOption struct {
 	Description string `json:"description,omitempty"`
 	Recommended bool   `json:"recommended,omitempty"`
 	// Why says why the recommended option is the one to pick.
-	Why  string  `json:"why,omitempty"`
-	Tool string  `json:"tool,omitempty"`
-	Args JSONMap `json:"args,omitempty"`
+	Why string `json:"why,omitempty"`
+	// Input is the value the option asks for before it runs, which fills
+	// the Arg argument of its call.
+	Input *ProposalOptionInput `json:"input,omitempty"`
+	Tool  string               `json:"tool,omitempty"`
+	Args  JSONMap              `json:"args,omitempty"`
+}
+
+// ProposalOptionInput is the value an option asks for: its kind, the label
+// of its field, and the argument of the option's call it fills.
+type ProposalOptionInput struct {
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+	Arg   string `json:"arg"`
 }
 
 // AssistantProposal is work the assistant offered but has not done: a
