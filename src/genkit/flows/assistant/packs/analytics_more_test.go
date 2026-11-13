@@ -49,7 +49,8 @@ func (gistAnalyses) LensDigests(_ context.Context, ids []string, _ *string) (map
 // and using another, one with no trail — in a campaign with one more source.
 func moreDeps(written []more_like_these.Idea) (Deps, *memIdeaRepo, *more_like_these.Request) {
 	ideasRepo := &memIdeaRepo{byID: map[string]*models.Idea{
-		"idea-pricing": {ID: "idea-pricing", Title: "Pricing myths", Angle: new("Discounts teach buyers to wait"), SourceAssetID: new("a-report"), AssetAnalysisID: new("an-report")},
+		"idea-pricing": {ID: "idea-pricing", Title: "Pricing myths", Angle: new("Discounts teach buyers to wait"), SourceAssetID: new("a-report"), AssetAnalysisID: new("an-report"),
+			SourceLocator: &models.SourceLocator{ChunkID: "a-report:2", Label: "p. 12", Page: new(12)}},
 	}}
 	var got more_like_these.Request
 	d := Deps{
@@ -88,9 +89,10 @@ func TestMoreLikeThese_AssetBeforeItsIdea(t *testing.T) {
 	}
 }
 
-// The trail follows each example to its ideas and their assets, and its
-// used assets; the campaign's other sources ground the writer; the ideas
-// are saved undated in the campaign, citing their sources by name.
+// The trail follows each example to its ideas and their assets, at the page
+// each idea came from, and its used assets; the campaign's other sources
+// ground the writer; the ideas are saved undated in the campaign, citing
+// their sources by name.
 func TestMoreLikeThese_WritesIdeasFromTheTrail(t *testing.T) {
 	d, repo, got := moreDeps([]more_like_these.Idea{
 		{Title: "Price anchoring", Angle: "Show the dearest plan first", Theses: []string{"anchors", "decoys"}, Sources: []string{"idea:idea-pricing", "asset:a-deck"}},
@@ -106,6 +108,9 @@ func TestMoreLikeThese_WritesIdeasFromTheTrail(t *testing.T) {
 	if len(first.Ideas) != 1 || first.Ideas[0].Asset == nil || first.Ideas[0].Asset.Title != "Pricing report" ||
 		len(first.Assets) != 1 || first.Assets[0].ID != "a-used" || first.NoTrail {
 		t.Fatalf("trail = %+v", first)
+	}
+	if p := first.Ideas[0].Asset.Passage; p.Page == nil || *p.Page != 12 || p.ChunkID != "a-report:2" || first.Assets[0].Passage != (Passage{}) {
+		t.Fatalf("trail passages = %+v, used %+v", p, first.Assets[0].Passage)
 	}
 	if !out.Trail[1].NoTrail {
 		t.Fatalf("an example with nothing recorded = %+v", out.Trail[1])

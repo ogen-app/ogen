@@ -32,10 +32,12 @@ type MoreLikeTheseInput struct {
 	Instruction string   `json:"instruction,omitempty" jsonschema:"description=Steering for the writer"`
 }
 
-// TrailAsset is an asset on an example's trail.
+// TrailAsset is an asset on an example's trail. An idea's asset says where
+// in it the idea came from.
 type TrailAsset struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
+	Passage
 }
 
 // TrailIdea is an idea an example was made from, and the asset it came from.
@@ -261,6 +263,12 @@ func trailOf(ctx context.Context, t *trailSources, p *models.Post) (TrailStep, e
 			}
 			if ti.Asset == nil {
 				assetID = ""
+			} else if assetID == deref(idea.SourceAssetID) {
+				// The cached asset is shared by the trail; the passage is this
+				// idea's own.
+				a := *ti.Asset
+				a.Passage = passageOf(idea.SourceLocator)
+				ti.Asset = &a
 			}
 		}
 		step.Ideas = append(step.Ideas, ti)
