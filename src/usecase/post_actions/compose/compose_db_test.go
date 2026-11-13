@@ -88,7 +88,7 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 		t.Fatalf("source ideas = %v; want the compile order", got)
 	}
 	refs, err := links.PostsOfIdea(ctx, "idc-1")
-	if err != nil || len(refs) != 1 || refs[0].ID != post.ID || refs[0].Status != models.PostStatusPlanned {
+	if err != nil || len(refs) != 1 || refs[0].ID != post.ID || refs[0].Status != models.PostStatusPlanned || refs[0].PlatformPostType != post.PlatformPostType {
 		t.Fatalf("posts of idea = %+v, %v", refs, err)
 	}
 
@@ -101,7 +101,7 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 	}
 	// Half past midnight in Tokyo is the day before in UTC; the date is the
 	// campaign's.
-	if c := more.Posts[0]; c.Date != "2026-12-01" || c.Post.ScheduledAt.UTC().Format(time.DateOnly) != "2026-11-30" {
+	if c := more.Posts[0]; c.Date != "2026-12-01" || c.DateFrom != compose.DateFromAsked || c.Post.ScheduledAt.UTC().Format(time.DateOnly) != "2026-11-30" {
 		t.Fatalf("date = %q, scheduled at %v", c.Date, c.Post.ScheduledAt)
 	}
 	for _, c := range more.Posts {
