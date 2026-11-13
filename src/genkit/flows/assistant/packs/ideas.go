@@ -496,6 +496,9 @@ type CompiledPost struct {
 	PlatformID string `json:"platformId,omitempty"`
 	PostType   string `json:"postType,omitempty"`
 	Date       string `json:"date,omitempty"`
+	// DateFrom is where Date came from: asked (the day named) or plan (the
+	// ideas' plan date).
+	DateFrom string `json:"dateFrom,omitempty"`
 }
 
 // IdeaName is an idea by id and title.
@@ -549,7 +552,8 @@ func compileIdeas(ctx context.Context, d Deps, in CompileIdeasInput) (*CompileId
 		p := c.Post
 		assistantkit.Touch(ctx, "post", p.ID)
 		made[i] = assistantundo.MadePost{Post: p, Notes: []models.PostNote{*c.Note}}
-		cp := CompiledPost{PostID: p.ID, Title: p.Title, Status: string(p.Status), PlatformID: p.PlatformID, PostType: p.PlatformPostType, Date: c.Date}
+		cp := CompiledPost{PostID: p.ID, Title: p.Title, Status: string(p.Status), PlatformID: p.PlatformID, PostType: p.PlatformPostType,
+			Date: c.Date, DateFrom: c.DateFrom}
 		out.Posts = append(out.Posts, cp)
 	}
 	for _, i := range res.Ideas {
