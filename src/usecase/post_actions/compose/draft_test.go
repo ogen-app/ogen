@@ -166,3 +166,20 @@ func TestRunDraft_CompletesAOneSidedWindow(t *testing.T) {
 		}
 	}
 }
+
+// A post written outside a plan is dated by the request's window, so a
+// dated one says it was asked for; an undated one says nothing.
+func TestWrite_DateFrom(t *testing.T) {
+	s, _ := draftService(idea("a", "c1", models.IdeaPlan{}))
+	s.WithDrafter(func(_ context.Context, req DraftRequest) ([]Written, []string, error) {
+		return []Written{{PostID: "p-" + req.WindowStart, PublishDate: req.WindowStart}}, nil, nil
+	})
+	res, err := s.Write(t.Context(), DraftRequest{CampaignID: "c1", WindowStart: "2026-12-01"}, []string{"a"}, nil)
+	if err != nil || res.Posts[0].DateFrom != DateFromAsked {
+		t.Fatalf("dated = %+v, %v", res, err)
+	}
+	res, err = s.Write(t.Context(), DraftRequest{CampaignID: "c1"}, []string{"a"}, nil)
+	if err != nil || res.Posts[0].DateFrom != "" {
+		t.Fatalf("undated = %+v, %v", res, err)
+	}
+}

@@ -213,7 +213,12 @@ func (s *Service) Write(ctx context.Context, req DraftRequest, ideaIDs []string,
 	if s.draft == nil {
 		return nil, errors.New("compose: no writer")
 	}
-	return s.RunDraft(ctx, &DraftPlan{Jobs: []DraftJob{{Request: req, IdeaIDs: ideaIDs}}}, onPost)
+	// A date here is the request's window, so it was asked for.
+	job := DraftJob{Request: req, IdeaIDs: ideaIDs}
+	if req.WindowStart != "" || req.WindowEnd != "" {
+		job.DateFrom = DateFromAsked
+	}
+	return s.RunDraft(ctx, &DraftPlan{Jobs: []DraftJob{job}}, onPost)
 }
 
 // withWindow completes a one-sided publish window, which the writer needs
