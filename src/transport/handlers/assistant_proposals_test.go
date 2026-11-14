@@ -143,7 +143,8 @@ func TestDismissProposal(t *testing.T) {
 		case "gone":
 			return nil, assistant.ErrProposalNotFound
 		case "old":
-			return nil, &assistant.ProposalConflictError{Msg: "That offer lapsed.", Code: "offer_expired"}
+			return nil, &assistant.ProposalConflictError{Msg: "That offer lapsed.", Code: "offer_expired",
+				Offer: &models.AssistantOfferState{ID: "old", Status: models.ProposalExpired}}
 		}
 		return &assistant.Response{Action: "answered", Explanation: "OK, I've dropped that."}, nil
 	})
@@ -170,10 +171,13 @@ func TestDismissProposal(t *testing.T) {
 		t.Fatal(err)
 	}
 	var conflict struct {
-		Error  string `json:"error"`
-		Reason string `json:"reason"`
+		Error  string                      `json:"error"`
+		Reason string                      `json:"reason"`
+		Offer  *models.AssistantOfferState `json:"offer"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&conflict); err != nil || resp.StatusCode != fiber.StatusConflict || conflict.Reason != "offer_expired" || conflict.Error == "" {
+	// The conflict carries the offer as it stands, an object.
+	if err := json.NewDecoder(resp.Body).Decode(&conflict); err != nil || resp.StatusCode != fiber.StatusConflict || conflict.Reason != "offer_expired" || conflict.Error == "" ||
+		conflict.Offer == nil || conflict.Offer.Status != models.ProposalExpired {
 		t.Fatalf("dismiss of a lapsed offer = %d, %+v, %v", resp.StatusCode, conflict, err)
 	}
 }

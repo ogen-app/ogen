@@ -8,6 +8,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
@@ -124,6 +125,15 @@ func (h *AssistantProposalsHandler) Confirm(c *fiber.Ctx) error {
 	return nil
 }
 
+// offerConflict is a 409 for an offer that can't be answered: why, by
+// reason, and, when it was answered or lapsed already, the offer as it
+// stands, for its card to settle.
+type offerConflict struct {
+	Error  string                      `json:"error"`
+	Reason string                      `json:"reason" enums:"offer_expired,offer_answered,offer_replaced,input_required"`
+	Offer  *models.AssistantOfferState `json:"offer,omitempty"`
+}
+
 // Dismiss godoc
 // @Summary      Dismiss an assistant offer
 // @Description  Withdraws an offer the assistant proposed. Nothing runs. Returns the turn's
@@ -137,7 +147,7 @@ func (h *AssistantProposalsHandler) Confirm(c *fiber.Ctx) error {
 // @Success      200  {object}  map[string]any
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
-// @Failure      409  {object}  map[string]string
+// @Failure      409  {object}  offerConflict
 // @Failure      503  {object}  map[string]string
 // @Router       /api/assistant/proposals/{id}/dismiss [post]
 func (h *AssistantProposalsHandler) Dismiss(c *fiber.Ctx) error {
@@ -148,11 +158,7 @@ func (h *AssistantProposalsHandler) Dismiss(c *fiber.Ctx) error {
 	if err != nil {
 		p := h.proposalError(err)
 		if p.Reason != "" {
-			body := fiber.Map{"error": p.Message, "reason": p.Reason}
-			if p.Offer != nil {
-				body["offer"] = p.Offer
-			}
-			return c.Status(p.Code).JSON(body)
+			return c.Status(p.Code).JSON(offerConflict{Error: p.Message, Reason: p.Reason, Offer: p.Offer})
 		}
 		return fiber.NewError(p.Code, p.Message)
 	}
