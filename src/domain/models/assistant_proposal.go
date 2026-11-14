@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -80,6 +81,21 @@ type AssistantProposal struct {
 	CreatedAt  time.Time  `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	ExpiresAt  time.Time  `bun:"expires_at,notnull"                            json:"expires_at"`
 	ResolvedAt *time.Time `bun:"resolved_at"                                   json:"resolved_at,omitempty"`
+	// Outcome is what a confirmed offer's run did; nil until it ran, and
+	// for an offer answered otherwise.
+	Outcome *ProposalOutcome `bun:"outcome,type:jsonb" json:"outcome,omitempty"`
+}
+
+// ProposalOutcome is what a confirmed offer's run did, kept so a reloaded
+// thread can say it: the answer's sentence, how much of the job it made when
+// it counts items, and what the work returned.
+type ProposalOutcome struct {
+	Text  string `json:"text"`
+	Made  int    `json:"made,omitzero"`
+	Total int    `json:"total,omitzero"`
+	// Result is the work's result, as the answer turn's "result" holds
+	// it; left out when it is too large to keep.
+	Result json.RawMessage `json:"result,omitempty" swaggertype:"object"`
 }
 
 // AssistantOfferState is an offer as it stands now, for a thread's history,
@@ -98,12 +114,15 @@ type AssistantOfferState struct {
 	Replaces   string `json:"replaces,omitempty"`
 	RetryOf    string `json:"retry_of,omitempty"`
 	ReplacedBy string `json:"replaced_by,omitempty"`
+	// Outcome is what a confirmed offer did, so a reloaded card can settle
+	// as answered and say it.
+	Outcome *ProposalOutcome `json:"outcome,omitempty"`
 }
 
 // State is the proposal as it stands at now.
 func (p *AssistantProposal) State(now time.Time) AssistantOfferState {
 	s := AssistantOfferState{ID: p.ID, Status: p.Status, Chosen: p.Chosen, ExpiresAt: p.ExpiresAt, ResolvedAt: p.ResolvedAt,
-		Replaces: p.Replaces, RetryOf: p.RetryOf}
+		Replaces: p.Replaces, RetryOf: p.RetryOf, Outcome: p.Outcome}
 	if p.Status == ProposalPending && !now.Before(p.ExpiresAt) {
 		s.Status = ProposalExpired
 	}

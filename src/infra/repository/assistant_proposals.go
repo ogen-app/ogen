@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -43,6 +44,9 @@ type AssistantProposalRepository interface {
 	// confirmation ran nothing because what it was made on changed. It
 	// reports false when the proposal wasn't confirmed.
 	Reopen(ctx context.Context, id string) (bool, error)
+	// SetOutcome records what a confirmed proposal's run did. A proposal
+	// that isn't confirmed is left as it is.
+	SetOutcome(ctx context.Context, id string, outcome *models.ProposalOutcome) error
 	// Expire marks a pending proposal past its expiry as expired. It reports
 	// false when the proposal wasn't pending or hasn't expired.
 	Expire(ctx context.Context, id string, now time.Time) (bool, error)
@@ -153,6 +157,7 @@ func (r *assistantProposalRepository) Reopen(ctx context.Context, id string) (bo
 		Set("chosen = ''").
 		Set("resolved_by = ''").
 		Set("resolved_at = NULL").
+		Set("outcome = NULL").
 		Where("ap.id = ?", id).
 		Where("ap.status = ?", models.ProposalConfirmed).
 		Exec(ctx)
@@ -161,6 +166,19 @@ func (r *assistantProposalRepository) Reopen(ctx context.Context, id string) (bo
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err
+}
+
+func (r *assistantProposalRepository) SetOutcome(ctx context.Context, id string, outcome *models.ProposalOutcome) error {
+	b, err := json.Marshal(outcome)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.NewUpdate().Model((*models.AssistantProposal)(nil)).
+		Set("outcome = ?::jsonb", string(b)).
+		Where("ap.id = ?", id).
+		Where("ap.status = ?", models.ProposalConfirmed).
+		Exec(ctx)
+	return err
 }
 
 func (r *assistantProposalRepository) Expire(ctx context.Context, id string, now time.Time) (bool, error) {

@@ -226,7 +226,10 @@ func (h *AssistantHandler) Turn(c *fiber.Ctx) error {
 // @Description  content is the JSON of that turn's "complete" event, and its "offers" are the offers the turn made
 // @Description  or answered as they stand now: {id, status: pending|confirmed|dismissed|expired (a pending one past
 // @Description  its expiry reads expired), chosen, expires_at, resolved_at, replaces, retry_of, replaced_by (the
-// @Description  fresh offer made when a yes found things changed; the stale offer stays pending)}.
+// @Description  fresh offer made when a yes found things changed; the stale offer stays pending), outcome (a
+// @Description  confirmed offer whose run did its work: {text, made, total, result}, text the answer's sentence and
+// @Description  result what the work returned)}. An offer's id is also a review fix's proposalId, so a replayed
+// @Description  finding settles its fix from the offers of the message it came in.
 // @Tags         assistant
 // @Produce      json
 // @Security     CookieAuth

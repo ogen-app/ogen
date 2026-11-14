@@ -103,6 +103,17 @@ func (m *memProposals) ListAwaiting(_ context.Context, kind models.AssistantScop
 	return out, nil
 }
 
+func (m *memProposals) SetOutcome(_ context.Context, id string, outcome *models.ProposalOutcome) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.rows {
+		if p.ID == id && p.Status == models.ProposalConfirmed {
+			p.Outcome = outcome
+		}
+	}
+	return nil
+}
+
 func (m *memProposals) Delete(_ context.Context, ids []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -269,6 +280,9 @@ func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
 		!slices.Equal(resp.Touched, []assistantkit.Touched{{Kind: "thing"}}) {
 		t.Fatalf("ran = %d, status = %s, events = %v, touched = %v", *ran, store.rows[0].Status, events, resp.Touched)
 	}
+	if o := store.rows[0].Outcome; o == nil || o.Text != "Done: Do 5 things" {
+		t.Fatalf("a chat yes's outcome = %+v", o)
+	}
 
 	// A second yes finds it answered.
 	if _, _, _, err := h.turn(home, "yes again",
@@ -344,8 +358,15 @@ func TestProposals_AnswerFromTheCard(t *testing.T) {
 	if err != nil || *ran != 4 || resp.Explanation != "Done: Do 4 things" || !slices.Equal(events, []SSEEventKind{SSEEventProposalResolved, SSEEventComplete}) {
 		t.Fatalf("resp = %+v, err = %v, ran = %d, events = %v", resp, err, *ran, events)
 	}
-	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "mine", Confirm: true}, nil); !isConflict(err) {
-		t.Fatalf("answering twice: %v, want a conflict", err)
+	// The offer keeps what its run did, for a reloaded thread.
+	if o := store.rows[0].Outcome; o == nil || o.Text != "Done: Do 4 things" || len(o.Result) == 0 {
+		t.Fatalf("outcome = %+v", o)
+	}
+	// Answering again is a conflict that carries the offer as it stands.
+	_, err = h.tools.answer(ctx, AnswerRequest{ProposalID: "mine", Confirm: true}, nil)
+	if ce, ok := errors.AsType[*ProposalConflictError](err); !ok || ce.Code != codeOfferAnswered || ce.Offer == nil ||
+		ce.Offer.Status != models.ProposalConfirmed || ce.Offer.Outcome == nil {
+		t.Fatalf("answering twice: %v, want a conflict with the offer", err)
 	}
 	// An offer for a tool no pack has any more can't run, only be dismissed.
 	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "gone", Confirm: true}, nil); !isConflict(err) {
@@ -512,6 +533,9 @@ func TestProposals_AnswerFromTheCardReoffersWhatStillHolds(t *testing.T) {
 		len(store.rows) != 2 || store.rows[0].Status != models.ProposalPending || store.rows[1].Replaces != "stale" {
 		t.Fatalf("cards = %+v, rows = %+v", resp.Proposals, store.rows)
 	}
+	if store.rows[0].Outcome != nil {
+		t.Fatalf("a stale offer's outcome = %+v; it ran nothing", store.rows[0].Outcome)
+	}
 	fresh := resp.Proposals[0].ID
 	want := ProposalResolved{ID: "stale", Status: resolvedStale, Reasons: []string{"10 of the things were deleted"}, ReplacedBy: fresh}
 	if len(resolved) != 1 || !slices.Equal(resolved[0].Reasons, want.Reasons) || resolved[0].Status != want.Status || resolved[0].ReplacedBy != fresh ||
@@ -621,6 +645,9 @@ func TestProposals_AnswerFromTheCardDoneInPart(t *testing.T) {
 	if len(resp.Proposals) != 1 || resp.Proposals[0].Summary != "Retry: Do 6 things" || resp.Proposals[0].RetryOf != "half" ||
 		store.rows[0].Status != models.ProposalConfirmed || store.rows[1].RetryOf != "half" {
 		t.Fatalf("cards = %+v", resp.Proposals)
+	}
+	if o := store.rows[0].Outcome; o == nil || o.Made != 10 || o.Total != 16 {
+		t.Fatalf("outcome = %+v", o)
 	}
 	if !slices.Equal(events, []SSEEventKind{SSEEventProposalCreated, SSEEventProposalResolved, SSEEventComplete}) {
 		t.Fatalf("events = %v", events)

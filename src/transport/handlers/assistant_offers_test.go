@@ -51,12 +51,16 @@ func TestAssistantThread_Offers(t *testing.T) {
 		{ID: "m3", Role: "user", Content: "Stale: Move 5 posts"},
 		{ID: "m4", Role: "model", Content: `{"explanation":"Nothing ran.","proposals":[{"id":"o3"}],"resolved":[{"id":"o1","status":"stale"}]}`},
 		{ID: "m5", Role: "model", Content: `{"explanation":"Done in part.","proposals":[{"id":"o4"}]}`},
+		// A review whose fix was confirmed from its card since.
+		{ID: "m6", Role: "model", Content: `{"explanation":"Reviewed.","proposals":[{"id":"o5"}]}`},
 	}}
 	offers := offerRepo{rows: []models.AssistantProposal{
 		{ID: "o1", Status: models.ProposalPending, ExpiresAt: later},
 		{ID: "o2", Status: models.ProposalPending, ExpiresAt: earlier},
 		{ID: "o3", Status: models.ProposalPending, ExpiresAt: later, Replaces: "o1"},
 		{ID: "o4", Status: models.ProposalPending, ExpiresAt: later, RetryOf: "o0"},
+		{ID: "o5", Status: models.ProposalConfirmed, ExpiresAt: later,
+			Outcome: &models.ProposalOutcome{Text: "Done: Move “Terrace” to Mon 14", Result: json.RawMessage(`{"moved":1}`)}},
 	}}
 	app := fiber.New()
 	auth := func(c *fiber.Ctx) error { return c.Next() }
@@ -67,7 +71,7 @@ func TestAssistantThread_Offers(t *testing.T) {
 		t.Fatal(err)
 	}
 	var msgs []models.AssistantMessage
-	if err := json.NewDecoder(resp.Body).Decode(&msgs); err != nil || len(msgs) != 5 {
+	if err := json.NewDecoder(resp.Body).Decode(&msgs); err != nil || len(msgs) != 6 {
 		t.Fatalf("msgs = %+v, %v", msgs, err)
 	}
 	if msgs[0].Offers != nil || msgs[2].Offers != nil {
@@ -84,6 +88,10 @@ func TestAssistantThread_Offers(t *testing.T) {
 	}
 	if m5 := msgs[4].Offers; len(m5) != 1 || m5[0].RetryOf != "o0" {
 		t.Fatalf("m5 offers = %+v", m5)
+	}
+	if m6 := msgs[5].Offers; len(m6) != 1 || m6[0].Status != models.ProposalConfirmed || m6[0].Outcome == nil ||
+		m6[0].Outcome.Text != "Done: Move “Terrace” to Mon 14" || string(m6[0].Outcome.Result) != `{"moved":1}` {
+		t.Fatalf("m6 offers = %+v", m6)
 	}
 }
 

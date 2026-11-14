@@ -75,6 +75,9 @@ type flowErrorPayload struct {
 	// Reason names a conflict the client draws its own way, e.g.
 	// offer_expired; empty for any other error.
 	Reason string `json:"reason,omitempty"`
+	// Offer is, on an offer_answered or offer_expired conflict, the offer
+	// as it stands, so its card can settle.
+	Offer *models.AssistantOfferState `json:"offer,omitempty"`
 }
 
 // flowError classifies an AI-flow failure: the flow's validation error V is a
