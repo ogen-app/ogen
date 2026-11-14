@@ -92,7 +92,10 @@ type AnalyticsQuery struct {
 // campaign, else the thread's, unless the query names one or "all".
 func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity string) (timeframe.Range, *analytics.Scope, error) {
 	from, to, window, platforms := in.From, in.To, in.Window, in.Platforms
-	if w := assistant.Window(ctx); w != nil {
+	// One read: a navigate made alongside this call can change the window,
+	// so the dates and the campaign come from the same one.
+	w := assistant.Window(ctx)
+	if w != nil {
 		if from == "" && to == "" && window == "" {
 			from, to = w.From, w.To
 		}
@@ -111,8 +114,8 @@ func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity s
 	switch {
 	case strings.EqualFold(campaign, "all"):
 		campaign = ""
-	case campaign == "" && assistant.Window(ctx) != nil && assistant.Window(ctx).CampaignID != "":
-		campaign = assistant.Window(ctx).CampaignID
+	case campaign == "" && w != nil && w.CampaignID != "":
+		campaign = w.CampaignID
 	case campaign == "":
 		campaign = assistant.CampaignID(ctx)
 	}
