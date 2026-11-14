@@ -544,6 +544,8 @@ func persistIdea(ctx context.Context, dp *DraftPost, campaign *models.Campaign, 
 	if err := ideas.Create(ctx, idea); err != nil {
 		return "", err
 	}
+	saved := *idea
+	dp.Saved = &saved
 	return id, nil
 }
 

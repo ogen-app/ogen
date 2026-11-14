@@ -63,6 +63,9 @@ const (
 	AssistantActionAssetTags AssistantActionKind = "asset_tags"
 	// AssistantActionPostRewritten is a post's copy rewritten by a fix.
 	AssistantActionPostRewritten AssistantActionKind = "post_rewritten"
+	// AssistantActionIdeasCreated is ideas the assistant saved; undoing it
+	// deletes the ones still as made.
+	AssistantActionIdeasCreated AssistantActionKind = "ideas_created"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's

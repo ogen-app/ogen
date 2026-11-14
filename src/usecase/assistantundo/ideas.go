@@ -87,6 +87,48 @@ func ideaEdited(id string, m models.JSONMap) (*models.Idea, error) {
 	return &models.Idea{ID: id, Title: t.Title, Note: t.Note, Plan: t.Plan}, nil
 }
 
+// IdeasCreated is the ideas a change saved, as made, for the undo log.
+func IdeasCreated(ideas []*models.Idea) models.JSONMap {
+	list := make([]madeIdea, len(ideas))
+	for i, idea := range ideas {
+		list[i] = madeIdea{ID: idea.ID, CampaignID: idea.CampaignID, ideaText: ideaText{Title: idea.Title, Note: idea.Note, Plan: idea.Plan}}
+	}
+	return toMap(madeIdeas{Ideas: list})
+}
+
+type madeIdea struct {
+	ID string `json:"id"`
+	// CampaignID is the campaign it was made in, nil for the workspace: an
+	// idea moved since stays.
+	CampaignID *string `json:"campaignId"`
+	ideaText
+}
+
+type madeIdeas struct {
+	Ideas []madeIdea `json:"ideas"`
+}
+
+type ideasCreated struct{ ideas repository.IdeaRepository }
+
+// Undo deletes the ideas made, all of them or none: one edited, triaged,
+// merged, made into a post or deleted since leaves the change in place.
+func (u ideasCreated) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	var made madeIdeas
+	if err := fromMap(a.After, &made); err != nil {
+		return fmt.Errorf("read made ideas: %w", err)
+	}
+	for _, m := range made.Ideas {
+		ok, err := u.ideas.DeleteAsMadeIf(ctx, tx, &models.Idea{ID: m.ID, CampaignID: m.CampaignID, Title: m.Title, Note: m.Note, Plan: m.Plan})
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrChangedSince // rolls back the ones deleted
+		}
+	}
+	return nil
+}
+
 // IdeaVerdicts is several ideas' triage states, as an undo log stores them,
 // in the same order before and after a change.
 func IdeaVerdicts(ideas []*models.Idea) models.JSONMap {
@@ -115,12 +157,13 @@ func ideaTriages(m models.JSONMap) ([]*models.Idea, error) {
 	return out, nil
 }
 
-// WithIdeas lets s undo idea verdict changes, one or several at once, and
-// idea edits.
+// WithIdeas lets s undo idea verdict changes, one or several at once, idea
+// edits, and ideas the assistant saved.
 func (s *Service) WithIdeas(ideas repository.IdeaRepository) *Service {
 	s.undoers[models.AssistantActionIdeaVerdict] = ideaVerdict{ideas}
 	s.undoers[models.AssistantActionIdeaVerdicts] = ideaVerdicts{ideas}
 	s.undoers[models.AssistantActionIdeaEdit] = ideaEdit{ideas}
+	s.undoers[models.AssistantActionIdeasCreated] = ideasCreated{ideas}
 	return s
 }
 

@@ -1,6 +1,10 @@
 package content_plan
 
-import "time"
+import (
+	"time"
+
+	"github.com/ogen-app/ogen/src/domain/models"
+)
 
 // ContentPlanRequest is the input to the generateContentPlan flow.
 type ContentPlanRequest struct {
@@ -42,6 +46,10 @@ type DraftPost struct {
 	// BrandVoiceID is the resolved brand voice for this post, set
 	// server-side after generation. json:"-" keeps it out of the model schema.
 	BrandVoiceID *string `json:"-"`
+	// Saved is the idea the item was saved as, as saved, before anyone could
+	// change it; nil until it is. json:"-" keeps it out of the model schema;
+	// the stream's idea event carries its id.
+	Saved *models.Idea `json:"-"`
 }
 
 // ContentPlanResponse is returned by the handler and the flow.

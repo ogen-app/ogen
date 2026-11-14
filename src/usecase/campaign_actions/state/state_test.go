@@ -53,6 +53,12 @@ func TestBuild_GoalRoom(t *testing.T) {
 	if !slices.Equal(s.ByStatus, want) || s.Posts != 4 {
 		t.Fatalf("by status = %+v, posts = %d", s.ByStatus, s.Posts)
 	}
+
+	// A planned post is counted by its status too.
+	s = Build(campaign(), posts(models.PostStatusPlanned, models.PostStatusDraft), nil)
+	if want := []StatusCount{{models.PostStatusPlanned, 1}, {models.PostStatusDraft, 1}}; !slices.Equal(s.ByStatus, want) {
+		t.Fatalf("by status = %+v", s.ByStatus)
+	}
 }
 
 // Posts that could not be read leave the room unknown, not the whole target.

@@ -44,6 +44,9 @@ type ProposalSink interface {
 type ConflictError struct {
 	Reason  string
 	Options []Option
+	// Card is the choice's details beyond the reason, e.g. a footnote on
+	// why an option isn't offered; nil shows the reason alone.
+	Card *Card
 }
 
 // Error returns the conflict's reason.
@@ -53,6 +56,11 @@ func (e *ConflictError) Error() string { return e.Reason }
 // Args are what picking it runs.
 func Conflicted(reason string, options ...Option) error {
 	return &ConflictError{Reason: reason, Options: options}
+}
+
+// ConflictedCard is Conflicted with the card's details.
+func ConflictedCard(reason string, card *Card, options ...Option) error {
+	return &ConflictError{Reason: reason, Options: options, Card: card}
 }
 
 // ErrNoProposalSink is returned when a gated tool runs without a sink in its
@@ -153,7 +161,7 @@ func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome
 				return Refuse[Out](r.Reason, r.Alternatives...), nil
 			}
 			if c, ok := errors.AsType[*ConflictError](err); ok {
-				return propose[Out](ctx, Proposal{Tool: tool, Args: in, Summary: c.Reason, Options: c.Options}, StatusConflict)
+				return propose[Out](ctx, Proposal{Tool: tool, Args: in, Summary: c.Reason, Card: c.Card, Options: c.Options}, StatusConflict)
 			}
 			if err != nil {
 				return Outcome[Out]{}, err

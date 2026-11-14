@@ -3,6 +3,7 @@ package campaign_assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -172,5 +173,72 @@ func TestSnapshot_PeriodSourcesCalendar(t *testing.T) {
 	if s.Calendar == nil || s.Calendar.Total == 0 || len(s.Calendar.Top) == 0 ||
 		!slices.ContainsFunc(s.Calendar.Kinds, func(k state.KindCount) bool { return k.Kind == "crowded day" }) {
 		t.Fatalf("calendar = %+v", s.Calendar)
+	}
+	// Each attached source says how far it got: analysed, still being
+	// analysed, or unreadable.
+	want := []string{state.SourceReady, state.SourceAnalysing, state.SourceUnreadable}
+	if items := s.Sources.Items; len(items) != 3 || !slices.Equal([]string{items[0].Status, items[1].Status, items[2].Status}, want) {
+		t.Fatalf("items = %+v", s.Sources.Items)
+	}
+	// The starters lead with the slots left, then the room under the goal,
+	// then the calendar; sources not ready come after, past the cap here.
+	got := starters(s)
+	if len(got) != 3 || got[0].Label != "Fill Week 1" || got[0].Instruction != "Draft 2 posts for Week 1, the slots left in this goal period." ||
+		got[1].Kind != starterDraft || got[2].Kind != starterCalendar {
+		t.Fatalf("starters = %+v", got)
+	}
+	s.Goal, s.Calendar = nil, nil
+	if got := starters(s); len(got) != 1 || got[0].Kind != starterSources || got[0].Label != "2 sources not ready" {
+		t.Fatalf("sources starter = %+v", got)
+	}
+}
+
+// A failed campaign analysis is unreadable, not analysing forever; a skipped
+// one leaves the source ready to write from.
+func TestSourceItems_AnalysisOutcomes(t *testing.T) {
+	c := &models.Campaign{AssetIDs: models.StringSlice{"a1", "a2", "a3"}}
+	metas := []models.Asset{{ID: "a1", Status: models.AssetStatusReady}, {ID: "a2", Status: models.AssetStatusReady}, {ID: "a3", Status: models.AssetStatusReady}}
+	digests := map[string]repository.LensDigest{
+		"a1": {Status: models.AssetAnalysisStatusFailed},
+		"a2": {Status: models.AssetAnalysisStatusSkipped},
+		"a3": {Status: models.AssetAnalysisStatusRunning},
+	}
+	items := sourceItems(c, metas, digests, true)
+	want := []string{state.SourceUnreadable, state.SourceReady, state.SourceAnalysing}
+	for i, it := range items {
+		if it.Status != want[i] {
+			t.Fatalf("items = %+v, want %v", items, want)
+		}
+	}
+}
+
+// The sources not ready are counted over every attached source, past the
+// ones listed.
+func TestSources_NotReadyCountsPastTheList(t *testing.T) {
+	c := &models.Campaign{ID: "c1"}
+	var all []models.Asset
+	for i := range state.MaxSourceItems + 1 {
+		id := fmt.Sprintf("a%d", i)
+		c.AssetIDs = append(c.AssetIDs, id)
+		status := models.AssetStatusReady
+		if i == state.MaxSourceItems {
+			status = models.AssetStatusFailed
+		}
+		all = append(all, models.Asset{ID: id, Status: status})
+	}
+	src := sources(t.Context(), CampaignAssistantRepos{Assets: readyAssets{all: all}}, c)
+	if src == nil || len(src.Items) != state.MaxSourceItems || src.NotReady != 1 {
+		t.Fatalf("sources = %+v", src)
+	}
+	if got := starters(state.Snapshot{Sources: src}); len(got) != 1 || got[0].Label != "1 source not ready" {
+		t.Fatalf("starters = %+v", got)
+	}
+}
+
+// A campaign with nothing left to do offers no starters.
+func TestStarters_NoneWhenNothingIsLeft(t *testing.T) {
+	s := state.Snapshot{Goal: &state.Goal{Target: 10, Planned: 10}, Calendar: &state.Calendar{}, Sources: &state.Sources{WholeBank: true}}
+	if got := starters(s); len(got) != 0 {
+		t.Fatalf("starters = %+v", got)
 	}
 }

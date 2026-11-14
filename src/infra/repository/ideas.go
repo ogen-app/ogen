@@ -66,6 +66,11 @@ type IdeaRepository interface {
 	// (nil uses the repository's DB) only while the row still holds was's,
 	// in one statement. Returns false when they differ or the idea is gone.
 	SetEditIf(ctx context.Context, db bun.IDB, idea, was *models.Idea) (bool, error)
+	// DeleteAsMadeIf deletes the idea on db (nil uses the repository's DB)
+	// only while it still holds was's campaign, title, note and plan, has no verdict,
+	// isn't merged and no post was made from it, in one statement. Returns
+	// false when any of that changed or the idea is gone.
+	DeleteAsMadeIf(ctx context.Context, db bun.IDB, was *models.Idea) (bool, error)
 	Delete(ctx context.Context, id string) (bool, error)
 	// LiveCampaignExists reports whether campaignID names a campaign in the
 	// caller's tenant that is not soft-deleted (archived counts as live).
@@ -402,6 +407,31 @@ func (r *ideaRepository) SetEditIf(ctx context.Context, db bun.IDB, idea, was *m
 		Where("i.plan_post_type IS NOT DISTINCT FROM ?", was.Plan.PostType).
 		Where("i.plan_phase_id IS NOT DISTINCT FROM ?", was.Plan.PhaseID).
 		Where("i.plan_target_date IS NOT DISTINCT FROM ?::date", was.Plan.TargetDate).
+		Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+func (r *ideaRepository) DeleteAsMadeIf(ctx context.Context, db bun.IDB, was *models.Idea) (bool, error) {
+	if db == nil {
+		db = r.db
+	}
+	res, err := db.NewDelete().
+		Model((*models.Idea)(nil)).
+		Where("i.id = ?", was.ID).
+		Where("i.campaign_id IS NOT DISTINCT FROM ?", was.CampaignID).
+		Where("i.title = ?", was.Title).
+		Where("i.note = ?", was.Note).
+		Where("i.plan_platform_id IS NOT DISTINCT FROM ?", was.Plan.PlatformID).
+		Where("i.plan_post_type IS NOT DISTINCT FROM ?", was.Plan.PostType).
+		Where("i.plan_phase_id IS NOT DISTINCT FROM ?", was.Plan.PhaseID).
+		Where("i.plan_target_date IS NOT DISTINCT FROM ?::date", was.Plan.TargetDate).
+		Where("i.verdict IS NULL").
+		Where("i.merged_at IS NULL").
+		Where("NOT EXISTS (SELECT 1 FROM post_ideas AS pi WHERE pi.idea_id = i.id)").
 		Exec(ctx)
 	if err != nil {
 		return false, err

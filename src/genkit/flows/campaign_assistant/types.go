@@ -14,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
@@ -59,6 +60,12 @@ type CampaignAssistantResponse struct {
 	// the last answer's sources, for the client's card. It doesn't change
 	// Action.
 	Ask *AskResult `json:"ask,omitempty" jsonschema:"-"`
+	// State is the campaign as the turn read it before acting, with a goal
+	// the turn raised already counted: the figures the client cites under
+	// the reply. Set on every campaign turn.
+	State *state.Snapshot `json:"state,omitempty" jsonschema:"-"`
+	// Starters lead with the state's numbers, for the client's chips.
+	Starters []Starter `json:"starters,omitempty" jsonschema:"-"`
 }
 
 // What an askCampaignAssets answer searched: the asset open on screen, the
@@ -113,6 +120,12 @@ type GeneratedPostsResult struct {
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
 	// Grounding says whether the posts came from the campaign's sources.
 	Grounding assistantkit.Grounding `json:"grounding"`
+	// WindowStart and WindowEnd are the days the ideas target, YYYY-MM-DD.
+	WindowStart string `json:"windowStart,omitempty"`
+	WindowEnd   string `json:"windowEnd,omitempty"`
+	// UndoID deletes the ideas while they are as made; empty when they
+	// could not be logged.
+	UndoID string `json:"undoId,omitempty"`
 }
 
 // DraftPostResult summarises a draftPost tool invocation.
@@ -256,6 +269,9 @@ type CampaignAssistantFlowConfig struct {
 	// DeletePost deletes a post with its files, for the budget guard's
 	// "replace the weakest drafts"; nil leaves that option out.
 	DeletePost func(ctx context.Context, post *models.Post, actor string) (bool, error)
+	// CancelPost withdraws a scheduled post from publishing, for a platform
+	// removal that waits on it; nil offers no unschedule.
+	CancelPost func(ctx context.Context, postID, actor string) error
 }
 
 // ── SSE types ─────────────────────────────────────────────────────────────────
@@ -339,6 +355,7 @@ type GeneratePostsCompleteEventPayload struct {
 	IdeaCount int                    `json:"ideaCount"`
 	Warnings  []string               `json:"warnings,omitempty"`
 	Grounding assistantkit.Grounding `json:"grounding"`
+	UndoID    string                 `json:"undoId,omitempty"`
 }
 
 // DraftPostStartedEventPayload is emitted when the draftPost tool begins.

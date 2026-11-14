@@ -74,6 +74,7 @@ type requestState struct {
 	// extended, content-first post drafts; maxDraftPosts caps a single call.
 	draftPost     func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
 	deletePost    func(ctx context.Context, post *models.Post, actor string) (bool, error)
+	cancelPost    func(ctx context.Context, postID, actor string) error
 	maxDraftPosts int
 	// proposalThreshold is the largest generatePosts / draftPost batch run
 	// without asking; 0 means the default.
@@ -229,6 +230,7 @@ func newRequestState(cfg CampaignAssistantFlowConfig, repos CampaignAssistantRep
 		maxGeneratePosts:  cfg.MaxGeneratePosts,
 		draftPost:         cfg.DraftPost,
 		deletePost:        cfg.DeletePost,
+		cancelPost:        cfg.CancelPost,
 		maxDraftPosts:     cfg.MaxDraftPosts,
 		proposalThreshold: cfg.ProposalThreshold,
 		checkBrief:        cfg.CheckBrief,
@@ -356,6 +358,8 @@ type DraftPostOutput struct {
 	Dates          []string   `json:"dates,omitempty"` // actual publish dates of the created posts
 	Warnings       []string   `json:"warnings,omitempty"`
 	UsedAssets     []AssetRef `json:"usedAssets,omitempty"`
+	// Posts are the drafts made, by platform.
+	Posts []PostRef `json:"posts,omitempty"`
 	// Grounding is the assets the research quoted; unset when they aren't
 	// known (pasted material, or an answer saved before they were kept).
 	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
@@ -927,6 +931,9 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		Warnings:    resp.Warnings,
 		UsedAssets:  used,
 		Grounding:   grounding,
+		WindowStart: windowStart,
+		WindowEnd:   windowEnd,
+		UndoID:      st.logIdeasCreated(ctx, resp.Ideas),
 	}
 	st.recordWrite(actionPostsGenerated)
 	return assistantkit.OK(GeneratePostsOutput{
@@ -1102,8 +1109,35 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 		Dates:          allDates,
 		Warnings:       allWarn,
 		UsedAssets:     used,
+		Posts:          draftedRefs(resps, platformNames),
 		Grounding:      grounding,
 	}), nil
+}
+
+// PostRef names a post on a result card: its title, its platform, and its
+// quality score when it has one.
+type PostRef struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Platform string `json:"platform"`
+	// FitPct is the post's overall quality score, 0–100; unset until it is
+	// scored.
+	FitPct *int `json:"fitPct,omitempty"`
+}
+
+// draftedRefs names the posts the flow calls saved; names[i] is resps[i]'s
+// platform.
+func draftedRefs(resps []*draft_post.DraftPostResponse, names []string) []PostRef {
+	var out []PostRef
+	for i, r := range resps {
+		if r == nil {
+			continue
+		}
+		for _, p := range r.Posts {
+			out = append(out, PostRef{ID: p.PostID, Title: cmp.Or(strings.TrimSpace(p.Title), "Untitled post"), Platform: names[i]})
+		}
+	}
+	return out
 }
 
 // maxParallelDrafts caps how many platform drafts one draftPost call runs at

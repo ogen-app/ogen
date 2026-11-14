@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 )
@@ -27,4 +28,21 @@ func (st *requestState) logChange(ctx context.Context, kind models.AssistantActi
 		return ""
 	}
 	return id
+}
+
+// logIdeasCreated records the ideas a generation saved, as they were saved,
+// so undo can delete them while they are as made: an edit made while the
+// generation still ran is caught too. It returns "" when there are none, or
+// they could not be logged.
+func (st *requestState) logIdeasCreated(ctx context.Context, planned []content_plan.DraftPost) string {
+	var made []*models.Idea
+	for _, p := range planned {
+		if p.Saved != nil {
+			made = append(made, p.Saved)
+		}
+	}
+	if len(made) == 0 {
+		return ""
+	}
+	return st.logChange(ctx, models.AssistantActionIdeasCreated, models.JSONMap{}, assistantundo.IdeasCreated(made))
 }

@@ -99,6 +99,18 @@ var offerThreads = &evalOffer{
 		Options: []models.ProposalOption{{ID: "add_platform", Title: "Add Threads to the campaign", Recommended: true}}},
 }
 
+// offerScheduledLinkedIn is the choice a post scheduled on LinkedIn forced
+// on dropping it.
+var offerScheduledLinkedIn = &evalOffer{
+	asked: "Drop LinkedIn from the campaign.",
+	said:  "LinkedIn has a post scheduled for Tuesday, so it would still publish there. Shall I unschedule it, then remove LinkedIn, or remove it later?",
+	offer: models.AssistantProposal{ID: "prop3", Tool: "updateCampaignPlatforms", Summary: "LinkedIn has 3 posts in this campaign",
+		Options: []models.ProposalOption{
+			{ID: "unschedule", Title: "Unschedule 1, then remove", Recommended: true},
+			{ID: "later", Title: "Remove later"},
+		}},
+}
+
 // offerNoSources is the choice generating with no sources raised: the
 // Hotel de Russie replay, a hotel campaign planned before its brochure was
 // added.
@@ -158,6 +170,12 @@ var evalCases = []evalCase{
 		want: []string{"draftPost", "generatePosts", "updateCampaignPlatforms"}},
 	// A yes to a waiting offer takes it, on the first try.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "yes please", offered: offerThreads, want: []string{"confirmOffer"}},
+	// CON-483: dropping a platform goes through the platform tool, which
+	// holds it back for a scheduled post; the user's pick is the choice's.
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Drop LinkedIn from the campaign.",
+		want: []string{"updateCampaignPlatforms"}, not: []string{"unschedulePosts", "deletePosts"}},
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Unschedule it and remove LinkedIn.", offered: offerScheduledLinkedIn,
+		want: []string{"confirmOffer"}, not: []string{"unschedulePosts", "updateCampaignPlatforms"}},
 	// CON-469, the Hotel de Russie replay: with no sources the user adds one
 	// first, by the offer or a link, or goes ahead knowingly.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, hotel: true, say: "Let me add the brochure first.", offered: offerNoSources,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -284,6 +285,12 @@ func (r *genkitRuntime) RunAssistant(ctx context.Context, req assistant.Request,
 	return fn(ctx, req, onEvent)
 }
 
+// CampaignState reads what the campaign assistant knows of a campaign before
+// it is asked: no model call, so it needs no provider.
+func (r *genkitRuntime) CampaignState(ctx context.Context, campaignID string) (*campaign_assistant.CampaignState, error) {
+	return campaign_assistant.ReadState(ctx, r.campaignAssistRepos, campaignID, time.Now().UTC())
+}
+
 // AnswerProposal confirms or dismisses an assistant offer from its card,
 // without a model call.
 func (r *genkitRuntime) AnswerProposal(ctx context.Context, req assistant.AnswerRequest, onEvent assistant.OnEventFunc) (*assistant.Response, error) {
@@ -454,6 +461,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		CheckBrief:        checkBriefFn,
 		CheckPosts:        checkPostsFn,
 		DeletePost:        deletePostFn(r.packDeps.Remove),
+		CancelPost:        cancelPostFn(r.packDeps.Remove),
 	}, r.campaignAssistRepos)
 	if err != nil {
 		return fmt.Errorf("init campaign pack: %w", err)
@@ -548,6 +556,14 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	slog.InfoContext(ctx, "anthropic flows rebuilt",
 		logging.AttrComponent, "genkit")
 	return nil
+}
+
+// cancelPostFn is remove's Cancel, or nil without one.
+func cancelPostFn(remove packs.PostRemover) func(context.Context, string, string) error {
+	if remove == nil {
+		return nil
+	}
+	return remove.Cancel
 }
 
 // deletePostFn is remove's Delete, or nil without a remover.
