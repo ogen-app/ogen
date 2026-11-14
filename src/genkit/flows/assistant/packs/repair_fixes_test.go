@@ -12,6 +12,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -272,6 +273,41 @@ func TestChangePostType(t *testing.T) {
 	}
 }
 
+// A converted post says whether it passes its new type's rules: with an
+// image an image post passes, without one it breaks the attachment count.
+// A post whose platform isn't loaded says nothing.
+func TestChangePostType_Rules(t *testing.T) {
+	d, posts, _ := repairDeps()
+	d.Campaigns.(*memCampaigns).c.TargetPlatforms = models.CampaignPlatforms{{ID: "li", PostTypes: []string{"text-post", "image-post"}}}
+	li := &models.Platform{ID: "li", Name: "LinkedIn", PostTypes: models.PostTypeMap{"text-post": "Text", "image-post": "Image"}}
+	for i := range posts.posts {
+		posts.posts[i].PlatformPostType = "text-post"
+		posts.posts[i].Platform = li
+	}
+	posts.posts[2].Status = models.PostStatusDraft
+	posts.posts[2].Platform = nil
+	d.Attachments = memAttachments{n: map[string]int{"p2": 1}, mime: "image/png"}
+	ctx, _ := turn(t, campaign1, nil)
+
+	out, err := changePostType(ctx, d, ChangePostTypeInput{PostIDs: []string{"p1", "p2", "p3"}, PostType: "image-post"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := map[string]*TypeRules{}
+	for _, r := range out.Posts {
+		rules[r.PostID] = r.Rules
+	}
+	if r := rules["p1"]; r == nil || r.Passes || len(r.Broken) != 1 || r.Broken[0].Rule != platforms.RuleMinAttachments {
+		t.Fatalf("p1 rules = %+v", r)
+	}
+	if r := rules["p2"]; r == nil || !r.Passes || len(r.Broken) != 0 {
+		t.Fatalf("p2 rules = %+v", r)
+	}
+	if r, ok := rules["p3"]; !ok || r != nil {
+		t.Fatalf("p3 rules = %+v (row %v)", r, ok)
+	}
+}
+
 // Deleting keeps published posts.
 func TestDeletePosts(t *testing.T) {
 	d, posts, _ := repairDeps()
@@ -296,13 +332,15 @@ func TestDeletePosts(t *testing.T) {
 type memAttachments struct {
 	repository.PostAttachmentRepository
 	n map[string]int
+	// mime is every attachment's type.
+	mime string
 }
 
 func (m memAttachments) ListByPostIDs(_ context.Context, ids []string) ([]models.PostAttachment, error) {
 	var out []models.PostAttachment
 	for _, id := range ids {
 		for range m.n[id] {
-			out = append(out, models.PostAttachment{PostID: id})
+			out = append(out, models.PostAttachment{PostID: id, MimeType: m.mime})
 		}
 	}
 	return out, nil
