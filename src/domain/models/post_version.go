@@ -43,6 +43,9 @@ const (
 	// PostVersionNoteMarkedReady marks the content the author moved to ready
 	// for publish: the version the automatic quality assessment scores.
 	PostVersionNoteMarkedReady = "Marked ready for publish"
+	// PostVersionNoteInitial marks the copy the post assistant snapshots
+	// before its first change: the post as it was, not a person's edit.
+	PostVersionNoteInitial = "Initial version"
 )
 
 // IsSystemSnapshot reports whether v is a CON-251 system-authored "what went

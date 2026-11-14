@@ -116,7 +116,7 @@ func repairPack(d Deps) assistant.Pack {
 						return checkBrand(ctx, d, in)
 					})), ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, brand, assistantkit.TierRead,
-					`Call this when the user asks whether posts are on brand, in the voice, or within the guardrails — "are these on brand?", "check the selected posts against our voice". Pass the selected posts' ids when there is a selection. Relay the findings, most serious first, with the quoted words, and say how many posts were clean. A finding's "rewrite it" fix is already offered for the user to confirm; don't offer it again. In the post's own thread, offer to fix it with editPost instead.`))
+					`Call this when the user asks whether posts are on brand, in the voice, or within the guardrails — "are these on brand?", "check the selected posts against our voice". Pass the selected posts' ids when there is a selection. Relay the findings, most serious first, with the quoted words, and say how many posts were clean. A finding's fixes ("rewrite it", "take it off the calendar", "delete it") are already offered for the user to confirm, the first being the one to suggest; don't offer them again. In the post's own thread, offer to fix it with editPost instead.`))
 			}
 			return specs, nil
 		},

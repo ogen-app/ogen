@@ -64,7 +64,7 @@ func ensureInitialVersion(ctx context.Context, repos PostAssistantRepos, post *m
 		PostID:        post.ID,
 		VersionNumber: 1,
 		Content:       post.Content,
-		Note:          "Initial version",
+		Note:          models.PostVersionNoteInitial,
 		Creator:       models.PostVersionCreatorUser,
 	}); err != nil && !isVersionTaken(err) {
 		return writeErr(err, "create initial version")

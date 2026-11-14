@@ -140,3 +140,33 @@ func TestPostVersionCreatedBy(t *testing.T) {
 		t.Fatalf("created_by = %q %q %q", got[0].CreatedBy, got[1].CreatedBy, got[2].CreatedBy)
 	}
 }
+
+// A post is edited once a person saved copy for it; the post assistant's
+// snapshot of the post as it was, and the assistant's and the system's
+// versions, aren't edits.
+func TestPostVersionEditedPostIDs(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewPostVersionRepository(db)
+	for _, id := range []string{"post-ed", "post-snap", "post-none"} {
+		seedPost(t, db, id, "", "", time.Now().UTC())
+	}
+	for _, v := range []models.PostVersion{
+		{ID: "ed-1", PostID: "post-ed", Content: "a", Creator: models.PostVersionCreatorUser, Note: models.PostVersionNoteInitial},
+		{ID: "ed-2", PostID: "post-ed", Content: "b", Creator: models.PostVersionCreatorUser},
+		{ID: "snap-1", PostID: "post-snap", Content: "a", Creator: models.PostVersionCreatorUser, Note: models.PostVersionNoteInitial},
+		{ID: "snap-2", PostID: "post-snap", Content: "b", Creator: models.PostVersionCreatorAssistant},
+		{ID: "snap-3", PostID: "post-snap", Content: "b", Creator: models.PostVersionCreatorSystem, Note: models.PostVersionNoteMarkedReady},
+	} {
+		if err := repo.CreateNext(ctx, &v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := repo.EditedPostIDs(ctx, []string{"post-ed", "post-snap", "post-none"})
+	if err != nil || len(got) != 1 || got[0] != "post-ed" {
+		t.Fatalf("edited = %v, %v", got, err)
+	}
+	if got, err := repo.EditedPostIDs(ctx, nil); err != nil || len(got) != 0 {
+		t.Fatalf("none asked = %v, %v", got, err)
+	}
+}

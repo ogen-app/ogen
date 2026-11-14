@@ -30,6 +30,9 @@ func (f *fakeVersionRepo) GetByPostIDAndVersionNumber(context.Context, string, i
 	return nil, nil
 }
 func (f *fakeVersionRepo) CountByPostID(context.Context, string) (int, error) { return 0, nil }
+func (f *fakeVersionRepo) EditedPostIDs(context.Context, []string) ([]string, error) {
+	return nil, nil
+}
 
 // resolveAssessedContent is the CON-184 seam that makes the assess flow score
 // the latest committed version snapshot instead of the live editor HEAD
