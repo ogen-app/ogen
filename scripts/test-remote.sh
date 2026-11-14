@@ -18,6 +18,8 @@ name=$(basename "$root")
 dir="src/ogen-$name"
 port=$((5433 + $(printf '%s' "$name" | cksum | cut -d' ' -f1) % 500))
 
+# macOS's rsync (2.6.9) has no --mkpath and won't create missing parents.
+ssh "$host" "mkdir -p ~/$dir"
 rsync -az --delete \
 	--exclude .git --exclude .claude/worktrees --exclude coverage.out \
 	"$root/" "$host:$dir/"
