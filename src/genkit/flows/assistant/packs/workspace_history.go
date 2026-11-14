@@ -119,6 +119,10 @@ var historyEvents = map[models.PostLogEventType]struct{ change, what string }{
 	models.PostLogEventPostRestored:    {changeRestored, "restored an earlier version"},
 }
 
+// historyLogWindow is how many of a post's newest log entries a history
+// reads.
+const historyLogWindow = 500
+
 const unrecordedNote = "Versions saved before people were recorded on them only say whether a person, the assistant or the system saved them."
 
 // logPayload is what a log entry's payload says that the history reads.
@@ -148,9 +152,19 @@ func postHistory(ctx context.Context, d Deps, in PostHistoryInput) (*PostHistory
 	if err != nil {
 		return nil, fmt.Errorf("read versions: %w", err)
 	}
-	logs, err := d.PostLogs.ListFiltered(ctx, repository.PostLogFilter{PostID: id, Limit: 500})
+	filter := repository.PostLogFilter{PostID: id, Limit: historyLogWindow}
+	if since != nil {
+		filter.Since = *since
+	}
+	logs, err := d.PostLogs.ListFiltered(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("read post log: %w", err)
+	}
+	// A full window may have cut older changes off, so nothing older than
+	// its oldest entry is shown as if the history were complete.
+	var cut *time.Time
+	if len(logs) >= historyLogWindow {
+		cut = new(slices.MinFunc(logs, func(a, b models.PostLog) int { return a.EventTimestamp.Compare(b.EventTimestamp) }).EventTimestamp)
 	}
 	names := memberNames(ctx, d)
 	out := &PostHistoryOutput{PostID: id, Title: post.Title, Entries: []HistoryEntry{}, Timezone: tz, Scope: scope}
@@ -168,8 +182,9 @@ func postHistory(ctx context.Context, d Deps, in PostHistoryInput) (*PostHistory
 	out.Entries = append(out.Entries, logEntries(logs, names, post.FailureReason)...)
 	slices.SortStableFunc(out.Entries, func(a, b HistoryEntry) int { return b.At.Compare(a.At) })
 	out.Entries = slices.DeleteFunc(out.Entries, func(e HistoryEntry) bool {
-		return (since != nil && e.At.Before(*since)) || (len(in.Changes) > 0 && !slices.Contains(in.Changes, e.Change))
+		return (since != nil && e.At.Before(*since)) || (cut != nil && e.At.Before(*cut)) || (len(in.Changes) > 0 && !slices.Contains(in.Changes, e.Change))
 	})
+	out.More = cut != nil
 	if n := historyLimit(in.Limit); len(out.Entries) > n {
 		out.Entries, out.More = out.Entries[:n], true
 	}
