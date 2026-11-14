@@ -163,6 +163,8 @@ func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Every compiled post links to all the ideas.
+		post.IdeaCount = len(ideas)
 		note, err := thesesNote(post, ideas, in)
 		if err != nil {
 			return nil, err
