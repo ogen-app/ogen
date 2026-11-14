@@ -42,6 +42,9 @@ var ErrProposalNotFound = errors.New("proposal not found")
 type ProposalConflictError struct {
 	Msg  string
 	Code string
+	// Offer is the offer as it stands, when it was answered or lapsed
+	// already, so the card can settle without reloading the thread.
+	Offer *models.AssistantOfferState
 }
 
 func (e *ProposalConflictError) Error() string { return e.Msg }
@@ -257,7 +260,37 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 	if rerr := t.reopenUnrun(ctx, st, p, in.OptionID, result, err); rerr != nil {
 		return nil, rerr
 	}
+	if err == nil {
+		t.recordOutcome(ctx, p, in.OptionID, result)
+	}
 	return result, err
+}
+
+// maxOutcomeResult is the most of a run's result an offer keeps with its
+// outcome; a larger one keeps only the sentence and counts.
+const maxOutcomeResult = 32 << 10
+
+// recordOutcome keeps what a confirmed offer's run did on the offer, so a
+// reloaded thread can settle its card and say it. A run that was refused or
+// found the offer changed did nothing, and keeps none. The work has run, so
+// a failed write is logged rather than failing the answer.
+func (t *toolSet) recordOutcome(ctx context.Context, p *models.AssistantProposal, optionID string, result any) {
+	if _, refused := refusedResult(result); refused {
+		return
+	}
+	if _, _, stale := staleResult(result); stale {
+		return
+	}
+	part := partialResult(result)
+	o := &models.ProposalOutcome{Text: answered(p, true, optionID, result), Made: part.made, Total: part.total}
+	if m, ok := result.(map[string]any); ok && m["result"] != nil {
+		if b, err := json.Marshal(m["result"]); err == nil && len(b) <= maxOutcomeResult {
+			o.Result = b
+		}
+	}
+	if err := t.deps.Proposals.SetOutcome(ctx, p.ID, o); err != nil {
+		slog.ErrorContext(ctx, "record offer outcome failed", logging.AttrComponent, logComponent, logging.AttrError, err)
+	}
 }
 
 // reopenUnrun opens again an offer that was answered to claim it but whose
@@ -477,7 +510,7 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 		t.recordUnfinished(ctx, st, onEvent, reason)
 	}
 	if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {
-		return nil, &ProposalConflictError{Msg: r.Reason, Code: r.Code}
+		return nil, &ProposalConflictError{Msg: r.Reason, Code: r.Code, Offer: t.settledState(ctx, p.ID, r.Code)}
 	}
 	if err != nil {
 		return nil, err
@@ -498,6 +531,20 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	}
 	emitFinal(onEvent, st, resp)
 	return resp, nil
+}
+
+// settledState is the offer as it stands when an answer found it answered
+// or lapsed already; nil for any other refusal, or when it can't be read.
+func (t *toolSet) settledState(ctx context.Context, id, code string) *models.AssistantOfferState {
+	if code != codeOfferAnswered && code != codeOfferExpired {
+		return nil
+	}
+	p, err := t.deps.Proposals.GetByID(ctx, id)
+	if err != nil {
+		return nil
+	}
+	s := p.State(time.Now().UTC())
+	return &s
 }
 
 // answered is the reply to an offer answered from its card with the option

@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -164,6 +165,47 @@ func TestAssistantProposals_ReopenReplaceExpire(t *testing.T) {
 	}
 	if got, err := repo.GetByID(ctx, old.ID); err != nil || got.Status != models.ProposalExpired {
 		t.Fatalf("expired = %+v, %v", got, err)
+	}
+}
+
+// A confirmed offer keeps what its run did; a pending one takes no outcome,
+// and reopening one clears it.
+func TestAssistantProposals_Outcome(t *testing.T) {
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	repo := repository.NewAssistantProposalRepository(db)
+	ctx := tenantCtx()
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+
+	p := newProposal(t, "camp-4", "applyCalendarMoves", now, now.Add(time.Hour))
+	if err := repo.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	outcome := &models.ProposalOutcome{Text: "Done: Move “Terrace” to Mon 14", Made: 1, Total: 1, Result: json.RawMessage(`{"moved":1}`)}
+	if err := repo.SetOutcome(ctx, p.ID, outcome); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repo.GetByID(ctx, p.ID); err != nil || got.Outcome != nil {
+		t.Fatalf("a pending offer's outcome = %+v, %v", got.Outcome, err)
+	}
+	if ok, err := repo.Resolve(ctx, p.ID, models.ProposalConfirmed, "", "user-1", now); err != nil || !ok {
+		t.Fatalf("resolve = %t, %v", ok, err)
+	}
+	if err := repo.SetOutcome(ctx, p.ID, outcome); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetByID(ctx, p.ID)
+	if err != nil || got.Outcome == nil || got.Outcome.Text != outcome.Text || got.Outcome.Made != 1 || string(got.Outcome.Result) != `{"moved": 1}` {
+		t.Fatalf("outcome = %+v, %v", got.Outcome, err)
+	}
+	if s := got.State(now); s.Outcome == nil || s.Outcome.Text != outcome.Text {
+		t.Fatalf("state = %+v", s)
+	}
+	if ok, err := repo.Reopen(ctx, p.ID); err != nil || !ok {
+		t.Fatalf("reopen = %t, %v", ok, err)
+	}
+	if got, err := repo.GetByID(ctx, p.ID); err != nil || got.Outcome != nil {
+		t.Fatalf("a reopened offer's outcome = %+v, %v", got.Outcome, err)
 	}
 }
 

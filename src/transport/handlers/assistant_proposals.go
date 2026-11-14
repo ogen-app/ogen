@@ -71,7 +71,10 @@ const maxOptionInputLen = 2048
 // @Description  not exist, 409 when it can't be answered (reason "offer_expired" — "proposal_resolved" says
 // @Description  "expired" the first time —, "offer_answered", or "offer_replaced" when a fresh offer replaced it),
 // @Description  names an unknown option, picks an option that asks for input without it (reason
-// @Description  "input_required"), or the work itself was refused (no reason; the message says why).
+// @Description  "input_required"), or the work itself was refused (no reason; the message says why). On
+// @Description  "offer_answered" and "offer_expired" it also carries "offer": the offer as it stands, shaped as a
+// @Description  thread message's offers, so the card settles without a reload. A run that did its work keeps
+// @Description  "outcome" {text, made, total, result} on the offer, which the thread's offers then carry.
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream
@@ -125,7 +128,8 @@ func (h *AssistantProposalsHandler) Confirm(c *fiber.Ctx) error {
 // @Summary      Dismiss an assistant offer
 // @Description  Withdraws an offer the assistant proposed. Nothing runs. Returns the turn's
 // @Description  assistant.Response (action "answered"). A 409 for an offer that can't be answered is
-// @Description  {"error":"...","reason":"offer_expired"|"offer_answered"}.
+// @Description  {"error":"...","reason":"offer_expired"|"offer_answered","offer":{...}}, offer being the offer as
+// @Description  it stands.
 // @Tags         assistant
 // @Produce      json
 // @Security     CookieAuth
@@ -144,7 +148,11 @@ func (h *AssistantProposalsHandler) Dismiss(c *fiber.Ctx) error {
 	if err != nil {
 		p := h.proposalError(err)
 		if p.Reason != "" {
-			return c.Status(p.Code).JSON(fiber.Map{"error": p.Message, "reason": p.Reason})
+			body := fiber.Map{"error": p.Message, "reason": p.Reason}
+			if p.Offer != nil {
+				body["offer"] = p.Offer
+			}
+			return c.Status(p.Code).JSON(body)
 		}
 		return fiber.NewError(p.Code, p.Message)
 	}
@@ -168,7 +176,7 @@ func (h *AssistantProposalsHandler) proposalError(err error) flowErrorPayload {
 		return flowErrorPayload{Message: "This offer no longer exists.", Code: fiber.StatusNotFound}
 	}
 	if ce, ok := errors.AsType[*assistant.ProposalConflictError](err); ok {
-		return flowErrorPayload{Message: ce.Msg, Code: fiber.StatusConflict, Reason: ce.Code}
+		return flowErrorPayload{Message: ce.Msg, Code: fiber.StatusConflict, Reason: ce.Code, Offer: ce.Offer}
 	}
 	if msg, ok := workModelFailure(err); ok {
 		return flowErrorPayload{Message: msg, Code: fiber.StatusBadGateway}
