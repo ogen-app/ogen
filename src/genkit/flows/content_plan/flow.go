@@ -88,6 +88,9 @@ type ContentPlanRepos struct {
 	// Brands resolves the campaign's brand voice/audience/guardrails into the
 	// prompt. nil falls back to the legacy tone_guidelines prose.
 	Brands repository.BrandRepository
+	// Series lists the campaign's series runs, whose rhythms reserve plan
+	// slots of their own. nil plans without series.
+	Series repository.SeriesRepository
 }
 
 // InitContentPlan registers the generateContentPlan Genkit flow. It must be

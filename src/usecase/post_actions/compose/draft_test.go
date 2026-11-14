@@ -183,3 +183,31 @@ func TestWrite_DateFrom(t *testing.T) {
 		t.Fatalf("undated = %+v, %v", res, err)
 	}
 }
+
+// A draft from a series idea carries the series and its format, and keeps
+// the plan date's weekday unless the call names the date.
+func TestPlanDraft_SeriesIdea(t *testing.T) {
+	tuesday, _ := models.ParseCalendarDate("2026-11-17")
+	reserved := idea("r", "c1", models.IdeaPlan{PlatformID: new("linkedin"), TargetDate: &tuesday})
+	reserved.SeriesID = new("s1")
+	plain := idea("p", "c1", models.IdeaPlan{PlatformID: new("linkedin")})
+	s, _ := draftService(reserved, plain)
+	s.WithSeries(digestSeries())
+
+	plan, err := s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"r", "p"}}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, p := plan.Jobs[0].Request, plan.Jobs[1].Request
+	if r.SeriesID != "s1" || r.ContentFormat == nil || *r.ContentFormat != models.ContentFormatDigest || !r.AnyDay {
+		t.Fatalf("series request = %+v", r)
+	}
+	if p.SeriesID != "" || p.ContentFormat != nil || p.AnyDay {
+		t.Fatalf("plain request = %+v", p)
+	}
+
+	plan, err = s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"r"}, TargetDate: &tuesday}, 5)
+	if err != nil || plan.Jobs[0].Request.SeriesID != "s1" || plan.Jobs[0].Request.AnyDay {
+		t.Fatalf("asked date: %+v, %v", plan.Jobs[0].Request, err)
+	}
+}

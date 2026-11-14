@@ -198,9 +198,14 @@ type draftSink struct {
 	grounding *models.GroundingMode
 	author    string
 	source    string
-	brand     *brandresolve.Resolved
-	repos     DraftPostRepos
-	onEvent   OnEventFunc
+	// series and format are stamped on each post; publishingDays is what its
+	// date snaps to, nil for any day.
+	series         *string
+	format         *models.ContentFormat
+	publishingDays []string
+	brand          *brandresolve.Resolved
+	repos          DraftPostRepos
+	onEvent        OnEventFunc
 
 	out      []DraftedPost
 	warnings []string
@@ -213,6 +218,15 @@ func draftGrounding(req DraftPostRequest) *models.GroundingMode {
 		return nil
 	}
 	return models.GroundingFor(len(req.UsedAssetIDs))
+}
+
+// snapDays is the weekdays a draft's date snaps to: the campaign's publishing
+// days, or nil (any day) when the request keeps each date's weekday.
+func snapDays(req DraftPostRequest, campaign *models.Campaign) []string {
+	if req.AnyDay {
+		return nil
+	}
+	return campaign.PublishingDays
 }
 
 // newDraftSink resolves the per-post dates, timezone and brand voice (once
@@ -228,20 +242,27 @@ func newDraftSink(ctx context.Context, req DraftPostRequest, campaign *models.Ca
 			logging.AttrComponent, logComponent, "error", err)
 	}
 	loc, _ := settings.ResolveTimezone(campaign.Timezone)
+	var series *string
+	if req.SeriesID != "" {
+		series = &req.SeriesID
+	}
 	return &draftSink{
-		campaign:  campaign,
-		platform:  platform,
-		phaseID:   req.PhaseID,
-		window:    window,
-		dates:     publishDates(window, count),
-		loc:       loc,
-		assetIDs:  req.UsedAssetIDs,
-		grounding: draftGrounding(req),
-		author:    cmp.Or(req.CreatedBy, campaign.CreatedBy),
-		source:    strings.TrimSpace(req.SourceMaterial),
-		brand:     brand,
-		repos:     repos,
-		onEvent:   onEvent,
+		campaign:       campaign,
+		platform:       platform,
+		phaseID:        req.PhaseID,
+		window:         window,
+		dates:          publishDates(window, count),
+		loc:            loc,
+		assetIDs:       req.UsedAssetIDs,
+		grounding:      draftGrounding(req),
+		author:         cmp.Or(req.CreatedBy, campaign.CreatedBy),
+		source:         strings.TrimSpace(req.SourceMaterial),
+		series:         series,
+		format:         req.ContentFormat,
+		publishingDays: snapDays(req, campaign),
+		brand:          brand,
+		repos:          repos,
+		onEvent:        onEvent,
 	}
 }
 
@@ -371,7 +392,7 @@ func (s *draftSink) persist(ctx context.Context, publishDate, title, content str
 	if s.window.dated() {
 		var noEnabledDay bool
 		scheduledAt, effDate, noEnabledDay = scheduling.ComposeScheduledAt(
-			publishDate, id, s.loc, s.campaign.PublishingTime, s.campaign.PublishingDays,
+			publishDate, id, s.loc, s.campaign.PublishingTime, s.publishingDays,
 			s.campaign.SpreadMinutes, &s.window.start, &s.window.end,
 		)
 		if noEnabledDay {
@@ -396,6 +417,8 @@ func (s *draftSink) persist(ctx context.Context, publishDate, title, content str
 		CampaignTypePhaseID: s.phaseIDFor(ctx, id),
 		ScheduledAt:         scheduledAt,
 		BrandVoiceID:        s.brand.VoiceID(),
+		SeriesID:            s.series,
+		ContentFormat:       s.format,
 		CreatedBy:           s.author,
 	}
 	if err := s.repos.Posts.Create(ctx, row); err != nil {

@@ -213,6 +213,11 @@ type Idea struct {
 	// idea without one. The columns are plan_platform_id, plan_post_type,
 	// plan_phase_id and plan_target_date.
 	Plan IdeaPlan `bun:"embed:plan_" json:"plan"`
+	// SeriesID is the series a content plan reserved the idea for; a post
+	// made from it takes the series and its format, and keeps the plan date's
+	// weekday. Nil for every other idea. It survives the series being deleted
+	// (series are soft-deleted).
+	SeriesID *string `bun:"series_id" json:"series_id" extensions:"x-nullable"`
 	// GroundingMode says whether a generated idea drew on the campaign's
 	// sources; nil for ideas people wrote and for analysis ideas, whose
 	// source is SourceAsset.

@@ -161,3 +161,38 @@ func TestPersist_UndatedWithoutAWindow(t *testing.T) {
 		}
 	}
 }
+
+// A series draft carries the series and its format, and with AnyDay keeps
+// its date's weekday instead of snapping to a publishing day.
+func TestPersist_SeriesKeepsItsWeekday(t *testing.T) {
+	campaign := &models.Campaign{ID: "c1", PublishingTime: "09:00", PublishingDays: []string{"mon", "wed", "fri"}}
+	format := models.ContentFormatDigest
+	for name, tc := range map[string]struct {
+		anyDay bool
+		want   string
+	}{
+		"series weekday": {true, "2026-11-17"},
+		"snapped":        {false, "2026-11-18"},
+	} {
+		req := DraftPostRequest{SeriesID: "s1", ContentFormat: &format, AnyDay: tc.anyDay}
+		w, err := parseWindow("2026-11-17", "2026-11-17")
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.end = day("2026-11-30")
+		posts := &savedPosts{}
+		sink := &draftSink{
+			campaign: campaign, window: w, dates: []string{"2026-11-17"}, loc: time.UTC,
+			series: &req.SeriesID, format: req.ContentFormat, publishingDays: snapDays(req, campaign),
+			repos: DraftPostRepos{Posts: posts},
+		}
+		dp, err := sink.persist(t.Context(), sink.dates[0], "T", "Body")
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := posts.rows[0]
+		if dp.PublishDate != tc.want || row.SeriesID == nil || *row.SeriesID != "s1" || row.ContentFormat == nil || *row.ContentFormat != format {
+			t.Fatalf("%s: date %s, series %v, format %v", name, dp.PublishDate, row.SeriesID, row.ContentFormat)
+		}
+	}
+}

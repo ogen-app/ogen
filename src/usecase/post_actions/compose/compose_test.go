@@ -76,7 +76,7 @@ func buildOne(s *Service, in Input, ideas []models.Idea, c *models.Campaign) (*m
 	if err != nil {
 		return nil, err
 	}
-	return s.build(in, targets[0], ideas, c)
+	return s.build(in, targets[0], ideas, c, nil)
 }
 
 // Each platform asked for gets its own post; the suggested post type goes
@@ -220,5 +220,69 @@ func TestDedupe_StopsPastTheLimit(t *testing.T) {
 	}
 	if got := dedupe([]string{" a", "b", "a ", "", "b"}, MaxIdeas); !slices.Equal(got, []string{"a", "b"}) {
 		t.Fatalf("dedupe = %v", got)
+	}
+}
+
+type memSeries struct {
+	repository.SeriesRepository
+	byID map[string]models.Series
+}
+
+func (r memSeries) GetByID(_ context.Context, id string) (*models.Series, error) {
+	if s, ok := r.byID[id]; ok {
+		return &s, nil
+	}
+	return nil, sql.ErrNoRows
+}
+
+func digestSeries() memSeries {
+	format := models.ContentFormatDigest
+	return memSeries{byID: map[string]models.Series{"s1": {ID: "s1", Name: "Tuesday digest", ContentFormat: &format}}}
+}
+
+// A post made from a series idea takes the series and its format, and its
+// plan date keeps the series' weekday even on a day the campaign doesn't
+// publish; a date the call names still snaps.
+func TestBuild_SeriesIdea(t *testing.T) {
+	s := (&Service{now: time.Now}).WithSeries(digestSeries())
+	tuesday, _ := models.ParseCalendarDate("2026-11-17")
+	c := spring()
+	c.PublishingDays = []string{"mon", "wed", "fri"}
+	plain := idea("p", "c1", models.IdeaPlan{PlatformID: new("linkedin")})
+	reserved := idea("r", "c1", models.IdeaPlan{PlatformID: new("linkedin"), TargetDate: &tuesday})
+	reserved.SeriesID = new("s1")
+	ideas := []models.Idea{plain, reserved}
+
+	series, err := s.seriesOf(t.Context(), ideas)
+	if err != nil || series == nil || series.id != "s1" || *series.format != models.ContentFormatDigest {
+		t.Fatalf("series = %+v, %v", series, err)
+	}
+	targets, _ := compileTargets(Input{}, ideas, c)
+	post, err := s.build(Input{}, targets[0], ideas, c, series)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if post.SeriesID == nil || *post.SeriesID != "s1" || post.ContentFormat == nil || *post.ContentFormat != models.ContentFormatDigest {
+		t.Fatalf("post series = %v, format = %v", post.SeriesID, post.ContentFormat)
+	}
+	if got := post.ScheduledAt.Format(time.DateOnly); got != "2026-11-17" {
+		t.Fatalf("scheduled on %s; want the series' Tuesday", got)
+	}
+
+	post, err = s.build(Input{TargetDate: &tuesday}, targets[0], ideas, c, series)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := post.ScheduledAt.Format(time.DateOnly); got != "2026-11-18" {
+		t.Fatalf("asked date scheduled on %s; want it snapped to Wednesday", got)
+	}
+
+	// A deleted series, or no series idea, stamps nothing.
+	gone := reserved
+	gone.SeriesID = new("deleted")
+	for name, ideas := range map[string][]models.Idea{"deleted": {gone}, "none": {plain}} {
+		if series, err := s.seriesOf(t.Context(), ideas); series != nil || err != nil {
+			t.Errorf("%s: series = %+v, %v", name, series, err)
+		}
 	}
 }

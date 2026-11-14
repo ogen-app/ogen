@@ -3,6 +3,7 @@ package draft_post
 import (
 	"text/template"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
@@ -31,6 +32,13 @@ type DraftPostRequest struct {
 	// CreatedBy is the user the posts and source notes are attributed to;
 	// empty attributes them to the campaign's creator.
 	CreatedBy string `json:"createdBy,omitempty"`
+	// SeriesID and ContentFormat are stamped on each post: the series it
+	// belongs to and the format it takes from it. Empty for no series.
+	SeriesID      string                `json:"seriesId,omitempty"`
+	ContentFormat *models.ContentFormat `json:"contentFormat,omitempty"`
+	// AnyDay keeps each publish date on its weekday instead of snapping it to
+	// one of the campaign's publishing days.
+	AnyDay bool `json:"anyDay,omitempty"`
 }
 
 // DraftedPost is one finished post draft produced + persisted by the flow.
