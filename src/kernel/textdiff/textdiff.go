@@ -12,11 +12,11 @@ import (
 const MaxLines = 400
 
 // Change is a run of lines rewritten: Before the lines it had, After the
-// lines it has now, each joined by "\n". Before is empty for lines added,
-// After for lines removed.
+// lines it has now. Before is empty for lines added, After for lines
+// removed; a blank line is "", so adding one and removing one differ.
 type Change struct {
-	Before string `json:"before"`
-	After  string `json:"after"`
+	Before []string `json:"before"`
+	After  []string `json:"after"`
 }
 
 // Lines is how after's lines differ from before's, in order: the lines
@@ -27,7 +27,7 @@ func Lines(before, after string) []Change {
 	}
 	a, b := split(before), split(after)
 	if len(a) > MaxLines || len(b) > MaxLines {
-		return []Change{{Before: before, After: after}}
+		return []Change{{Before: lines(a), After: lines(b)}}
 	}
 	// keep[i][j] is the length of the longest run a[i:] and b[j:] share.
 	keep := make([][]int, len(a)+1)
@@ -47,7 +47,7 @@ func Lines(before, after string) []Change {
 	var was, now []string
 	flush := func() {
 		if len(was) > 0 || len(now) > 0 {
-			out = append(out, Change{Before: strings.Join(was, "\n"), After: strings.Join(now, "\n")})
+			out = append(out, Change{Before: lines(was), After: lines(now)})
 			was, now = nil, nil
 		}
 	}
@@ -67,6 +67,15 @@ func Lines(before, after string) []Change {
 	}
 	flush()
 	return slices.Clip(out)
+}
+
+// lines is l as a change's side: empty, never nil, so it reads [] and not
+// null.
+func lines(l []string) []string {
+	if l == nil {
+		return []string{}
+	}
+	return l
 }
 
 // split is s's lines; none for an empty text.
