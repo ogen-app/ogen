@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
@@ -25,11 +26,11 @@ func (r *Resolver) finding(ctx context.Context, v *viewcontext.ViewContext) (*vi
 	if err != nil {
 		return nil, fmt.Errorf("read the campaign's thread: %w", err)
 	}
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != "model" {
+	for _, m := range slices.Backward(msgs) {
+		if m.Role != "model" {
 			continue
 		}
-		f := findIn(msgs[i].Content, from.Key)
+		f := findIn(m.Content, from.Key)
 		if f == nil {
 			continue
 		}

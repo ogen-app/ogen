@@ -34,9 +34,9 @@ func Lines(before, after string) []Change {
 	for i := range keep {
 		keep[i] = make([]int, len(b)+1)
 	}
-	for i := len(a) - 1; i >= 0; i-- {
-		for j := len(b) - 1; j >= 0; j-- {
-			if a[i] == b[j] {
+	for i, line := range slices.Backward(a) {
+		for j, other := range slices.Backward(b) {
+			if line == other {
 				keep[i][j] = keep[i+1][j+1] + 1
 			} else {
 				keep[i][j] = max(keep[i+1][j], keep[i][j+1])

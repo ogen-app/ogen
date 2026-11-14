@@ -180,6 +180,9 @@ type closeRule struct {
 	what string
 	// shares reports whether two posts share the thing.
 	shares func(a, b *models.Post) bool
+	// ideas are the ideas two posts share, which the finding names; nil
+	// for a rule about something else.
+	ideas func(a, b *models.Post) []models.LinkedIdea
 }
 
 // closeTogether is a finding per pair of posts on one platform from the
@@ -199,7 +202,7 @@ func (k *calendar) closeTogether(ideas map[string][]models.LinkedIdea) []Finding
 		return out
 	}
 	rules := []closeRule{
-		{code: CodeSameIdea, days: SameIdeaDays, what: "come from the same idea", shares: func(a, b *models.Post) bool {
+		{code: CodeSameIdea, days: SameIdeaDays, what: "come from the same idea", ideas: shared, shares: func(a, b *models.Post) bool {
 			return len(shared(a, b)) > 0
 		}},
 		{code: CodeSameSource, days: SameSourceDays, what: "use the same source", shares: func(a, b *models.Post) bool {
@@ -217,26 +220,31 @@ func (k *calendar) closeTogether(ideas map[string][]models.LinkedIdea) []Finding
 					continue
 				}
 				seen[pair] = true
-				f := Finding{Code: r.code, Severity: SeverityWarning, PostIDs: sorted(pair[:]), Fixes: []Fix{},
-					Message: fmt.Sprintf("%q and %q %s and publish %s on %s", a.Title, b.Title, r.what,
-						apart(days(a.day, b.day)), cmp.Or(platformName(k.c, a.PlatformID), "no platform")),
-					Detail: fmt.Sprintf("%s; posts that %s go out at least %s apart on one platform.",
-						dayList([]time.Time{a.day, b.day}), r.what, plural(r.days, "day", "days"))}
-				if r.code == CodeSameIdea {
-					f.Ideas = shared(a.Post, b.Post)
-				}
-				for _, p := range []dated{b, a} {
-					fix, ok := k.move(p, func(d time.Time) bool { return k.farFrom(p, d, r) })
-					if ok {
-						f.Fixes = append(f.Fixes, fix)
-						break
-					}
-				}
-				out = append(out, f)
+				out = append(out, k.closeFinding(r, a, b))
 			}
 		}
 	}
 	return out
+}
+
+// closeFinding is r's finding for a and b, a before b, with the move that
+// fixes it: the later post's when it can be moved, else the earlier's.
+func (k *calendar) closeFinding(r closeRule, a, b dated) Finding {
+	f := Finding{Code: r.code, Severity: SeverityWarning, PostIDs: sorted([]string{a.ID, b.ID}), Fixes: []Fix{},
+		Message: fmt.Sprintf("%q and %q %s and publish %s on %s", a.Title, b.Title, r.what,
+			apart(days(a.day, b.day)), cmp.Or(platformName(k.c, a.PlatformID), "no platform")),
+		Detail: fmt.Sprintf("%s; posts that %s go out at least %s apart on one platform.",
+			dayList([]time.Time{a.day, b.day}), r.what, plural(r.days, "day", "days"))}
+	if r.ideas != nil {
+		f.Ideas = r.ideas(a.Post, b.Post)
+	}
+	for _, p := range []dated{b, a} {
+		if fix, ok := k.move(p, func(d time.Time) bool { return k.farFrom(p, d, r) }); ok {
+			f.Fixes = append(f.Fixes, fix)
+			break
+		}
+	}
+	return f
 }
 
 // farFrom reports whether day d is at least r.days from every other post on
