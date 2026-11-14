@@ -167,7 +167,7 @@ func TestCheckCalendar_MovePostFix(t *testing.T) {
 	}
 	// It is a choice of free slots, the nearest recommended and offered
 	// as the plain move, each its own move at the publishing time.
-	if len(p.Options) < 2 || !p.Options[0].Recommended || p.Options[1].Recommended || p.Options[0].ID != in.Moves[0].To ||
+	if len(p.Options) < 2 || !p.Options[0].Recommended || p.Options[0].Why == "" || p.Options[1].Recommended || p.Options[0].ID != in.Moves[0].To ||
 		p.Card == nil || p.Card.Verb != "Move to "+p.Options[0].Title || !strings.HasSuffix(p.Card.Meta, "free slots") {
 		t.Fatalf("slots = %+v, card %+v", p.Options, p.Card)
 	}

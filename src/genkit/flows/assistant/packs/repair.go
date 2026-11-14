@@ -301,8 +301,12 @@ func slotChoice(c *models.Campaign, p models.Post, fix calendarcheck.Fix) (Apply
 		if len(args.Moves) == 0 {
 			args.Moves = []Move{m}
 		}
-		options = append(options, assistantkit.Option{ID: day, Title: at.In(loc).Format("Mon 2 Jan, 15:04"), Description: description,
-			Recommended: len(options) == 0, Tool: "applyCalendarMoves", Args: ApplyMovesInput{CampaignID: c.ID, Moves: []Move{m}}})
+		o := assistantkit.Option{ID: day, Title: at.In(loc).Format("Mon 2 Jan, 15:04"), Description: description,
+			Tool: "applyCalendarMoves", Args: ApplyMovesInput{CampaignID: c.ID, Moves: []Move{m}}}
+		if len(options) == 0 {
+			o.Recommended, o.Why = true, "It's the free slot nearest the post's date."
+		}
+		options = append(options, o)
 	}
 	if len(options) == 0 {
 		return args, nil, nil
