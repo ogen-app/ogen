@@ -150,7 +150,7 @@ func TestRenderSections(t *testing.T) {
 		Published: posts(w, 3),
 		Counts: repository.WeeklyCounts{
 			PrevPublished: 2, Failed: 1, PrevFailed: 2, ScheduledNext: 9, ManualDue: 2,
-			IdeasWaiting: 7, IdeasCreated: 18, MembersTotal: 6, MembersJoined: 1, InvitesPending: 1,
+			IdeasWaiting: 7, IdeasCreated: 18, IdeasDecided: 12, MembersTotal: 6, MembersJoined: 1, InvitesPending: 1,
 		},
 		Failures: []repository.ReportFailure{{
 			PostID: "f1", CampaignID: "c1", Content: "Autumn lookbook carousel", Platform: "Instagram",
@@ -218,7 +218,8 @@ func TestRenderSections(t *testing.T) {
 		c.Rows[1].Status != "Goal met" || c.Rows[1].Goal != "Goal: 3 posts a week · 3-week streak" {
 		t.Errorf("campaigns = %+v", c)
 	}
-	if v.Ideas == nil || v.Ideas.Waiting != "7 ideas are waiting for your call" || v.Ideas.Summary != "18 new ideas" {
+	if v.Ideas == nil || v.Ideas.Waiting != "7 ideas are waiting for your call" || v.Ideas.Summary != "18 new ideas · 12 decided" ||
+		v.Ideas.Decided != 12 || v.Ideas.WaitingCount != 7 {
 		t.Errorf("ideas = %+v", v.Ideas)
 	}
 	if v.Team == nil || v.Team.Summary != "4 of 6 members were active · 1 member joined · 1 invite pending" {
@@ -259,5 +260,14 @@ func TestCount(t *testing.T) {
 		if got := count(n); got != want {
 			t.Errorf("count(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+// A week of decisions alone keeps the Ideas section, saying them, so the
+// numbers reach the card and the email never shows an empty section.
+func TestRenderIdeas_DecidedOnly(t *testing.T) {
+	i := renderIdeas(Facts{Counts: repository.WeeklyCounts{IdeasDecided: 5}}, links{base: "https://app.test"})
+	if i == nil || i.Decided != 5 || i.WaitingCount != 0 || i.Summary != "5 decided" || i.Waiting != "" {
+		t.Fatalf("ideas = %+v", i)
 	}
 }
