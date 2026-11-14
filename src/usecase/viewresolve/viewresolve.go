@@ -52,6 +52,11 @@ type PostIDs interface {
 	QueryIDs(ctx context.Context, q models.PostQuery, limit int) ([]string, int, error)
 }
 
+// Threads reads a thread's latest messages; repository.AssistantMessageRepository.
+type Threads interface {
+	ListRecent(ctx context.Context, kind models.AssistantScopeKind, scopeID string, limit int) ([]models.AssistantMessage, error)
+}
+
 // Item is one referenced entity. Title is empty for a kind without titles,
 // whose id is passed through unverified.
 type Item struct {
@@ -79,20 +84,32 @@ type Resolved struct {
 	Visible []Item
 	// Summary is the screen in one line, for the prompt.
 	Summary string
+	// From is the review finding the post thread was opened from, as the
+	// review gave it; nil when it wasn't. View.From.Finding holds it too,
+	// so the message stores it.
+	From *viewcontext.Finding
 }
 
 // Resolver reloads view contexts.
 type Resolver struct {
-	titles Titles
-	ideas  IdeaIDs
-	assets AssetIDs
-	posts  PostIDs
-	now    func() time.Time
+	titles  Titles
+	ideas   IdeaIDs
+	assets  AssetIDs
+	posts   PostIDs
+	threads Threads
+	now     func() time.Time
 }
 
 // New returns a Resolver.
 func New(titles Titles, ideaIDs IdeaIDs, assetIDs AssetIDs, postIDs PostIDs) *Resolver {
 	return &Resolver{titles: titles, ideas: ideaIDs, assets: assetIDs, posts: postIDs, now: time.Now}
+}
+
+// WithThreads lets the resolver find the review finding a post thread is
+// opened from, in its campaign's thread; without it such a view is refused.
+func (r *Resolver) WithThreads(threads Threads) *Resolver {
+	r.threads = threads
+	return r
 }
 
 // Resolve reloads v in the caller's tenant. It returns ErrScopeNotFound for a
@@ -156,6 +173,13 @@ func (r *Resolver) Resolve(ctx context.Context, v *viewcontext.ViewContext) (*Re
 	}
 	if v.Visible != nil {
 		out.Visible = refs.items(v.Visible.Kind, v.Visible.IDs)
+	}
+	if v.From != nil {
+		f, err := r.finding(ctx, v)
+		if err != nil {
+			return nil, err
+		}
+		out.From, v.From.Finding = f, f
 	}
 	out.Summary = summary(out)
 	return out, nil

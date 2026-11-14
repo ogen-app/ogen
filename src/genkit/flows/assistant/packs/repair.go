@@ -23,6 +23,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/textdiff"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
@@ -901,6 +902,9 @@ type RevisePostOutput struct {
 	// Length is the copy's length in characters before and after; unset
 	// when the rewrite couldn't be read back.
 	Length *Lengths `json:"length,omitempty"`
+	// Lines are the runs of lines the rewrite changed, as they were and as
+	// they are, for the card to strike the old above the new.
+	Lines []textdiff.Change `json:"lines,omitempty"`
 }
 
 // Lengths is a text's length in characters before and after a change.
@@ -951,6 +955,7 @@ func revisePost(ctx context.Context, d Deps, in RevisePostInput) (*RevisePostOut
 		}
 	}
 	out.Length = &Lengths{Before: utf8.RuneCountInString(was.Content), After: utf8.RuneCountInString(rev.Content)}
+	out.Lines = textdiff.Lines(was.Content, rev.Content)
 	return out, nil
 }
 

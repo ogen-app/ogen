@@ -248,6 +248,19 @@ func TestResult_ReportsTheLatestContent(t *testing.T) {
 	}
 }
 
+// An edit says which lines it rewrote, as they were before the turn.
+func TestResult_EditLines(t *testing.T) {
+	st := &requestState{
+		editResult: &editResult{Content: "Hook\nInvite them in.\nCTA"},
+		content:    "Hook\nInvite them in.\nCTA",
+		original:   "Hook\nBook now!!!\nCTA",
+	}
+	r := st.result()
+	if len(r.Lines) != 1 || r.Lines[0].Before != "Book now!!!" || r.Lines[0].After != "Invite them in." {
+		t.Fatalf("lines = %+v", r.Lines)
+	}
+}
+
 // toolOutput is the JSON of the last result of tool the model was given.
 func toolOutput(t *testing.T, m *fakemodel.Model, tool string) string {
 	t.Helper()

@@ -456,7 +456,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Proposals:  r.proposalRepo,
 			Messages:   r.assistantMessageRepo,
 			Events:     d.hub,
-			Views:      viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo, r.postRepo),
+			Views:      viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo, r.postRepo).WithThreads(r.assistantMessageRepo),
 			SavedViews: r.savedViewRepo,
 			SavedViewLists: savedviews.New(r.savedViewRepo, d.hub,
 				ideas.NewSurface(r.ideaRepo), assets.NewSurface(r.pieceRepo)),

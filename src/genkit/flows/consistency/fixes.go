@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 )
@@ -54,6 +55,16 @@ func postFinding(campaignID string, p models.Post, f PostFinding) PostFinding {
 	}
 	f.Fixes = append(f.Fixes, Fix{Kind: FixOpenPost, Title: "Open the post", PostID: p.ID})
 	return f
+}
+
+// quoteOf is the model's quote when the post has those words, else empty:
+// a quote the post doesn't contain would point at nothing.
+func quoteOf(content, quote string) string {
+	quote = strings.TrimSpace(quote)
+	if quote == "" || !strings.Contains(content, quote) {
+		return ""
+	}
+	return quote
 }
 
 func key(code string, parts ...string) string {
