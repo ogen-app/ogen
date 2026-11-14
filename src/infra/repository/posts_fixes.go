@@ -55,6 +55,34 @@ func (r *postRepository) SetScheduleIf(ctx context.Context, db bun.IDB, changes 
 	return set, err
 }
 
+// VoiceChange sets one post's own brand voice from From to To; nil is none,
+// so the post reads as its campaign's voice.
+type VoiceChange struct {
+	PostID   string
+	From, To *string
+}
+
+// SetVoiceIf sets a post's own voice while it is still From, and reports
+// whether it did.
+func (r *postRepository) SetVoiceIf(ctx context.Context, db bun.IDB, c VoiceChange, now time.Time) (bool, error) {
+	if db == nil {
+		db = r.db
+	}
+	// The TenantScoped hook adds the tenant predicate.
+	res, err := db.NewUpdate().
+		Model((*models.Post)(nil)).
+		Set("brand_voice_id = ?", c.To).
+		Set("updated_at = ?", now).
+		Where("po.id = ?", c.PostID).
+		Where("po.brand_voice_id IS NOT DISTINCT FROM ?", c.From).
+		Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // PostTypeChange changes one post's post type and status.
 type PostTypeChange struct {
 	PostID     string

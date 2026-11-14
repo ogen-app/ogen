@@ -50,6 +50,8 @@ func TestCheckBrand(t *testing.T) {
 			}}, nil
 		}}
 	ctx, _ := turn(t, campaign1, nil)
+	first := &offers{}
+	ctx = assistantkit.WithProposalSink(ctx, first)
 
 	out, err := checkBrand(ctx, d, CheckBrandInput{})
 	if err != nil {
@@ -64,6 +66,15 @@ func TestCheckBrand(t *testing.T) {
 	if len(out.Findings) != 2 || out.Findings[0].PostID != "p1" || out.Findings[0].Title != "Rooms" || len(out.Findings[0].Fixes) != 1 ||
 		out.Findings[0].Fixes[0].PostID != "p1" || out.Findings[0].Fixes[0].Kind != "open_post" || out.Findings[0].CampaignID != "c1" {
 		t.Fatalf("findings = %+v; want the high one first, opening its post", out.Findings)
+	}
+	// p2 is in a voice of its own, so its voice finding offers the
+	// campaign's, which is the workspace's default, without rewriting it.
+	if fixes := out.Findings[1].Fixes; len(fixes) != 2 || fixes[0].Kind != FixUseVoice || fixes[0].Title != "Use Plain, the campaign's voice" ||
+		fixes[0].ProposalID == "" || fixes[0].Card == nil || fixes[0].Card.Rows[0].Note != "Formal → Plain" {
+		t.Fatalf("p2 fixes = %+v", fixes)
+	}
+	if args := first.got[0].Args.(SetPostVoiceInput); first.got[0].Tool != "setPostVoice" || args.PostID != "p2" || args.VoiceID != "" {
+		t.Fatalf("offer = %+v", first.got[0])
 	}
 	if want := []BrandRef{{ID: "v1", Name: "Plain"}, {ID: "v2", Name: "Formal"}}; out.Clean != 0 ||
 		!slices.Equal(out.CheckedAgainst.Voices, want) || !out.CheckedAgainst.Guardrails {

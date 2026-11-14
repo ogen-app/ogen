@@ -76,3 +76,32 @@ func TestPostSetPostTypeIf(t *testing.T) {
 		t.Fatalf("post = %s %s", got.PlatformPostType, got.Status)
 	}
 }
+
+// A post's own voice changes only while it is still the one the change saw;
+// nil is none, so the post reads as its campaign's.
+func TestPostSetVoiceIf(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewPostRepository(db)
+	brand := repository.NewBrandRepository(db)
+	for _, id := range []string{"voice-a", "voice-b"} {
+		if err := brand.CreateVoice(ctx, &models.BrandVoice{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := fixPost(t, repo, nil, models.PostStatusDraft, "")
+
+	if ok, err := repo.SetVoiceIf(ctx, nil, repository.VoiceChange{PostID: p.ID, To: new("voice-a")}, time.Now().UTC()); err != nil || !ok {
+		t.Fatalf("set = %v, %v", ok, err)
+	}
+	// The change saw no voice, and the post has one now.
+	if ok, err := repo.SetVoiceIf(ctx, nil, repository.VoiceChange{PostID: p.ID, To: new("voice-b")}, time.Now().UTC()); err != nil || ok {
+		t.Fatalf("stale set = %v, %v", ok, err)
+	}
+	if ok, err := repo.SetVoiceIf(ctx, db, repository.VoiceChange{PostID: p.ID, From: new("voice-a")}, time.Now().UTC()); err != nil || !ok {
+		t.Fatalf("clear = %v, %v", ok, err)
+	}
+	if got, _ := repo.GetByID(ctx, p.ID); got.BrandVoiceID != nil {
+		t.Fatalf("voice = %v, want none", *got.BrandVoiceID)
+	}
+}
