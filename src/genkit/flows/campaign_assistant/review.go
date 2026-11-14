@@ -38,13 +38,13 @@ type ReviewFinding struct {
 	Kind string `json:"kind"`
 	// Key dismisses the finding while the brief, or its post, stays the
 	// same.
-	Key        string     `json:"key"`
-	Severity   string     `json:"severity"`
-	Aspect     string     `json:"aspect,omitempty"`
-	PostID     string     `json:"postId,omitempty"`
-	Title      string     `json:"title,omitempty"`
-	Issue      string     `json:"issue"`
-	Suggestion string     `json:"suggestion,omitempty"`
+	Key        string `json:"key"`
+	Severity   string `json:"severity"`
+	Aspect     string `json:"aspect,omitempty"`
+	PostID     string `json:"postId,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Issue      string `json:"issue"`
+	Suggestion string `json:"suggestion,omitempty"`
 	// Quote is, on a post finding, the post's words the issue is about,
 	// exactly as the post has them; empty when it is the whole post.
 	Quote string     `json:"quote,omitempty"`
