@@ -15,9 +15,10 @@ import (
 
 // memDistill is one ready run, w1, superseding w0.
 type memDistill struct {
-	requested *branddistill.RequestInput
-	refined   []branddistill.Answer
-	committed *branddistill.CommitInput
+	requested  *branddistill.RequestInput
+	refined    []branddistill.Answer
+	refinedRun string
+	committed  *branddistill.CommitInput
 }
 
 var distillProposal = &models.BrandProposal{
@@ -42,8 +43,8 @@ func (m *memDistill) List(context.Context, string) ([]models.BrandDistillRun, er
 	return []models.BrandDistillRun{{ID: "w0", Status: models.BrandDistillStatusSuperseded}, {ID: "w1", Status: models.BrandDistillStatusReady}}, nil
 }
 
-func (m *memDistill) Refine(_ context.Context, _, _ string, _ *string, in []branddistill.Answer) (*models.BrandDistillRun, error) {
-	m.refined = in
+func (m *memDistill) Refine(_ context.Context, _, runID string, _ *string, in []branddistill.Answer) (*models.BrandDistillRun, error) {
+	m.refinedRun, m.refined = runID, in
 	return &models.BrandDistillRun{ID: "w3", Status: models.BrandDistillStatusPending}, nil
 }
 
@@ -95,6 +96,23 @@ func TestDistill(t *testing.T) {
 	// Naming it saves it.
 	if _, err := commitDistill(ctx, d, CommitDistillInput{Keep: []string{"pd1"}}); err != nil || m.committed.Disclaimer == nil || len(m.committed.Voices) != 0 {
 		t.Fatalf("commit = %+v, %v", m.committed, err)
+	}
+
+	// On an open reading, that reading is the one read, answered and saved,
+	// not the latest; a run named outright still wins.
+	read, _ := assistant.NewViewTurnContext(tenantctx.With(t.Context(), "tenant-1"), viewcontext.ViewContext{
+		Version: viewcontext.Version, Screen: "foundation.read", Scope: workspace, Focus: &viewcontext.Ref{Kind: viewcontext.KindDistill, ID: "w9"}}, nil)
+	if got, err := getBrandDistill(read, d, DistillRef{}); err != nil || got.RunID != "w9" {
+		t.Fatalf("open = %+v, %v", got, err)
+	}
+	if _, err := answerDistill(read, d, AnswerDistillInput{Answers: []DistillAnswerInput{{QuestionID: "q1", Answer: "Families"}}}); err != nil || m.refinedRun != "w9" {
+		t.Fatalf("refined %q, %v", m.refinedRun, err)
+	}
+	if _, err := commitDistill(read, d, CommitDistillInput{}); err != nil || m.committed.RunID != "w9" {
+		t.Fatalf("commit = %+v, %v", m.committed, err)
+	}
+	if got, err := getBrandDistill(read, d, DistillRef{RunID: "w1"}); err != nil || got.RunID != "w1" {
+		t.Fatalf("named = %+v, %v", got, err)
 	}
 }
 

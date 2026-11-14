@@ -107,6 +107,22 @@ func TestEntityTitles(t *testing.T) {
 	if got, err := titles.Titles(ctx, viewcontext.KindFact, []string{factID, "missing"}); err != nil || got[factID] != statement[:80] || len(got) != 1 {
 		t.Fatalf("facts = %v, %v; want the statement's opening 80 characters", got, err)
 	}
+	// A reading is named for the website it read, else the day it started.
+	runs := repository.NewBrandDistillRepository(db)
+	siteRun := &models.BrandDistillRun{ID: mustID(t), Status: models.BrandDistillStatusReady, WebsiteURL: new("https://acme.com")}
+	docRun := &models.BrandDistillRun{ID: mustID(t), Status: models.BrandDistillStatusReady}
+	for _, run := range []*models.BrandDistillRun{siteRun, docRun} {
+		if err := runs.Create(ctx, db, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := map[string]string{siteRun.ID: "brand reading of https://acme.com", docRun.ID: "brand reading started " + docRun.CreatedAt.Format(time.DateOnly)}
+	if got, err := titles.Titles(ctx, viewcontext.KindDistill, []string{siteRun.ID, docRun.ID, "missing"}); err != nil || !maps.Equal(got, want) {
+		t.Fatalf("readings = %v, %v; want %v", got, err, want)
+	}
+	if got, err := titles.Titles(tenantctx.With(context.Background(), "tenant-other"), viewcontext.KindDistill, []string{siteRun.ID}); err != nil || len(got) != 0 {
+		t.Fatalf("another tenant read reading %v (err %v)", got, err)
+	}
 	// Every kind a view context can name is checked.
 	for _, kind := range viewcontext.Kinds() {
 		if _, err := titles.Titles(ctx, kind, nil); err != nil {

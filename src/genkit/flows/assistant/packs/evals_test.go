@@ -130,6 +130,7 @@ var (
 	evalOpenVoice = &viewcontext.Ref{Kind: viewcontext.KindVoice, ID: "v1"}
 	evalOpenAud   = &viewcontext.Ref{Kind: viewcontext.KindAudience, ID: "au1"}
 	evalOpenSer   = &viewcontext.Ref{Kind: viewcontext.KindSeries, ID: "s1"}
+	evalOpenRead  = &viewcontext.Ref{Kind: viewcontext.KindDistill, ID: "r1"}
 	evalOpenIdea  = &viewcontext.Ref{Kind: viewcontext.KindIdea, ID: "i1"}
 	evalIdeas     = []string{"Pricing myths founders believe", "Why pricing pages fail", "A founder's pricing story"}
 	writes        = []string{"runContentPlan", "generatePosts", "draftPost", "enrichBrief", "setCampaignDates", "redistributePosts", "editPost", "deleteIdeas",
@@ -276,6 +277,8 @@ var evalCases = []evalCase{
 	{pack: "foundation", screen: "foundation.questions", scope: evalWorkspace, say: "What does the brand reading still want to know?", want: []string{"getBrandDistill"}, not: writes},
 	{pack: "foundation", screen: "foundation.questions", scope: evalWorkspace, say: "Answer its question about who books most: families with young kids.", want: []string{"getBrandDistill", "answerDistillQuestions"}},
 	{pack: "foundation", screen: "foundation", scope: evalWorkspace, say: "Save everything the brand reading proposed.", want: []string{"getBrandDistill", "commitBrandDistill"}},
+	{pack: "foundation", screen: "foundation.read", scope: evalWorkspace, focus: evalOpenRead, title: "brand reading of villa-aurora.com", say: "Answer what you can.", want: []string{"getBrandDistill", "answerDistillQuestions"}},
+	{pack: "foundation", screen: "foundation.read", scope: evalWorkspace, focus: evalOpenRead, title: "brand reading of villa-aurora.com", say: "Save this.", want: []string{"commitBrandDistill"}},
 	// workspace
 	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "What happened yesterday?", want: []string{"activityReport"}},
 	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Do any of my accounts need reconnecting?", want: []string{"workspaceSetup"}},

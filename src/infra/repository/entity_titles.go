@@ -57,6 +57,10 @@ var titleSources = map[viewcontext.EntityKind]titleSource{
 	// A fact has no title; its statement's opening words stand in for it.
 	viewcontext.KindFact:   {(*models.BrandFact)(nil), "bf.id", "left(bf.statement, 80)", "", ""},
 	viewcontext.KindSeries: {(*models.Series)(nil), "bs.id", "bs.name", "bs.deleted_at IS NULL", ""},
+	// A reading has no title; the website it read, or the day it started,
+	// stands in for it.
+	viewcontext.KindDistill: {(*models.BrandDistillRun)(nil), "bdr.id",
+		"coalesce('brand reading of ' || nullif(bdr.website_url, ''), 'brand reading started ' || to_char(bdr.created_at, 'YYYY-MM-DD'))", "", ""},
 }
 
 // Titles reads the titles of ids of kind in the caller's tenant.
