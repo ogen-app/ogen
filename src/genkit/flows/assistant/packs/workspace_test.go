@@ -117,8 +117,17 @@ type memPostLogs struct {
 	list []models.PostLog
 }
 
-func (m memPostLogs) ListFiltered(context.Context, repository.PostLogFilter) ([]models.PostLog, error) {
-	return m.list, nil
+// ListFiltered keeps the post log's rules: newest first, on or after
+// Since, at most Limit.
+func (m memPostLogs) ListFiltered(_ context.Context, f repository.PostLogFilter) ([]models.PostLog, error) {
+	logs := slices.DeleteFunc(slices.Clone(m.list), func(l models.PostLog) bool {
+		return !f.Since.IsZero() && l.EventTimestamp.Before(f.Since)
+	})
+	slices.SortStableFunc(logs, func(a, b models.PostLog) int { return b.EventTimestamp.Compare(a.EventTimestamp) })
+	if f.Limit > 0 && len(logs) > f.Limit {
+		logs = logs[:f.Limit]
+	}
+	return logs, nil
 }
 
 type memUsers struct{ repository.UserRepository }
@@ -381,6 +390,34 @@ func TestPostHistory_Changes(t *testing.T) {
 	refused(t, err)
 	_, err = postHistory(ctx, d, PostHistoryInput{Since: "Monday"})
 	refused(t, err)
+}
+
+// When the log has more entries than a history reads, what is older than
+// the oldest one read is left out, and the history says there is more,
+// even when nothing newer matches.
+func TestPostHistory_LogWindowFull(t *testing.T) {
+	start := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
+	logs := []models.PostLog{{EventTimestamp: start, EventType: models.PostLogEventUserCancel, Actor: "u1"}}
+	for i := range historyLogWindow {
+		logs = append(logs, models.PostLog{EventTimestamp: start.Add(time.Duration(i+1) * time.Hour), EventType: models.PostLogEventTaskStarted, Actor: models.ActorSystem})
+	}
+	d := Deps{
+		Posts:    examplePosts{byID: map[string]*models.Post{"p1": {ID: "p1", Title: "Easter brunch"}}},
+		Versions: memVersions{list: []models.PostVersion{{VersionNumber: 1, CreatedAt: start.Add(-time.Hour), Creator: models.PostVersionCreatorUser, CreatedBy: "u1"}}},
+		PostLogs: memPostLogs{list: logs},
+		Users:    memUsers{},
+	}
+	ctx, _ := turn(t, viewcontext.Scope{Kind: models.AssistantScopePost, ID: "p1"}, nil)
+	out, err := postHistory(ctx, d, PostHistoryInput{Changes: []string{"unscheduled"}})
+	if err != nil || len(out.Entries) != 0 || !out.More {
+		t.Fatalf("out = %+v, %v; want no entries and more", out, err)
+	}
+	// Since narrows what is read, so a later day fits the window and its
+	// history is whole: the machinery after it is no change at all.
+	out, err = postHistory(ctx, d, PostHistoryInput{Since: "2026-04-15"})
+	if err != nil || out.More || len(out.Entries) != 0 {
+		t.Fatalf("since = %+v, %v", out, err)
+	}
 }
 
 // The report goes to the members named, by name or email, once each;
