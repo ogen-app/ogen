@@ -26,6 +26,7 @@ func readDeps() Deps {
 	repo.byID["i1"] = &models.Idea{ID: "i1", Title: "Pricing myths founders believe", Origin: models.IdeaOriginAssetAnalysis,
 		CampaignID: &c1, Angle: new("myth-busting"), Rationale: new("the brochure lists three myths"), Sources: []string{"“Most founders underprice.”"},
 		SourceAssetID: new("a1"), AssetAnalysisID: &an, FitScore: new(72),
+		SourceLocator: &models.SourceLocator{ChunkID: "a1:4", Label: "p. 12", Page: new(12)},
 		FitBreakdown: &ideafit.Breakdown{Lens: ideafit.LensCampaign, CampaignID: &c1,
 			Criteria: map[string]ideafit.Rating{"evidence": {Level: 4, Why: "a clear claim backs it"}}, Caps: []ideafit.Cap{ideafit.CapOffBrief}}}
 	repo.byID["i2"].CreatedByName, repo.byID["i2"].CampaignID, repo.byID["i2"].AssetIDs = "Olena", &c1, []string{"a1"}
@@ -38,8 +39,8 @@ func readDeps() Deps {
 }
 
 // getIdea explains an idea: its parts, each rating with what its level
-// means, the cap, its source and analysis, and the posts made from it. A
-// hand-written idea says no lens scored it.
+// means, the cap, its source with the passage it came from and analysis, and
+// the posts made from it. A hand-written idea says no lens scored it.
 func TestGetIdea(t *testing.T) {
 	d := readDeps()
 	ctx, _ := turn(t, workspace, nil)
@@ -49,6 +50,9 @@ func TestGetIdea(t *testing.T) {
 	}
 	if out.Angle != "myth-busting" || out.Rationale == "" || len(out.Sources) != 1 || out.SourceAsset == nil || out.SourceAsset.Title != "Brochure" {
 		t.Fatalf("idea = %+v", out)
+	}
+	if p := out.SourceAsset.Passage; p.ChunkID != "a1:4" || p.Label != "p. 12" || p.Page == nil || *p.Page != 12 {
+		t.Fatalf("passage = %+v", p)
 	}
 	f := out.Fit
 	if f == nil || *f.Score != 72 || f.Lens != "campaign" || f.CampaignID != "c1" || len(f.Criteria) != 1 ||

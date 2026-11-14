@@ -48,3 +48,49 @@ func TestReadChunksWithLabels(t *testing.T) {
 		t.Fatalf("recording = %v, tokens = %d", src.Recording, src.Segments[0].Tokens)
 	}
 }
+
+// Each chunk's segment says where the chunk is: its page or page range, its
+// slide, or its time range; a body cut into parts has none.
+func TestReadLocatesChunks(t *testing.T) {
+	typ := models.AssetTypePDF
+	p3, p5, p6 := 3, 5, 6
+	rows := chunks{
+		{ID: "a3:0", Content: "one", PageStart: &p3, PageEnd: &p3},
+		{ID: "a3:1", Content: "two", PageStart: &p5, PageEnd: &p6},
+		{ID: "a3:2", Content: "three", SourceLabel: new("Slide 4"), SourceAnchor: &models.SourceAnchor{Kind: "slide", Slide: 4}},
+		{ID: "a3:3", Content: "four", SourceLabel: new("0:00–0:42"), SourceAnchor: &models.SourceAnchor{Kind: "time", StartMs: 0, EndMs: 42000}},
+		{ID: "a3:4", Content: "five", SourceAnchor: &models.SourceAnchor{Kind: "page", Page: 9}},
+	}
+	src, err := assetsource.Read(t.Context(), rows, &models.Asset{ID: "a3", Type: &typ})
+	if err != nil {
+		t.Fatal(err)
+	}
+	locs := make([]models.SourceLocator, len(src.Segments))
+	for i, s := range src.Segments {
+		if s.Locator == nil {
+			t.Fatalf("segment %d has no locator", i)
+		}
+		locs[i] = *s.Locator
+	}
+	if l := locs[0]; l.ChunkID != "a3:0" || l.Label != "p. 3" || *l.Page != 3 || l.PageEnd != nil {
+		t.Errorf("one page = %+v", l)
+	}
+	if l := locs[1]; l.Label != "pp. 5–6" || *l.Page != 5 || *l.PageEnd != 6 {
+		t.Errorf("page range = %+v", l)
+	}
+	if l := locs[2]; l.Label != "Slide 4" || l.Page != nil || *l.Slide != 4 {
+		t.Errorf("slide = %+v", l)
+	}
+	if l := locs[3]; l.StartMS == nil || *l.StartMS != 0 || *l.EndMS != 42000 || l.Page != nil {
+		t.Errorf("time range = %+v", l)
+	}
+	if l := locs[4]; l.Page == nil || *l.Page != 9 {
+		t.Errorf("anchor page = %+v", l)
+	}
+
+	body := models.AssetTypeURL
+	parts, err := assetsource.Read(t.Context(), chunks(nil), &models.Asset{ID: "a4", Type: &body, Content: "text"})
+	if err != nil || parts.Segments[0].Locator != nil {
+		t.Fatalf("a part has a locator: %+v, %v", parts.Segments, err)
+	}
+}

@@ -204,7 +204,7 @@ func (s *Service) Distill(ctx context.Context, tenantID, runID string) error {
 	if distill == nil {
 		return ErrUnavailable
 	}
-	src, err := s.buildSource(ctx, t.asset)
+	src, at, err := s.buildSource(ctx, t.asset)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errSourceUnreadable, err)
 	}
@@ -227,7 +227,7 @@ func (s *Service) Distill(ctx context.Context, tenantID, runID string) error {
 		}
 		return retryErr
 	}
-	if err := s.saveDistill(ctx, t, resp); err != nil {
+	if err := s.saveDistill(ctx, t, resp, at); err != nil {
 		// The retry calls the model again and records its own charge.
 		s.releaseCharge(ctx, chargeID)
 		return err
@@ -407,8 +407,8 @@ func (s *Service) distillFailure(ctx context.Context, run *models.IdeaDistillRun
 
 // saveDistill stores the new ideas under the lens row lock. A lens that went
 // away meanwhile fails the run instead.
-func (s *Service) saveDistill(ctx context.Context, t *distillTarget, resp *asset_analysis.DistillResponse) error {
-	ideas, err := ideaRows(t.lens, resp.Ideas)
+func (s *Service) saveDistill(ctx context.Context, t *distillTarget, resp *asset_analysis.DistillResponse, at passages) error {
+	ideas, err := ideaRows(t.lens, resp.Ideas, at)
 	if err != nil {
 		return err
 	}

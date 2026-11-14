@@ -21413,6 +21413,11 @@ const docTemplate = `{
         "models.IdeaSourceAsset": {
             "type": "object",
             "properties": {
+                "chunk_id": {
+                    "description": "ChunkID is the chunk the idea's first cited passage was read from, as a\nhint only: re-ingesting the asset may reuse the id for other text, so\nopen the asset at Page, Slide or StartMS, not by the chunk. It and the\npassage fields below are null for ideas analysed before passages were\nkept and for bodies without chunks (web pages, notes).",
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "domain": {
                     "description": "Domain is a web page's host without \"www.\"; null for other kinds.",
                     "type": "string",
@@ -21420,6 +21425,10 @@ const docTemplate = `{
                 },
                 "duration_ms": {
                     "description": "DurationMS is a recording's length; null when unknown or not a recording.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "end_ms": {
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -21440,8 +21449,23 @@ const docTemplate = `{
                         "presentation"
                     ]
                 },
+                "label": {
+                    "description": "Label is the passage as the idea cites it: \"p. 12\", \"Slide 4\",\n\"12:03–12:47\".",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "page": {
+                    "description": "Page is the passage's first page; null when the asset is not paged.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "page_count": {
                     "description": "PageCount is null when the file is not paged.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "page_end": {
+                    "description": "PageEnd is the passage's last page when it spans pages.",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -21452,6 +21476,16 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.IdeaReading"
                         }
                     ],
+                    "x-nullable": true
+                },
+                "slide": {
+                    "description": "Slide is the passage's slide in a deck.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "start_ms": {
+                    "description": "StartMS and EndMS bound a recording's passage; 0 is the start.",
+                    "type": "integer",
                     "x-nullable": true
                 },
                 "title": {

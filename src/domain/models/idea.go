@@ -77,6 +77,69 @@ type IdeaSourceAsset struct {
 	// Reading is the campaign lens the idea was read in; null for the
 	// workspace lens.
 	Reading *IdeaReading `json:"reading" extensions:"x-nullable"`
+	// ChunkID is the chunk the idea's first cited passage was read from, as a
+	// hint only: re-ingesting the asset may reuse the id for other text, so
+	// open the asset at Page, Slide or StartMS, not by the chunk. It and the
+	// passage fields below are null for ideas analysed before passages were
+	// kept and for bodies without chunks (web pages, notes).
+	ChunkID *string `json:"chunk_id" extensions:"x-nullable"`
+	// Label is the passage as the idea cites it: "p. 12", "Slide 4",
+	// "12:03–12:47".
+	Label *string `json:"label" extensions:"x-nullable"`
+	// Page is the passage's first page; null when the asset is not paged.
+	Page *int `json:"page" extensions:"x-nullable"`
+	// PageEnd is the passage's last page when it spans pages.
+	PageEnd *int `json:"page_end" extensions:"x-nullable"`
+	// Slide is the passage's slide in a deck.
+	Slide *int `json:"slide" extensions:"x-nullable"`
+	// StartMS and EndMS bound a recording's passage; 0 is the start.
+	StartMS *int64 `json:"start_ms" extensions:"x-nullable"`
+	EndMS   *int64 `json:"end_ms"   extensions:"x-nullable"`
+}
+
+// SetPassage fills the passage fields from loc; nil leaves them null.
+func (a *IdeaSourceAsset) SetPassage(loc *SourceLocator) {
+	if loc == nil {
+		return
+	}
+	a.ChunkID, a.Label = new(loc.ChunkID), new(loc.Label)
+	a.Page, a.PageEnd, a.Slide, a.StartMS, a.EndMS = loc.Page, loc.PageEnd, loc.Slide, loc.StartMS, loc.EndMS
+}
+
+// SourceLocator is where in an asset a passage is: the chunk it was read
+// from, as the model cited it, with the chunk's page, slide or time range.
+// The chunk id names the chunk at the time; a re-ingest may reuse it for
+// other text, so the page is what to open.
+type SourceLocator struct {
+	ChunkID string `json:"chunk_id"`
+	Label   string `json:"label"`
+	Page    *int   `json:"page,omitempty"`
+	// PageEnd is set when the passage spans pages.
+	PageEnd *int `json:"page_end,omitempty"`
+	Slide   *int `json:"slide,omitempty"`
+	// StartMS and EndMS bound a recording's passage; 0 is the start.
+	StartMS *int64 `json:"start_ms,omitempty"`
+	EndMS   *int64 `json:"end_ms,omitempty"`
+}
+
+// LocatorOf is where chunk c is, cited as label.
+func LocatorOf(c AssetChunk, label string) SourceLocator {
+	loc := SourceLocator{ChunkID: c.ID, Label: label, Page: c.PageStart}
+	if c.PageStart != nil && c.PageEnd != nil && *c.PageEnd > *c.PageStart {
+		loc.PageEnd = c.PageEnd
+	}
+	if a := c.SourceAnchor; a != nil {
+		if loc.Page == nil && a.Page > 0 {
+			loc.Page = new(a.Page)
+		}
+		if a.Slide > 0 {
+			loc.Slide = new(a.Slide)
+		}
+		if a.Kind == "time" {
+			loc.StartMS, loc.EndMS = new(a.StartMs), new(a.EndMs)
+		}
+	}
+	return loc
 }
 
 // IdeaReading names the campaign whose analysis lens produced an idea.
@@ -142,6 +205,10 @@ type Idea struct {
 	Angle     *string  `bun:"angle"         json:"angle"     extensions:"x-nullable"`
 	Rationale *string  `bun:"rationale"     json:"rationale" extensions:"x-nullable"`
 	Sources   []string `bun:"sources,array" json:"sources"   extensions:"x-nullable"`
+	// SourceLocator is where in SourceAsset the first of Sources is; nil for
+	// bodies without chunks and for ideas analysed before it was kept. Reads
+	// show it on SourceAsset.
+	SourceLocator *SourceLocator `bun:"source_locator,type:jsonb" json:"-"`
 	// Plan is where the idea would land as a post; every field nil for an
 	// idea without one. The columns are plan_platform_id, plan_post_type,
 	// plan_phase_id and plan_target_date.
