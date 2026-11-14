@@ -20,6 +20,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/kernel/textdiff"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
@@ -143,6 +144,7 @@ func begin(ctx context.Context, g *genkit.Genkit, cfg PostAssistantFlowConfig, r
 		contextTmpl:   p.context,
 		writerContent: post.Content,
 		content:       post.Content,
+		original:      post.Content,
 	}
 	// The writer's copy and the tools' progress stream to the client
 	// through the turn.
@@ -230,6 +232,7 @@ func (st *requestState) result() *PostAssistantResponse {
 	if e := st.editResult; e != nil {
 		r.Action, r.UpdatedContent, r.SaveVersion, r.VersionNote = actionEdited, st.content, e.SaveVersion, e.Note
 		r.Explanation = "Updated the post."
+		r.Lines = textdiff.Lines(st.original, st.content)
 	}
 	if n := len(st.noteResults); n > 0 {
 		for _, note := range st.noteResults {

@@ -43,3 +43,17 @@ func TestPostFinding_Fixes(t *testing.T) {
 		t.Fatal("an edited post kept the key")
 	}
 }
+
+// A quote is kept only when the post has those exact words.
+func TestQuoteOf(t *testing.T) {
+	content := "Wake up to the sea.\nBook now, limited offer!!!"
+	for quote, want := range map[string]string{
+		" Book now, limited offer!!! ": "Book now, limited offer!!!",
+		"Book today, limited offer":    "",
+		"":                             "",
+	} {
+		if got := quoteOf(content, quote); got != want {
+			t.Errorf("quoteOf(%q) = %q, want %q", quote, got, want)
+		}
+	}
+}

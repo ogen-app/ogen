@@ -6,6 +6,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
+	"github.com/ogen-app/ogen/src/kernel/textdiff"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notes"
 	"github.com/ogen-app/ogen/src/usecase/notify"
@@ -25,6 +26,10 @@ type PostAssistantResponse struct {
 	Action string `json:"action" enums:"edited,cloned,restored,scheduled,noted"`
 	// UpdatedContent is the post's content after an edit or a restore.
 	UpdatedContent string `json:"updatedContent,omitempty"`
+	// Lines are, on an edit, the runs of lines it rewrote, added or removed,
+	// as they were and as they are, for the thread to strike the old above
+	// the new.
+	Lines []textdiff.Change `json:"lines,omitempty"`
 	// SaveVersion is set when the edit was saved as a version, with its note.
 	SaveVersion bool   `json:"saveVersion,omitempty"`
 	VersionNote string `json:"versionNote,omitempty"`

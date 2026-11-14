@@ -111,6 +111,19 @@ func TestScreenKinds(t *testing.T) {
 	}
 }
 
+// A post thread opened from a finding names it by key; the finding itself
+// is the server's, so a client's is dropped.
+func TestParse_FromFinding(t *testing.T) {
+	v, err := Parse([]byte(`{"version":1,"screen":"post","scope":{"kind":"post","id":"p1"},
+		"from":{"kind":"finding","campaignId":"c1","key":"post_drift:abc","finding":{"issue":"made up"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := v.From; f == nil || f.Kind != FromFinding || f.CampaignID != "c1" || f.Key != "post_drift:abc" || f.Finding != nil {
+		t.Fatalf("from = %+v", v.From)
+	}
+}
+
 func TestParse_Invalid(t *testing.T) {
 	ids := func(n int) string {
 		out := make([]string, n)
@@ -121,6 +134,7 @@ func TestParse_Invalid(t *testing.T) {
 	}
 	long := strings.Repeat("x", MaxIDLen+1)
 	const base = `{"version":1,"screen":"ideas","scope":{"kind":"workspace"},`
+	const post = `{"version":1,"screen":"post","scope":{"kind":"post","id":"p1"},`
 	cases := map[string]struct {
 		raw   string
 		field string
@@ -157,6 +171,10 @@ func TestParse_Invalid(t *testing.T) {
 		"too many visible ids":   {base + `"visible":{"kind":"idea","ids":[` + ids(MaxVisibleIDs+1) + `]}}`, "visible.ids"},
 		"blank visible id":       {base + `"visible":{"kind":"idea","ids":[""]}}`, "visible.ids[0]"},
 		"long visible id":        {base + `"visible":{"kind":"idea","ids":["` + long + `"]}}`, "visible.ids[0]"},
+		"from off a post":        {base + `"from":{"kind":"finding","campaignId":"c1","key":"k"}}`, "from"},
+		"from of unknown kind":   {post + `"from":{"kind":"problem","campaignId":"c1","key":"k"}}`, "from.kind"},
+		"from without key":       {post + `"from":{"kind":"finding","campaignId":"c1"}}`, "from.key"},
+		"from without campaign":  {post + `"from":{"kind":"finding","key":"k"}}`, "from.campaignId"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

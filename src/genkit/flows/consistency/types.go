@@ -47,6 +47,9 @@ type PostFinding struct {
 	Severity   string `json:"severity"`
 	Issue      string `json:"issue"`
 	Suggestion string `json:"suggestion"`
+	// Quote is the post's words the drift shows in, exactly as the post has
+	// them; empty when it is the whole post.
+	Quote string `json:"quote,omitempty"`
 	// Key identifies the finding while the post stays the same, so the
 	// assistant can dismiss it.
 	Key   string `json:"key"`
@@ -85,6 +88,7 @@ type postFindingOutput struct {
 	Severity   string `json:"severity"   jsonschema:"description=how serious the drift is,enum=high,enum=medium,enum=low"`
 	Issue      string `json:"issue"      jsonschema:"description=how this post drifts from the brief's persona, key messages, or tone"`
 	Suggestion string `json:"suggestion" jsonschema:"description=concrete guidance to bring the post in line with the brief"`
+	Quote      string `json:"quote"      jsonschema:"description=the post's words that drift the most, copied exactly (one sentence or line at most); empty when the drift is the whole post"`
 }
 
 type postsReviewOutput struct {

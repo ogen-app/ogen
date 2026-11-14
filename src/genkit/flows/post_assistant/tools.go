@@ -117,8 +117,9 @@ type requestState struct {
 	writerContent string
 
 	// content is the post's content as the turn's last edit or restore left
-	// it.
-	content string
+	// it; original is its content before the turn.
+	content  string
+	original string
 
 	// retrieved holds the asset excerpts the planner pulled via the
 	// asset-retrieval tools this turn. The writer's context block

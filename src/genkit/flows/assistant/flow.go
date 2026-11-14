@@ -16,6 +16,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
@@ -161,12 +162,13 @@ type viewData struct {
 	Window       string
 	Visible      []string
 	Offers       []string
+	From         *viewcontext.Finding
 }
 
 // renderView renders the per-turn <view> block that opens the user's message,
 // after the cache breakpoints.
 func renderView(p *prompts, v *viewresolve.Resolved, offers []models.AssistantProposal, now time.Time) (string, error) {
-	d := viewData{Summary: v.Summary, Today: now.Format(time.DateOnly), Filter: v.View.Filter}
+	d := viewData{Summary: v.Summary, Today: now.Format(time.DateOnly), Filter: v.View.Filter, From: v.From}
 	for _, o := range offers {
 		line := o.ID + ": " + o.Summary
 		if len(o.Options) > 0 {

@@ -188,6 +188,7 @@ func runCheckPosts(
 			Severity:   f.Severity,
 			Issue:      f.Issue,
 			Suggestion: f.Suggestion,
+			Quote:      quoteOf(p.Content, f.Quote),
 		}))
 	}
 

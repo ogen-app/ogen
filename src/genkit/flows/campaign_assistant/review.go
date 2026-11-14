@@ -45,7 +45,10 @@ type ReviewFinding struct {
 	Title      string     `json:"title,omitempty"`
 	Issue      string     `json:"issue"`
 	Suggestion string     `json:"suggestion,omitempty"`
-	Fixes      []FixOffer `json:"fixes"`
+	// Quote is, on a post finding, the post's words the issue is about,
+	// exactly as the post has them; empty when it is the whole post.
+	Quote string     `json:"quote,omitempty"`
+	Fixes []FixOffer `json:"fixes"`
 }
 
 // The material a review reads, for its "read from" line.
@@ -126,7 +129,7 @@ func (o *ReviewOutput) AddPosts(ctx context.Context, r *consistency.PostsReview,
 	o.ReadFrom = append(o.ReadFrom, ReadPosts)
 	for _, f := range r.Findings {
 		rf := ReviewFinding{Kind: "post", Key: f.Key, Severity: f.Severity, PostID: f.PostID, Title: f.Title,
-			Issue: f.Issue, Suggestion: f.Suggestion, Fixes: []FixOffer{}}
+			Issue: f.Issue, Suggestion: f.Suggestion, Quote: f.Quote, Fixes: []FixOffer{}}
 		if dismissed[f.Key] {
 			o.dismiss(rf)
 			continue

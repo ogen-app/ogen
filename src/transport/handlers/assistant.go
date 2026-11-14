@@ -94,6 +94,13 @@ type assistantTurnRequest struct {
 // @Description  longer exist. The scope names the thread: the conversation continues across the screens of
 // @Description  one workspace, campaign or post. A malformed viewContext is a 400 that names the field; a
 // @Description  campaign or post scope that doesn't exist is a 404; an instruction over 8000 characters is a 400.
+// @Description  A post thread opened from a campaign review's finding (FIX WITH ASSISTANT) sends
+// @Description  from {kind: finding, campaignId, key}: the server finds that post finding in the latest review of
+// @Description  the campaign's thread and gives it to the assistant; the stored user message's view_context.from
+// @Description  then carries it as finding {key, postId, title, severity, issue, quote, suggestion}, for the
+// @Description  thread to draw. A key no review there has, or a finding about another post, is a 400 on from.key.
+// @Description  An edit in a post thread returns, in its pack result, lines [{before, after}]: the runs of lines it
+// @Description  rewrote (before empty for lines added, after for lines removed); revisePost's result has the same.
 // @Description  Events, in order: "explanation_delta" {"delta"} as the reply streams; "tool_call" {"name","input","ref"}
 // @Description  and "tool_result" {"name","ref","ok","code"} for each tool, "ok" false when it refused or hit a conflict, "code" naming a refusal
 // @Description  the client draws its own card for (editIdea's "idea_read_only": an analysed idea's title and note can't change); "pack_loaded" {"pack"} when the turn restarted

@@ -501,9 +501,11 @@ func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 		t.Fatalf("post fixes = %+v", post.Fixes)
 	}
 	rewrite := sink.got[slices.IndexFunc(sink.got, func(p assistantkit.Proposal) bool { return p.Tool == "revisePost" })]
-	// The rewrite says how long the copy was and is.
+	// The rewrite says how long the copy was and is, and the lines it
+	// changed.
 	if out, err := revisePost(ctx, d, rewrite.Args.(RevisePostInput)); err != nil || !slices.Equal(revised, []string{"p2: follow the brief"}) ||
-		out.Length == nil || *out.Length != (Lengths{Before: 12, After: 5}) {
+		out.Length == nil || *out.Length != (Lengths{Before: 12, After: 5}) ||
+		len(out.Lines) != 1 || out.Lines[0].After != "short" || len([]rune(out.Lines[0].Before)) != 12 {
 		t.Fatalf("revise = %v, %+v, %v", revised, out, err)
 	}
 	// A rewrite whose version couldn't be saved says so.

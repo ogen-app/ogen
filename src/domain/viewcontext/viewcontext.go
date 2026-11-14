@@ -242,6 +242,34 @@ type ViewContext struct {
 	Sort        string   `json:"sort,omitempty"`
 	Window      *Window  `json:"window,omitempty"`
 	Visible     *Visible `json:"visible,omitempty"`
+	// From is what the post thread was opened from: a campaign review's
+	// finding about this post. Post scope only.
+	From *From `json:"from,omitempty"`
+}
+
+// FromFinding is the one kind of From.
+const FromFinding = "finding"
+
+// From names a campaign review's finding by its key. Finding is the
+// server's: the finding as the review gave it, filled when the view is
+// resolved and stored with the message; what a client sends there is
+// ignored.
+type From struct {
+	Kind       string   `json:"kind" enums:"finding"`
+	CampaignID string   `json:"campaignId"`
+	Key        string   `json:"key"`
+	Finding    *Finding `json:"finding,omitempty"`
+}
+
+// Finding is a review's finding about a post, as the review gave it.
+type Finding struct {
+	Key        string `json:"key"`
+	PostID     string `json:"postId"`
+	Title      string `json:"title,omitempty"`
+	Severity   string `json:"severity,omitempty"`
+	Issue      string `json:"issue"`
+	Quote      string `json:"quote,omitempty"`
+	Suggestion string `json:"suggestion,omitempty"`
 }
 
 // InvalidError is a view context the server won't use (HTTP 400).
@@ -269,6 +297,10 @@ func Parse(raw []byte) (*ViewContext, error) {
 	}
 	if err := v.Validate(); err != nil {
 		return nil, err
+	}
+	// The finding is the server's to fill.
+	if v.From != nil {
+		v.From.Finding = nil
 	}
 	v.normalize()
 	return &v, nil
@@ -307,7 +339,29 @@ func (v *ViewContext) Validate() error {
 	if err := v.Window.validate(); err != nil {
 		return err
 	}
-	return v.Visible.validate()
+	if err := v.Visible.validate(); err != nil {
+		return err
+	}
+	return v.validateFrom()
+}
+
+// validateFrom checks From, when there is one: a finding of a campaign, on a
+// post thread. The finding itself is the server's to fill.
+func (v *ViewContext) validateFrom() error {
+	f := v.From
+	if f == nil {
+		return nil
+	}
+	if f.Kind != FromFinding {
+		return invalid("from.kind", "unknown kind %q, want %q", f.Kind, FromFinding)
+	}
+	if v.Scope.Kind != models.AssistantScopePost {
+		return invalid("from", "only a post thread is opened from a finding")
+	}
+	if err := checkID("from.campaignId", f.CampaignID); err != nil {
+		return err
+	}
+	return checkID("from.key", f.Key)
 }
 
 // validate checks the scope kind, and that the id is set exactly when the

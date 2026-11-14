@@ -47,7 +47,11 @@ Rules for `action`:
 {{end}}{{if .Window}}- Analytics window: {{.Window}}
 {{end}}{{if .Visible}}- On screen, in order:
 {{range $i, $s := .Visible}}  {{inc $i}}. {{$s}}
-{{end}}{{end}}{{if .Offers}}- Waiting for the user's answer:
+{{end}}{{end}}{{with .From}}- Opened from the campaign review's finding about this post{{if .Severity}} ({{.Severity}}){{end}}: {{.Issue}}{{if .Quote}}
+  The words it is about: "{{.Quote}}"{{end}}{{if .Suggestion}}
+  The review suggests: {{.Suggestion}}{{end}}
+  "This", "it" and "fix it" mean this finding; a rewrite for it changes the words it is about and keeps the rest.
+{{end}}{{if .Offers}}- Waiting for the user's answer:
 {{range .Offers}}  - {{.}}
 {{end}}{{end}}</view>
 
