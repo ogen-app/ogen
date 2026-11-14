@@ -208,6 +208,20 @@ func undoStore(t *testing.T) (*bun.DB, repository.AssistantActionRepository) {
 	return db, repository.NewAssistantActionRepository(db)
 }
 
+// seedOwner adds turn's user, u1, as the tenant's owner, for the rows that
+// name who made them.
+func seedOwner(t *testing.T, db *bun.DB) {
+	t.Helper()
+	for _, m := range []any{
+		&models.Account{ID: "acc-1", Email: "jane@example.com", Name: "Jane"},
+		&models.User{ID: "u1", AccountID: "acc-1", TenantID: "tenant-1", Name: "Jane", Email: "jane@example.com", Role: models.RoleOwner},
+	} {
+		if _, err := db.NewInsert().Model(m).Exec(t.Context()); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+}
+
 // undone reports who undid the action, or "" while it is still undoable.
 func undone(t *testing.T, ctx context.Context, actions repository.AssistantActionRepository, id string) string {
 	t.Helper()

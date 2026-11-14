@@ -15,6 +15,9 @@ type Card struct {
 	// how many things it does it to; Verb is the two in words.
 	Action string `json:"action,omitempty"`
 	Count  int    `json:"count,omitzero"`
+	// Item is what Count counts when Action doesn't say, one of the CardItem
+	// slugs, e.g. fact for "Remove 6 facts".
+	Item string `json:"item,omitempty"`
 	// Meta follows the headline, e.g. "from this brochure", "from 4 assets".
 	Meta string `json:"meta,omitempty"`
 	// DrawsOn is what Meta names, one of the CardDrawsOn slugs. Empty when
@@ -52,6 +55,25 @@ const (
 	CardActionTag = "tag"
 	// CardActionUntag only removes tags from Count assets.
 	CardActionUntag = "untag"
+	// CardActionReadBrand reads the brand off a website and assets.
+	CardActionReadBrand = "read_brand"
+	// CardActionAnswerQuestions answers Count of a brand reading's questions.
+	CardActionAnswerQuestions = "answer_questions"
+	// CardActionAdd, CardActionUpdate and CardActionRemove add, update or
+	// remove Count of the card's Item.
+	CardActionAdd    = "add"
+	CardActionUpdate = "update"
+	CardActionRemove = "remove"
+	// CardActionEditBrand makes Count brand changes of more than one kind;
+	// its change rows say which.
+	CardActionEditBrand = "edit_brand"
+)
+
+// The things a card or a row counts.
+const (
+	CardItemFact     = "fact"
+	CardItemVoice    = "voice"
+	CardItemAudience = "audience"
 )
 
 // What a card's Meta names.
@@ -71,6 +93,9 @@ const (
 	// CardFootnoteDraftsLand: the FootnoteCount drafts land in the campaign,
 	// ready to edit.
 	CardFootnoteDraftsLand = "drafts_land"
+	// CardFootnoteBrandReading: the reading runs in the background and takes
+	// about two minutes.
+	CardFootnoteBrandReading = "brand_reading"
 )
 
 // The kinds of card row.
@@ -100,13 +125,27 @@ const (
 	// CardRowPosts is posts the work leaves as they are, with what happens
 	// to them in Note, e.g. "they stay, flagged".
 	CardRowPosts = "posts"
+	// CardRowWebsite is a website the work reads: its homepage and up to
+	// nine pages.
+	CardRowWebsite = "website"
+	// CardRowAnswer is an answer, with its question in Label and where it
+	// came from in Note; no Note means the user said it.
+	CardRowAnswer = "answer"
+	// CardRowChange is Count of Item the work will add, update or remove, by
+	// Action, naming the first few in Names.
+	CardRowChange = "change"
+	// CardRowKept is something the work leaves alone on purpose, with why in
+	// Note.
+	CardRowKept = "kept"
 )
 
 // CardRow is one detail of an offer. Kind lets the client label and lay it
 // out; Value is the detail as English text, and the fields after Note are
 // the facts it is worded from.
 type CardRow struct {
-	Kind  string `json:"kind"`
+	Kind string `json:"kind"`
+	// Label is what Value answers, e.g. an answer row's question, as asked.
+	Label string `json:"label,omitempty"`
 	Value string `json:"value"`
 	// Note explains the value, e.g. why those dates. The model writes it,
 	// like the reply.
@@ -127,6 +166,13 @@ type CardRow struct {
 	Remove []string `json:"remove,omitempty"`
 	// NotGrounded marks a grounding row for work no asset grounds.
 	NotGrounded bool `json:"notGrounded,omitzero"`
+	// Item, Action and Count are a change row's: Count of Item, one of the
+	// CardItem slugs, to add, update or remove. Names are the first few by
+	// their names; Count less them is how many more.
+	Item   string   `json:"item,omitempty"`
+	Action string   `json:"action,omitempty"`
+	Count  int      `json:"count,omitzero"`
+	Names  []string `json:"names,omitempty"`
 }
 
 // CardSource is one asset an offer draws on. Type is the asset's kind, for
