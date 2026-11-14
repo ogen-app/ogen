@@ -53,8 +53,14 @@ func (memLinks) IdeasOfPost(context.Context, string) ([]models.PostSourceIdea, e
 	return nil, nil
 }
 func (memLinks) PostsOfIdea(context.Context, string) ([]models.IdeaPostRef, error) { return nil, nil }
-func (l memLinks) IdeasOfCampaignPosts(context.Context, string) (map[string][]string, error) {
-	return l, nil
+func (l memLinks) IdeasOfCampaignPosts(context.Context, string) (map[string][]models.LinkedIdea, error) {
+	out := make(map[string][]models.LinkedIdea, len(l))
+	for post, ids := range l {
+		for _, id := range ids {
+			out[post] = append(out[post], models.LinkedIdea{ID: id, Title: "Idea " + id})
+		}
+	}
+	return out, nil
 }
 
 // memRemover records deletes and withdrawals; published posts refuse.

@@ -163,7 +163,7 @@ func (s *Service) problems(ctx context.Context, ov *Overview, c *models.Campaign
 	if s.dismissals == nil {
 		return nil
 	}
-	var ideas map[string][]string
+	var ideas map[string][]models.LinkedIdea
 	if s.links != nil {
 		var err error
 		if ideas, err = s.links.IdeasOfCampaignPosts(ctx, c.ID); err != nil {

@@ -30,6 +30,11 @@ func TestPostIdeas_IdeasOfCampaignPosts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// i2 is a live idea with its title; i1 is gone and keeps only its id.
+	if _, err := db.NewInsert().Model(&models.Idea{ID: "i2", Title: "Breakfast on the terrace",
+		Origin: models.IdeaOriginAssistant, AssetIDs: []string{}}).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for post, ideas := range map[string][]string{"links-a": {"i2", "i1"}, "links-x": {"i1"}} {
 		if err := links.Link(ctx, db, post, ideas); err != nil {
 			t.Fatal(err)
@@ -40,7 +45,8 @@ func TestPostIdeas_IdeasOfCampaignPosts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(slices.Sorted(maps.Keys(got)), []string{"links-a"}) || !slices.Equal(got["links-a"], []string{"i2", "i1"}) {
+	want := []models.LinkedIdea{{ID: "i2", Title: "Breakfast on the terrace"}, {ID: "i1"}}
+	if !slices.Equal(slices.Sorted(maps.Keys(got)), []string{"links-a"}) || !slices.Equal(got["links-a"], want) {
 		t.Fatalf("links = %v", got)
 	}
 	other, err := links.IdeasOfCampaignPosts(tenantctx.With(t.Context(), "tenant-elsewhere"), "links-c")
