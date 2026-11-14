@@ -86,11 +86,33 @@ type Result struct {
 }
 
 // Compiled is one compiled post and its theses note. Date is the day it is
-// planned for in the campaign's time zone, empty for an undated post.
+// planned for in the campaign's time zone, empty for an undated post, and
+// DateFrom where that day came from.
 type Compiled struct {
-	Post *models.Post
-	Note *models.PostNote
-	Date string
+	Post     *models.Post
+	Note     *models.PostNote
+	Date     string
+	DateFrom string
+}
+
+// Where a post's date came from.
+const (
+	// DateFromAsked is the day the call named, e.g. the calendar slot.
+	DateFromAsked = "asked"
+	// DateFromPlan is the ideas' plan date.
+	DateFromPlan = "plan"
+)
+
+// dateFrom says where the date of a post asked for on asked, with the
+// ideas' plan on planned, came from; empty when it has none.
+func dateFrom(asked, planned *models.CalendarDate) string {
+	switch {
+	case asked != nil:
+		return DateFromAsked
+	case planned != nil:
+		return DateFromPlan
+	}
+	return ""
 }
 
 // Service compiles ideas into posts.
@@ -154,6 +176,7 @@ func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
 		if post.ScheduledAt != nil {
 			loc, _ := settings.ResolveTimezone(campaign.Timezone)
 			c.Date = post.ScheduledAt.In(loc).Format(time.DateOnly)
+			c.DateFrom = dateFrom(in.TargetDate, firstPlan(ideas, campaign.ID).TargetDate)
 		}
 		res.Posts = append(res.Posts, c)
 		logs = append(logs, logEntry)

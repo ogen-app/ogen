@@ -29,7 +29,7 @@ func ideaDrafter(gk *genkitRuntime) compose.Drafter {
 		}
 		out := make([]compose.Written, 0, len(resp.Posts))
 		for _, p := range resp.Posts {
-			out = append(out, compose.Written{PostID: p.PostID, Title: p.Title, PlatformID: p.PlatformID, PublishDate: p.PublishDate})
+			out = append(out, compose.Written{PostID: p.PostID, Title: p.Title, PlatformID: p.PlatformID, PlatformPostType: p.PostType, PublishDate: p.PublishDate})
 		}
 		return out, resp.Warnings, nil
 	}

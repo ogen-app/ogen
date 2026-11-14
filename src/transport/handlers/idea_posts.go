@@ -200,7 +200,7 @@ const (
 // @Description  each. Without a target date, given or planned, the posts are left unscheduled: no scheduled_at,
 // @Description  off the calendar until someone dates them. Requests that can't run are a plain 400 before the
 // @Description  stream opens.
-// @Description  Events: "post" {postId,title,platformId,publishDate,ideaIds,usedAssetIds} (no publishDate when unscheduled) as each post is saved; "complete"
+// @Description  Events: "post" {postId,title,platformId,platformPostType,publishDate,dateFrom,ideaIds,usedAssetIds} (no publishDate or dateFrom when unscheduled; dateFrom is asked for the target_date sent, plan for the ideas' plan date) as each post is saved; "complete"
 // @Description  {posts,warnings}; "error" {message,code}, after which the posts already written are kept.
 // @Tags         ideas
 // @Accept       json

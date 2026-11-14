@@ -104,8 +104,8 @@ type assistantTurnRequest struct {
 // @Description  The ideas pack's, where an idea is {id,title,verdict,origin,campaignId,fitScore,plan} and grounding
 // @Description  {mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total}; setIdeaVerdict {idea,undoId};
 // @Description  setIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,undoId (setIdeaVerdicts only)};
-// @Description  compileIdeas {postId,title,status,campaignId,platformId,date,posts,ideas,grounding,undoId} (posts: each {postId,title,status,platformId,date}, one per platform; the flat fields are the first; date empty when undated); draftIdeas
-// @Description  {posts[{postId,title,platformId,publishDate (none when unscheduled),ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
+// @Description  compileIdeas {postId,title,status,campaignId,platformId,platformPostType,date,dateFrom,posts,ideas,grounding,undoId} (posts: each {postId,title,status,platformId,platformPostType,date,dateFrom}, one per platform; the flat fields are the first; date empty when undated; dateFrom says where a date came from: asked, the day the call named, or plan, the ideas' plan date); draftIdeas
+// @Description  {posts[{postId,title,platformId,platformPostType,publishDate (none when unscheduled),dateFrom (asked|plan, none when unscheduled),ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
 // @Description  rationale,sources,fit{score,lens,campaignId,criteria[{key,question,weight,level,means,why,phase,campaign}],
 // @Description  caps[{cap,meaning}]},sourceAsset{id,title},analysis{id,lens,gist,summary},posts,author,createdAt,explain};
 // @Description  ideasInCommon {ideas[{id,title,angle}],missing,assets,campaigns,origins,lenses,platforms,postTypes,phases,
