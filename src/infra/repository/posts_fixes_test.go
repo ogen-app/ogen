@@ -104,4 +104,9 @@ func TestPostSetVoiceIf(t *testing.T) {
 	if got, _ := repo.GetByID(ctx, p.ID); got.BrandVoiceID != nil {
 		t.Fatalf("voice = %v, want none", *got.BrandVoiceID)
 	}
+	// A published post keeps the voice it went out in.
+	published := fixPost(t, repo, nil, models.PostStatusPublished, "")
+	if ok, err := repo.SetVoiceIf(ctx, nil, repository.VoiceChange{PostID: published.ID, To: new("voice-a")}, time.Now().UTC()); err != nil || ok {
+		t.Fatalf("published set = %v, %v", ok, err)
+	}
 }

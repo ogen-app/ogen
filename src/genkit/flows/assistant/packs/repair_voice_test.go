@@ -2,6 +2,7 @@ package packs
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -37,11 +39,15 @@ func TestSetPostVoice(t *testing.T) {
 	}}
 	actions := &memActions{}
 	d := Deps{Brand: brand, Posts: posts, Campaigns: &memCampaigns{c: &models.Campaign{ID: "c1"}}, Actions: actions}
-	ctx, _ := turn(t, campaign1, nil)
+	ctx, touched := turn(t, campaign1, nil)
 
 	out, err := setPostVoice(ctx, d, SetPostVoiceInput{PostID: "p1"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// An open post picks up its new voice.
+	if !slices.Equal(touched(), []assistantkit.Touched{{Kind: "post", ID: "p1"}}) {
+		t.Fatalf("touched = %v", touched())
 	}
 	if out.Own || out.From == nil || out.From.Name != "Formal" || out.To == nil || out.To.Name != "Plain" || out.Title != "Rooms" ||
 		out.UndoID == "" || !strings.Contains(out.Note, "undone") {
