@@ -232,9 +232,11 @@ func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], 
 }
 
 // changedSince is a confirmed call that ran nothing because r now holds;
-// changes say what changed, else r's reason does.
+// changes say what changed, else r's reason does. r's code stays, as it
+// does before the call is confirmed.
 func changedSince[Out any](r *Refusal, changes []string) Outcome[Out] {
 	out := Refuse[Out](ChangedSince+r.Reason, r.Alternatives...)
+	out.Code = r.Code
 	out.Changes = changes
 	if len(changes) == 0 {
 		out.Changes = []string{r.Reason}

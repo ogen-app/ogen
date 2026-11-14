@@ -77,7 +77,7 @@ func idsTool(ran *[]string, gone map[string]bool, refuse *bool) ai.ToolFunc[idsI
 	return Gated("touchIDs", Gate[idsIn]{
 		Precheck: func(_ context.Context, in idsIn) error {
 			if *refuse {
-				return Refused("the campaign was archived")
+				return RefusedCode("campaign_archived", "the campaign was archived")
 			}
 			return Conflicted("past the goal", Option{ID: "anyway", Title: "Anyway"})
 		},
@@ -91,7 +91,7 @@ func idsTool(ran *[]string, gone map[string]bool, refuse *bool) ai.ToolFunc[idsI
 				}
 			}
 			if len(keep) == 0 {
-				return in, changes, Refused("none of them exist any more")
+				return in, changes, RefusedCode("ids_gone", "none of them exist any more")
 			}
 			return idsIn{IDs: keep}, changes, nil
 		},
@@ -124,13 +124,14 @@ func TestGated_ConfirmedRechecks(t *testing.T) {
 	if len(sink.got) != 1 || len(sink.got[0].Args.(idsIn).IDs) != 1 || sink.got[0].Replaces != "offer-1" {
 		t.Fatalf("fresh offer = %+v", sink.got)
 	}
-	// All went: refused, with what changed.
-	if out, err := run(ctx, idsIn{IDs: []string{"b"}}); err != nil || out.Status != StatusRefused || len(ran) != 0 || !slices.Equal(out.Changes, []string{"b was deleted"}) {
+	// All went: refused, with what changed and the refusal's code.
+	if out, err := run(ctx, idsIn{IDs: []string{"b"}}); err != nil || out.Status != StatusRefused || out.Code != "ids_gone" || len(ran) != 0 || !slices.Equal(out.Changes, []string{"b was deleted"}) {
 		t.Fatalf("all gone: out = %+v, err = %v", out, err)
 	}
-	// The precheck now refuses: nothing runs, and its reason is what changed.
+	// The precheck now refuses: nothing runs, its reason is what changed,
+	// and its code stays.
 	refuse = true
-	if out, err := run(ctx, idsIn{IDs: []string{"a"}}); err != nil || out.Status != StatusRefused || out.Reason != ChangedSince+"the campaign was archived" ||
+	if out, err := run(ctx, idsIn{IDs: []string{"a"}}); err != nil || out.Status != StatusRefused || out.Reason != ChangedSince+"the campaign was archived" || out.Code != "campaign_archived" ||
 		!slices.Equal(out.Changes, []string{"the campaign was archived"}) || len(ran) != 0 {
 		t.Fatalf("refused: out = %+v, err = %v", out, err)
 	}
