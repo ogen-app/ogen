@@ -244,19 +244,13 @@ func answerDistill(ctx context.Context, d Deps, in AnswerDistillInput) (*Distill
 	if err != nil {
 		return nil, err
 	}
-	asked := map[string]string{}
-	if run.Proposal != nil {
-		for _, q := range run.Proposal.Questions {
-			asked[q.ID] = q.Text
-		}
+	asked := questionsOf(run)
+	if err := in.unasked(asked); err != nil {
+		return nil, err
 	}
 	answers := make([]branddistill.Answer, 0, len(in.Answers))
 	for _, a := range in.Answers {
-		text, ok := asked[a.QuestionID]
-		if !ok {
-			return nil, assistantkit.Refused("question " + a.QuestionID + " isn't one this reading asks; read them with getBrandDistill")
-		}
-		answers = append(answers, branddistill.Answer{QuestionID: a.QuestionID, Question: text, Answer: a.Answer})
+		answers = append(answers, branddistill.Answer{QuestionID: a.QuestionID, Question: asked[a.QuestionID], Answer: a.Answer})
 	}
 	by := actor(ctx)
 	child, err := d.Distill.Refine(ctx, tenantOf(ctx), run.ID, &by, answers)
@@ -291,29 +285,64 @@ func startDistillCard(ctx context.Context, d Deps, in StartDistillInput) *assist
 	return c
 }
 
-// answerDistillCard is the answers offer's card: each answer under its
-// question, with where it came from, and the assets the answers cite. A
-// question the reading doesn't ask is left out; the call is refused on yes.
-func answerDistillCard(ctx context.Context, d Deps, in AnswerDistillInput) *assistantkit.Card {
-	var asked map[string]string
-	if run, err := latestRun(ctx, d, in.RunID); err == nil && run.Proposal != nil {
-		asked = map[string]string{}
+// questionsOf is the questions run asks, their text by id; none while it
+// has no proposal.
+func questionsOf(run *models.BrandDistillRun) map[string]string {
+	asked := map[string]string{}
+	if run.Proposal != nil {
 		for _, q := range run.Proposal.Questions {
 			asked[q.ID] = q.Text
 		}
 	}
-	c := &assistantkit.Card{Verb: "Answer " + plural(len(in.Answers), "question", "questions"),
-		Action: assistantkit.CardActionAnswerQuestions, Count: len(in.Answers)}
+	return asked
+}
+
+// unasked refuses an answer to a question the reading doesn't ask: the
+// reading can't take it, so none of the answers are sent.
+func (in AnswerDistillInput) unasked(asked map[string]string) error {
+	for _, a := range in.Answers {
+		if _, ok := asked[a.QuestionID]; !ok {
+			return assistantkit.Refused("question " + a.QuestionID + " isn't one this reading asks; read them with getBrandDistill")
+		}
+	}
+	return nil
+}
+
+// precheck refuses answers the reading can't take before they are offered.
+func (in AnswerDistillInput) precheck(ctx context.Context, d Deps) error {
+	if len(in.Answers) == 0 {
+		return assistantkit.Refused("no answers given")
+	}
+	run, err := latestRun(ctx, d, in.RunID)
+	if err != nil {
+		return err
+	}
+	return in.unasked(questionsOf(run))
+}
+
+// answerDistillCard is the answers offer's card: each answer under its
+// question, with where it came from, and the assets the answers cite. The
+// precheck refuses an answer to a question the reading doesn't ask, so a
+// card leaves one out only if the reading changed since, and counts the
+// answers it shows.
+func answerDistillCard(ctx context.Context, d Deps, in AnswerDistillInput) *assistantkit.Card {
+	asked := map[string]string{}
+	if run, err := latestRun(ctx, d, in.RunID); err == nil {
+		asked = questionsOf(run)
+	}
+	c := &assistantkit.Card{Action: assistantkit.CardActionAnswerQuestions}
 	var cited []string
 	for _, a := range in.Answers {
 		question, ok := asked[a.QuestionID]
-		if asked != nil && !ok {
+		if !ok {
 			continue
 		}
 		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowAnswer, Label: question,
 			Value: strings.TrimSpace(a.Answer), Note: strings.TrimSpace(a.From)})
 		cited = append(cited, a.AssetIDs...)
 	}
+	c.Count = len(c.Rows)
+	c.Verb = "Answer " + plural(c.Count, "question", "questions")
 	setCardSources(ctx, d, c, cited)
 	return c
 }
@@ -456,12 +485,7 @@ func distillSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 	answer := genkit.DefineTool(g, "answerDistillQuestions",
 		"Answers a ready reading's questions; the proposal is composed again with the answers. Always offered for the user to confirm first.",
 		assistantkit.Gated("answerDistillQuestions", assistantkit.Gate[AnswerDistillInput]{
-			Precheck: func(_ context.Context, in AnswerDistillInput) error {
-				if len(in.Answers) == 0 {
-					return assistantkit.Refused("no answers given")
-				}
-				return nil
-			},
+			Precheck: func(ctx context.Context, in AnswerDistillInput) error { return in.precheck(ctx, d) },
 			Summary: func(in AnswerDistillInput) string {
 				return "Answer " + plural(len(in.Answers), "question", "questions") + " and update the brand proposal"
 			},
