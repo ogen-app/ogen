@@ -27,7 +27,7 @@ func TestStream_RefusalSkipsFallback(t *testing.T) {
 		modelOpts: []ai.GenerateOption{ai.WithMiddleware(llm.NewProvider().CallMiddleware("content_plan", nil))},
 	}
 
-	posts, err := gen.stream(t.Context(), "go", 0, 0, func(SSEEventKind, any) {})
+	posts, err := gen.stream(t.Context(), "go", 0, 0, nil, func(SSEEventKind, any) {})
 	if _, ok := errors.AsType[*AIError](err); !ok {
 		t.Fatalf("err = %v, want *AIError", err)
 	}

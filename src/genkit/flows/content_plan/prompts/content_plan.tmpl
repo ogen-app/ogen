@@ -41,7 +41,24 @@ Language: {{.Language}}
 {{.BrandBlock}}
 
 Date Range: {{.StartDate}} — {{.EndDate}} ({{.DayCount}} days)
-{{- if .Batch}}
+{{- if and .Batch .Batch.Series}}
+
+This request is the series "{{.Batch.Series.Name}}", a recurring kind of post this campaign runs on a rhythm. Every post is one episode of it, each on a fresh subject.
+{{- with .Batch.Series.Promise}}
+  Promise to the audience: {{.}}
+{{- end}}
+{{- with .Batch.Series.Recipe}}
+  Recipe for each episode: {{.}}
+{{- end}}
+{{- with .Batch.Series.ContentFormat}}
+  Format: {{.}}
+{{- end}}
+
+Generate exactly {{.Batch.PostCount}} posts in this response, one per slot below and in the same order — the JSON array must contain exactly {{.Batch.PostCount}} objects. Each slot's publishDate, platformId and phaseId are fixed by the series' rhythm: copy them exactly, even when the date falls outside the publishing weekdays.
+{{- range .Batch.Slots}}
+  {{.Number}}. publishDate "{{.Date}}", {{.PlatformName}} (platformId: "{{.PlatformID}}"), phase "{{.PhaseName}}" (phaseId: "{{.PhaseID}}")
+{{- end}}
+{{- else if .Batch}}
 
 This request is one slice of a larger plan. Generate exactly {{.Batch.PostCount}} posts in this response — the JSON array must contain exactly {{.Batch.PostCount}} objects, no more, no fewer.
 

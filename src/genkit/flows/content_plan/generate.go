@@ -3,6 +3,7 @@ package content_plan
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/campaigngoal"
 	"github.com/ogen-app/ogen/src/usecase/scheduling"
+	"github.com/ogen-app/ogen/src/usecase/seriesplan"
 	"github.com/ogen-app/ogen/src/usecase/settings"
 )
 
@@ -65,6 +67,68 @@ func resolveScope(campaign *models.Campaign, tgt *targeting) planScope {
 		start:  *campaign.StartDate,
 		end:    *campaign.EndDate,
 	}
+}
+
+// seriesRuns is the campaign's series runs that claim plan slots, each with
+// the days its rhythm puts its posts on over the scope. A targeted run plans
+// no series. Days are counted on the campaign's calendar dates in its
+// timezone, the dates the plan's window checks. It fails open: a failed
+// read plans without series and says so.
+func seriesRuns(ctx context.Context, repos ContentPlanRepos, campaign *models.Campaign, scope planScope, targeted bool) ([]seriesRun, []string) {
+	if repos.Series == nil || targeted {
+		return nil, nil
+	}
+	const unread = "the campaign's series could not be read, so the plan reserves no series slots"
+	runs, err := repos.Series.Runs(ctx, campaign.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "series runs read failed; planning without series",
+			logging.AttrComponent, logComponent, logging.AttrError, err)
+		return nil, []string{unread}
+	}
+	loc, err := settings.ResolveTimezone(campaign.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	start, end := calendarDay(scope.start, loc), calendarDay(scope.end, loc)
+	var out []seriesRun
+	for _, run := range runs {
+		if run.Rhythm == nil {
+			continue // occasional: claims no slots
+		}
+		series, err := repos.Series.GetByID(ctx, run.SeriesID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // deleted since
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "series read failed; planning without series",
+				logging.AttrComponent, logComponent, "series_id", run.SeriesID, logging.AttrError, err)
+			return nil, []string{unread}
+		}
+		days := seriesplan.Days(run.Rhythm, &start, &end, loc)
+		if len(days) == 0 {
+			continue
+		}
+		r := seriesRun{series: *series, days: make([]string, len(days))}
+		for i, d := range days {
+			r.days[i] = d.Format(time.DateOnly)
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// calendarDay is t's calendar date at midnight in loc.
+func calendarDay(t time.Time, loc *time.Location) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
+}
+
+// claims is how many plan slots the runs take.
+func claims(runs []seriesRun) int {
+	n := 0
+	for _, r := range runs {
+		n += len(r.days)
+	}
+	return n
 }
 
 // campaignPhases lists the campaign type's phases. A stored manual phase plan
@@ -144,6 +208,7 @@ func generatePosts(
 	tgt *targeting,
 ) ([]DraftPost, []string, error) {
 	scope := resolveScope(campaign, tgt)
+	runs, warnings := seriesRuns(ctx, repos, campaign, scope, tgt != nil)
 	brandBlock, brandVoiceID := resolveBrand(ctx, repos, campaign, platforms)
 	data := contentPlanTemplateData{
 		Name:                    campaign.Name,
@@ -187,25 +252,61 @@ func generatePosts(
 		persist:  persistCited(campaign, scope, repos, assets, brandVoiceID),
 	}
 
-	perBatch, parallel := batchLimits(cfg, scope.count)
-	batches := planBatches(scope.count, scope.phases, platforms, scope.start, scope.end, perBatch)
+	perBatch, parallel := batchLimits(cfg, max(scope.count, claims(runs)))
+	batches, planWarnings := planRun(scope, runs, platforms, perBatch)
+	warnings = append(warnings, planWarnings...)
 	if len(batches) == 0 {
-		return generateUnplanned(ctx, gen, cfg, data, onEvent)
+		posts, _, err := generateUnplanned(ctx, gen, cfg, data, onEvent)
+		return posts, warnings, err
 	}
-	slog.InfoContext(ctx, "planned batches", logging.AttrComponent, logComponent, "batches", len(batches), "total_posts", scope.count, "posts_per_batch", perBatch, "parallel", parallel)
+	slog.InfoContext(ctx, "planned batches", logging.AttrComponent, logComponent, "batches", len(batches), "total_posts", scope.count, "series_posts", claims(runs), "posts_per_batch", perBatch, "parallel", parallel)
 
 	genBatch := func(ctx context.Context, spec batchSpec, emit OnEventFunc) ([]DraftPost, error) {
 		batchData := data
-		batchData.Batch = &spec
+		if !spec.Unplanned {
+			batchData.Batch = &spec
+		}
 		userPrompt, err := flowkit.RenderTemplate(cfg.userTmpl, batchData)
 		if err != nil {
 			return nil, fmt.Errorf("render user prompt for batch %d: %w", spec.Index, err)
 		}
 		slog.DebugContext(ctx, "batch user prompt", logging.AttrComponent, logComponent, "batch", spec.Index+1, "total", len(batches), "posts", spec.PostCount, "window_start", spec.DateWindow.Start, "window_end", spec.DateWindow.End, "prompt", userPrompt)
 		// Persistence is capped at the batch's planned size.
-		return gen.stream(ctx, userPrompt, spec.GlobalStartIndex, spec.PostCount, emit)
+		return gen.stream(ctx, userPrompt, spec.GlobalStartIndex, spec.PostCount, spec.Slots, emit)
 	}
-	return runBatchesParallel(ctx, batches, parallel, genBatch, onEvent)
+	posts, batchWarnings, err := runBatchesParallel(ctx, batches, parallel, genBatch, onEvent)
+	return posts, append(warnings, batchWarnings...), err
+}
+
+// planRun lays out a run's batches: the series' posts first, on their
+// rhythms' days, then the rest of the goal, which the series' slots come out
+// of. A run without a goal leaves the rest to the model, so beside series it
+// ends on an unplanned batch, and with none it has no batches at all. Batches
+// are numbered across the whole plan.
+func planRun(scope planScope, runs []seriesRun, platforms []resolvedPlatform, perBatch int) ([]batchSpec, []string) {
+	var warnings []string
+	claimed := claims(runs)
+	regular := scope.count
+	if regular > 0 {
+		if claimed > regular {
+			warnings = append(warnings, fmt.Sprintf("the series claim %d slots, more than the goal's %d, so the plan holds only series ideas", claimed, regular))
+		}
+		regular = max(regular-claimed, 0)
+	}
+	batches := seriesBatches(runs, scope.phases, platforms, scope.start, scope.end, perBatch)
+	batches = append(batches, planBatches(regular, scope.phases, platforms, scope.start, scope.end, perBatch)...)
+	if len(batches) == 0 {
+		return nil, warnings
+	}
+	if scope.count == 0 {
+		batches = append(batches, batchSpec{Unplanned: true})
+	}
+	next := 0
+	for i := range batches {
+		batches[i].Index, batches[i].GlobalStartIndex = i, next
+		next += batches[i].PostCount
+	}
+	return batches, warnings
 }
 
 // generateUnplanned runs a single uncapped generation when no batch plan
@@ -217,7 +318,7 @@ func generateUnplanned(ctx context.Context, gen *postGenerator, cfg ContentPlanF
 		return nil, nil, fmt.Errorf("render user prompt: %w", err)
 	}
 	slog.DebugContext(ctx, "user prompt (no batch plan)", logging.AttrComponent, logComponent, "prompt", userPrompt)
-	posts, err := gen.stream(ctx, userPrompt, 0, 0, onEvent)
+	posts, err := gen.stream(ctx, userPrompt, 0, 0, nil, onEvent)
 	return posts, nil, err
 }
 
@@ -340,15 +441,16 @@ type postGenerator struct {
 // it falls back to a blocking call, skipping the array positions already
 // persisted. startIndex is the global slot index of the first post; emitted
 // indexes are compact (failed posts take none). expected caps how many posts
-// persist; 0 is uncapped. Whatever was persisted is returned even on error,
-// so work survives a failed call.
-func (gen *postGenerator) stream(ctx context.Context, userPrompt string, startIndex, expected int, onEvent OnEventFunc) ([]DraftPost, error) {
+// persist; 0 is uncapped. slots, when set, places each post in turn on its
+// series slot. Whatever was persisted is returned even on error, so work
+// survives a failed call.
+func (gen *postGenerator) stream(ctx context.Context, userPrompt string, startIndex, expected int, slots []fixedSlot, onEvent OnEventFunc) ([]DraftPost, error) {
 	opts := append([]ai.GenerateOption{
 		ai.WithModelName(gen.modelName),
 		ai.WithSystem(gen.systemPrompt),
 		ai.WithPrompt(userPrompt),
 	}, gen.modelOpts...)
-	sink := &postSink{gen: gen, startIndex: startIndex, expected: expected, onEvent: onEvent, persisted: map[int]bool{}}
+	sink := &postSink{gen: gen, startIndex: startIndex, expected: expected, slots: slots, onEvent: onEvent, persisted: map[int]bool{}}
 	res, err := flowkit.StreamObjects(ctx, gen.g, func(pos int, raw string) {
 		post, ok := parseAndTrimPost(raw)
 		if !ok {
@@ -407,7 +509,10 @@ type postSink struct {
 	gen        *postGenerator
 	startIndex int
 	expected   int
-	onEvent    OnEventFunc
+	// slots are a series batch's slots, the next one taken by each post
+	// that persists; nil for the other batches.
+	slots   []fixedSlot
+	onEvent OnEventFunc
 
 	posts []DraftPost
 	// persisted holds the raw array positions (counting invalid attempts)
@@ -421,6 +526,12 @@ type postSink struct {
 func (s *postSink) add(ctx context.Context, post DraftPost, pos int) {
 	if !withinCount(len(s.posts), s.expected) {
 		return
+	}
+	// A series post goes on its slot; no other post is of a series, whatever
+	// the model wrote.
+	post.SeriesID = nil
+	if len(s.posts) < len(s.slots) {
+		s.slots[len(s.posts)].place(&post)
 	}
 	if err := s.gen.validate(post); err != nil {
 		emit(s.onEvent, SSEEventWarning, WarningPayload{Message: fmt.Sprintf("post %q dropped: %s", post.Title, err)})
@@ -501,9 +612,16 @@ func persistIdea(ctx context.Context, dp *DraftPost, campaign *models.Campaign, 
 	// window — the campaign window, or the CON-114 targeting window — so a
 	// targeted run never plans outside it. The snapped date is written back
 	// onto dp so the streamed preview matches the saved plan.
+	//
+	// A series idea keeps its slot's day: the series' weekday outranks the
+	// campaign's publishing days.
 	loc, _ := settings.ResolveTimezone(campaign.Timezone)
+	days := campaign.PublishingDays
+	if dp.SeriesID != nil {
+		days = nil
+	}
 	_, effDate, noEnabledDay := scheduling.ComposeScheduledAt(
-		dp.PublishDate, id, loc, campaign.PublishingTime, campaign.PublishingDays,
+		dp.PublishDate, id, loc, campaign.PublishingTime, days,
 		campaign.SpreadMinutes, windowStart, windowEnd,
 	)
 	if noEnabledDay {
@@ -524,6 +642,7 @@ func persistIdea(ctx context.Context, dp *DraftPost, campaign *models.Campaign, 
 		Origin:        models.IdeaOriginContentPlan,
 		AssetIDs:      append([]string{}, usedAssetIDs...),
 		GroundingMode: models.GroundingFor(len(usedAssetIDs)),
+		SeriesID:      dp.SeriesID,
 		CreatedBy:     &campaign.CreatedBy,
 	}
 	if len(usedAssetIDs) > 0 {
