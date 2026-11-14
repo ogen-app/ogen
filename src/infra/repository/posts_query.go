@@ -64,6 +64,14 @@ func postFilter(sel *bun.SelectQuery, q models.PostQuery) *bun.SelectQuery {
 	if q.ScopeCampaign != "" {
 		sel = sel.Where("po.campaign_id = ?", q.ScopeCampaign)
 	}
+	switch {
+	case q.IDs == nil:
+	case len(q.IDs) == 0:
+		// None asked for is none, and IN () isn't SQL.
+		sel = sel.Where("FALSE")
+	default:
+		sel = sel.Where("po.id IN (?)", bun.List(q.IDs))
+	}
 	switch q.Scheduled {
 	case models.PostScheduledYes:
 		sel = sel.Where("po.scheduled_at IS NOT NULL")

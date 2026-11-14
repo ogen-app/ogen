@@ -35,4 +35,7 @@ type PostQuery struct {
 	// ScopeCampaign confines the read to one campaign's posts: the campaign
 	// list's own, or the assistant thread's.
 	ScopeCampaign string
+	// IDs, when set, confines the read to these posts: which of them a
+	// screen shows.
+	IDs []string
 }

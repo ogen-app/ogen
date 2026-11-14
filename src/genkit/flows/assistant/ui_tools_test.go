@@ -422,6 +422,60 @@ func TestSelectOnTheCalendarAndFoundation(t *testing.T) {
 }
 
 // Without a campaign there are no campaign posts to tick.
+func TestSelectOnTheCalendarKeepsThePostsOnScreen(t *testing.T) {
+	h := newHarness(t)
+	ctx, st := onScreen(t, `{"version":1,"screen":"campaign.calendar","scope":{"kind":"campaign","id":"c1"},"window":{"from":"2026-04-20","to":"2026-04-26"}}`)
+	res, err := h.tools.selectItems(ctx, SelectInput{IDs: []string{"p1", "p-later"}})
+	if err != nil || res.Done != "selecting 1 post" || !strings.Contains(res.Note, "aren't on the calendar on screen") {
+		t.Fatalf("select = %+v, %v", res, err)
+	}
+	if got := st.uiActions(); len(got) != 1 || !slices.Equal(got[0].Selection.IDs, []string{"p1"}) {
+		t.Fatalf("actions = %+v; want only the post on screen", got)
+	}
+	_, err = h.tools.selectItems(ctx, SelectInput{IDs: []string{"p-later"}})
+	refusal(t, err, "none of those posts are on the calendar on screen")
+
+	// Once the turn has moved to the list, what the calendar draws is moot.
+	if _, err := h.tools.navigate(ctx, NavigateInput{Screen: "campaign.list"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err = h.tools.selectItems(ctx, SelectInput{IDs: []string{"p1", "p-later"}})
+	if err != nil || res.Done != "selecting 2 posts" {
+		t.Fatalf("select after navigate = %+v, %v", res, err)
+	}
+}
+
+// screenViews records the view each OnScreen was asked about.
+type screenViews struct {
+	memViews
+	asked []viewcontext.ViewContext
+}
+
+func (v *screenViews) OnScreen(ctx context.Context, view *viewcontext.ViewContext, ids []string) ([]string, error) {
+	v.asked = append(v.asked, *view)
+	return v.memViews.OnScreen(ctx, view, ids)
+}
+
+// The screen applies a turn's actions in order, so a select after a
+// set_filter reads the calendar under the new filter, on the same days.
+func TestSelectOnTheCalendarReadsTheTurnsFilter(t *testing.T) {
+	views := &screenViews{memViews: testViews()}
+	tools := &toolSet{deps: Repos{Views: views}}
+	ctx, _ := onScreen(t, `{"version":1,"screen":"campaign.calendar","scope":{"kind":"campaign","id":"c1"},"filter":"status=draft","window":{"from":"2026-04-20","to":"2026-04-26"}}`)
+	for _, filter := range []string{"status=scheduled", ""} {
+		if _, err := tools.setFilter(ctx, SetFilterInput{Filter: filter}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tools.selectItems(ctx, SelectInput{IDs: []string{"p1"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(views.asked) != 2 || views.asked[0].Filter != "status=scheduled" || views.asked[1].Filter != "" ||
+		views.asked[1].Window == nil || views.asked[1].Window.From != "2026-04-20" {
+		t.Fatalf("asked = %+v; want each select under the filter set before it, on the screen's days", views.asked)
+	}
+}
+
 func TestSelectPostsNeedsACampaign(t *testing.T) {
 	h := newHarness(t)
 	ctx, st := onScreen(t, workspaceHome)

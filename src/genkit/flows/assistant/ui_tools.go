@@ -223,10 +223,32 @@ func (t *toolSet) selectItems(ctx context.Context, in SelectInput) (*UIResult, e
 	for i, it := range items {
 		ids[i] = it.ID
 	}
+	missing := len(in.IDs) - len(ids)
+	// The calendar the user is on ticks only the cards it draws, so a post
+	// on other days or hidden by the filter is skipped here rather than
+	// reported as selected and then dropped by the screen.
+	var offScreen int
+	if v := st.calendarOnScreen(); kind == viewcontext.KindPost && v != nil {
+		shown, err := t.deps.Views.OnScreen(ctx, v, ids)
+		if err != nil {
+			return nil, err
+		}
+		if len(shown) == 0 {
+			return nil, assistantkit.Refused("none of those posts are on the calendar on screen: they are on other days or the filter hides them; navigate to their week or change the filter first")
+		}
+		offScreen, ids = len(ids)-len(shown), shown
+	}
 	st.addUI(UIAction{Type: UISelect, Screen: screen, CampaignID: st.currentCampaign(), Selection: &UISelection{Kind: kind, IDs: ids}})
 	res := &UIResult{Done: fmt.Sprintf("selecting %d %s", len(ids), plural(kind, len(ids))), Note: uiApplies}
-	if missing := len(in.IDs) - len(ids); missing > 0 {
-		res.Note = fmt.Sprintf("%d of the ids don't exist and were skipped. %s", missing, uiApplies)
+	var skipped []string
+	if missing > 0 {
+		skipped = append(skipped, fmt.Sprintf("%d of the ids don't exist", missing))
+	}
+	if offScreen > 0 {
+		skipped = append(skipped, fmt.Sprintf("%d of the posts aren't on the calendar on screen (other days, or hidden by the filter)", offScreen))
+	}
+	if len(skipped) > 0 {
+		res.Note = fmt.Sprintf("%s and were skipped. %s", strings.Join(skipped, "; "), uiApplies)
 	}
 	return res, nil
 }

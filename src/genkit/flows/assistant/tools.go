@@ -62,6 +62,9 @@ type turnState struct {
 	// window is the analytics window a set_window in the turn asked for;
 	// nil keeps the screen's.
 	window *viewcontext.Window
+	// filter is the list filter a set_filter in the turn asked for on the
+	// screen it is on; nil keeps the screen's.
+	filter *string
 	// loaded is the turn's packs, besides core; restarted is set once the
 	// turn restarted with a pack loadPack asked for (requested).
 	loaded    []string
@@ -263,10 +266,37 @@ func (st *turnState) addUI(a UIAction) {
 	// campaign's Assets tab.
 	if a.Type == UINavigate || a.Type == UIOpenSavedView || a.Type == UIOpenConnect || a.Type == UIOpenAddSource {
 		st.screen, st.campaign = a.Screen, a.CampaignID
+		st.filter = nil
+	}
+	if a.Type == UISetFilter {
+		st.filter = a.Filter
 	}
 	if a.Type == UISetWindow {
 		st.window = a.Window
 	}
+}
+
+// calendarOnScreen is the turn's view while the user is still on the
+// calendar it was sent from: the days it shows, under the filter a
+// set_filter earlier in the turn put on it, since the screen applies the
+// actions in order. Nil once the turn has moved elsewhere, or off a
+// calendar, where what is drawn isn't known.
+func (st *turnState) calendarOnScreen() *viewcontext.ViewContext {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	v := st.view.View
+	if v.Window == nil || (v.Screen != "calendar" && v.Screen != "campaign.calendar") {
+		return nil
+	}
+	if st.screen != v.Screen || st.campaign != st.campaignID() {
+		return nil
+	}
+	if st.filter != nil {
+		shown := *v
+		shown.Filter = *st.filter
+		return &shown
+	}
+	return v
 }
 
 // currentWindow is the analytics window the turn reads: the one a
@@ -435,7 +465,7 @@ func defineTools(g *genkit.Genkit, deps Repos, packs []Pack) (*toolSet, error) {
 		spec(genkit.DefineTool(g, "select",
 			"Selects items on the list on the user's screen — the Ideas, Assets or posts list, the calendar, or the Foundation's voices, audiences, facts or series — replacing the selection. Takes their ids.",
 			assistantkit.Wrap(t.selectItems)),
-			`Call this when the user asks you to select or tick items on the list — e.g. "select the pricing ones". Pass ids you have from getSelection, getFocus or a pack's tools; never invent them.`),
+			`Call this when the user asks you to select or tick items on the list — e.g. "select the pricing ones". Pass ids you have from getSelection, getFocus or a pack's tools; never invent them. On the calendar only the posts on screen can be ticked — its days and its filter; for others, navigate to their week or change the filter first.`),
 		spec(genkit.DefineTool(g, "openSavedView",
 			"Opens one of the user's saved views of the Ideas or Assets list. Takes the saved view's id.",
 			assistantkit.Wrap(t.openSavedView)),
