@@ -362,6 +362,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Platforms: r.platformRepo,
 			Ideas:     r.ideaRepo,
 			Brands:    r.brandRepo,
+			Series:    r.seriesRepo,
 		},
 		postAssistRepos: post_assistant.PostAssistantRepos{
 			Posts:       r.postRepo,
@@ -413,7 +414,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Ideas:     ideas.New(r.ideaRepo, r.userRepo),
 			IdeaRepo:  r.ideaRepo,
 			Titles:    r.entityTitleRepo,
-			Compose:   compose.New(d.db, r.ideaRepo, r.campaignRepo, r.postIdeaRepo, r.postLogRepo, d.hub),
+			Compose:   compose.New(d.db, r.ideaRepo, r.campaignRepo, r.postIdeaRepo, r.postLogRepo, d.hub).WithSeries(r.seriesRepo),
 			Hub:       d.hub,
 			Assets:    r.pieceRepo,
 			Files:     r.assetFileRepo,

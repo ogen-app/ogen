@@ -1,0 +1,2 @@
+ALTER TABLE ideas
+    DROP COLUMN IF EXISTS series_id;

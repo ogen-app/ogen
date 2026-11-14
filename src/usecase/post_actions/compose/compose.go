@@ -123,8 +123,50 @@ type Service struct {
 	links     repository.PostIdeaRepository
 	logs      repository.PostLogRepository
 	hub       eventhub.Hub
+	series    repository.SeriesRepository
 	draft     Drafter
 	now       func() time.Time
+}
+
+// WithSeries returns s stamping a post made from a series idea with that
+// series. Without it the posts carry no series.
+func (s *Service) WithSeries(r repository.SeriesRepository) *Service {
+	s.series = r
+	return s
+}
+
+// postSeries is the series a post made from ideas belongs to, and the format
+// it takes from it.
+type postSeries struct {
+	id     string
+	format *models.ContentFormat
+}
+
+// seriesOf is the live series of the first idea a content plan reserved for
+// one; nil when none was, the series is gone, or s has no series.
+func (s *Service) seriesOf(ctx context.Context, ideas []models.Idea) (*postSeries, error) {
+	i := slices.IndexFunc(ideas, func(idea models.Idea) bool { return idea.SeriesID != nil })
+	if s.series == nil || i < 0 {
+		return nil, nil
+	}
+	sr, err := s.series.GetByID(ctx, *ideas[i].SeriesID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &postSeries{id: sr.ID, format: sr.ContentFormat}, nil
+}
+
+// publishingDays is the weekdays a post's date may snap to. A series post on
+// its plan's date keeps that date: the series' weekday outranks the
+// campaign's publishing days. A date the call asked for snaps as any other.
+func publishingDays(campaign *models.Campaign, series *postSeries, asked *models.CalendarDate) []string {
+	if series != nil && asked == nil {
+		return nil
+	}
+	return campaign.PublishingDays
 }
 
 // New returns a Service. logs and hub may be nil (no audit entry, no event).
@@ -156,10 +198,14 @@ func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	series, err := s.seriesOf(ctx, ideas)
+	if err != nil {
+		return nil, err
+	}
 	res := &Result{Ideas: ideas}
 	logs := make([]*models.PostLog, 0, len(targets))
 	for _, t := range targets {
-		post, err := s.build(in, t, ideas, campaign)
+		post, err := s.build(in, t, ideas, campaign, series)
 		if err != nil {
 			return nil, err
 		}
@@ -302,8 +348,8 @@ func compileTargets(in Input, ideas []models.Idea, campaign *models.Campaign) ([
 }
 
 // build assembles one post for t: the request's fields, else the first idea
-// plan that sets each.
-func (s *Service) build(in Input, t target, ideas []models.Idea, campaign *models.Campaign) (*models.Post, error) {
+// plan that sets each. A series post takes the series and its format.
+func (s *Service) build(in Input, t target, ideas []models.Idea, campaign *models.Campaign, series *postSeries) (*models.Post, error) {
 	plan := firstPlan(ideas, campaign.ID)
 	platformID, postType := t.platformID, t.postType
 	id, err := models.NewID()
@@ -333,6 +379,9 @@ func (s *Service) build(in Input, t target, ideas []models.Idea, campaign *model
 	if phase := cmp.Or(in.PhaseID, deref(plan.PhaseID)); phase != "" {
 		post.CampaignTypePhaseID = &phase
 	}
+	if series != nil {
+		post.SeriesID, post.ContentFormat = &series.id, series.format
+	}
 	date := in.TargetDate
 	if date == nil {
 		date = plan.TargetDate
@@ -340,7 +389,7 @@ func (s *Service) build(in Input, t target, ideas []models.Idea, campaign *model
 	if date != nil {
 		loc, _ := settings.ResolveTimezone(campaign.Timezone)
 		post.ScheduledAt, _, _ = scheduling.ComposeScheduledAt(date.String(), id, loc,
-			campaign.PublishingTime, campaign.PublishingDays, campaign.SpreadMinutes, campaign.StartDate, campaign.EndDate)
+			campaign.PublishingTime, publishingDays(campaign, series, in.TargetDate), campaign.SpreadMinutes, campaign.StartDate, campaign.EndDate)
 	}
 	return post, nil
 }

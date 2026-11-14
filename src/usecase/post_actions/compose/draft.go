@@ -34,6 +34,13 @@ type DraftRequest struct {
 	WindowEnd    string
 	PhaseID      string
 	UsedAssetIDs []string
+	// SeriesID and ContentFormat are the series the posts belong to and the
+	// format they take from it; empty for posts of no series.
+	SeriesID      string
+	ContentFormat *models.ContentFormat
+	// AnyDay keeps each date on its weekday, even one the campaign doesn't
+	// publish on: a series post on its plan's date.
+	AnyDay bool
 	// CreatedBy is who the posts and their source notes are attributed to.
 	CreatedBy string
 }
@@ -179,8 +186,12 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 		for i, idea := range group {
 			ids[i] = idea.ID
 		}
+		series, err := s.seriesOf(ctx, group)
+		if err != nil {
+			return nil, err
+		}
 		for _, p := range platforms {
-			out.Jobs = append(out.Jobs, DraftJob{IdeaIDs: ids, DateFrom: dateFrom(in.TargetDate, plan.TargetDate), Request: DraftRequest{
+			req := DraftRequest{
 				CampaignID:     campaign.ID,
 				PlatformID:     p,
 				PostType:       postType,
@@ -192,7 +203,12 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 				PhaseID:        phase,
 				UsedAssetIDs:   sourceAssets(group),
 				CreatedBy:      in.Actor,
-			}})
+			}
+			if series != nil {
+				req.SeriesID, req.ContentFormat = series.id, series.format
+				req.AnyDay = in.TargetDate == nil
+			}
+			out.Jobs = append(out.Jobs, DraftJob{IdeaIDs: ids, DateFrom: dateFrom(in.TargetDate, plan.TargetDate), Request: req})
 		}
 	}
 	return out, nil
