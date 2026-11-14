@@ -256,7 +256,7 @@ func TestResult_EditLines(t *testing.T) {
 		original:   "Hook\nBook now!!!\nCTA",
 	}
 	r := st.result()
-	if len(r.Lines) != 1 || r.Lines[0].Before != "Book now!!!" || r.Lines[0].After != "Invite them in." {
+	if len(r.Lines) != 1 || !slices.Equal(r.Lines[0].Before, []string{"Book now!!!"}) || !slices.Equal(r.Lines[0].After, []string{"Invite them in."}) {
 		t.Fatalf("lines = %+v", r.Lines)
 	}
 }
