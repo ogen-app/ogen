@@ -127,7 +127,7 @@ func selectIdeasOn(db bun.IDB, model any) *bun.SelectQuery {
 		ColumnExpr("i.origin, i.asset_analysis_id, i.distill_run_id, i.source_asset_id, i.angle, i.rationale, i.sources, i.source_locator").
 		ColumnExpr("i.fit_score, i.fit_breakdown, i.fit_rubric_version").
 		ColumnExpr("i.plan_platform_id, i.plan_post_type, i.plan_phase_id, i.plan_target_date").
-		ColumnExpr("i.grounding_mode, i.asset_ids").
+		ColumnExpr("i.grounding_mode, i.asset_ids, i.series_id").
 		ColumnExpr("i.created_by, i.created_by_name, i.created_at, i.updated_at").
 		ColumnExpr("c.id AS campaign_id").
 		Join("LEFT JOIN campaigns AS c ON c.id = i.campaign_id AND c.deleted_at IS NULL")
