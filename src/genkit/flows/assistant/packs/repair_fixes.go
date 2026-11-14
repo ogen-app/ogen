@@ -13,6 +13,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -83,6 +84,32 @@ type ChangedPost struct {
 	FromType string   `json:"fromType,omitempty"`
 	ToType   string   `json:"toType,omitempty"`
 	Kept     []string `json:"kept,omitempty"`
+	// Rules says whether a converted post passes its new type's publishing
+	// rules on its platform; left out when its platform or media couldn't
+	// be read, rather than claim it passes.
+	Rules *TypeRules `json:"rules,omitempty"`
+}
+
+// TypeRules is how a post stands against its type's publishing rules: it
+// passes, or Broken are the rules it still breaks.
+type TypeRules struct {
+	Passes bool                        `json:"passes"`
+	Broken []platforms.ValidationError `json:"broken,omitempty"`
+}
+
+// typeRules checks p as postType against its platform's publishing rules,
+// with its attachments; nil when its platform isn't loaded.
+func typeRules(p models.Post, postType string, atts []models.PostAttachment) *TypeRules {
+	if p.Platform == nil || p.Platform.ID != p.PlatformID {
+		return nil
+	}
+	p.PlatformPostType = postType
+	r := &TypeRules{}
+	for _, errs := range platforms.ValidatePublishReadiness(&p, p.Platform, atts) {
+		r.Broken = append(r.Broken, errs...)
+	}
+	r.Passes = len(r.Broken) == 0
+	return r
 }
 
 // kept is what of p a conversion carries over: its caption and its media,
@@ -105,8 +132,22 @@ func kept(p models.Post, media int, known bool) []string {
 // there is no way to count them or the read failed: the counts only dress
 // a card, but no count must not read as none.
 func mediaCounts(ctx context.Context, d Deps, ids []string) (counts map[string]int, known bool) {
+	atts, known := attachmentsOf(ctx, d, ids)
+	if !known {
+		return nil, false
+	}
+	counts = map[string]int{}
+	for id, a := range atts {
+		counts[id] = len(a)
+	}
+	return counts, true
+}
+
+// attachmentsOf are the posts' attachments by post; known is false when
+// they couldn't be read.
+func attachmentsOf(ctx context.Context, d Deps, ids []string) (byPost map[string][]models.PostAttachment, known bool) {
 	if len(ids) == 0 {
-		return map[string]int{}, true
+		return map[string][]models.PostAttachment{}, true
 	}
 	if d.Attachments == nil {
 		return nil, false
@@ -115,11 +156,11 @@ func mediaCounts(ctx context.Context, d Deps, ids []string) (counts map[string]i
 	if err != nil {
 		return nil, false
 	}
-	counts = map[string]int{}
+	byPost = map[string][]models.PostAttachment{}
 	for _, a := range atts {
-		counts[a.PostID]++
+		byPost[a.PostID] = append(byPost[a.PostID], a)
 	}
-	return counts, true
+	return byPost, true
 }
 
 // changed is p as a fix's row, before the fix.
@@ -388,7 +429,7 @@ func changePostType(ctx context.Context, d Deps, in ChangePostTypeInput) (*PostF
 		return nil, fmt.Errorf("change post types: %w", err)
 	}
 	var before, after []assistantundo.PostState
-	media, known := mediaCounts(ctx, d, set)
+	atts, known := attachmentsOf(ctx, d, set)
 	for _, ch := range changes {
 		if !slices.Contains(set, ch.PostID) {
 			out.Skipped = append(out.Skipped, SkippedPost{PostID: ch.PostID, Reason: "it changed since the offer"})
@@ -398,7 +439,10 @@ func changePostType(ctx context.Context, d Deps, in ChangePostTypeInput) (*PostF
 		after = append(after, assistantundo.PostState{ID: ch.PostID, PostType: ch.To, Status: ch.ToStatus})
 		p := posts[slices.IndexFunc(posts, func(p models.Post) bool { return p.ID == ch.PostID })]
 		row := changed(c, p)
-		row.ToStatus, row.ScheduledAt, row.FromType, row.ToType, row.Kept = ch.ToStatus, p.ScheduledAt, ch.From, ch.To, kept(p, media[p.ID], known)
+		row.ToStatus, row.ScheduledAt, row.FromType, row.ToType, row.Kept = ch.ToStatus, p.ScheduledAt, ch.From, ch.To, kept(p, len(atts[p.ID]), known)
+		if known {
+			row.Rules = typeRules(p, ch.To, atts[p.ID])
+		}
 		out.Posts = append(out.Posts, row)
 	}
 	out.Changed = len(set)
