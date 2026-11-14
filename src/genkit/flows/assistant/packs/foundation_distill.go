@@ -216,13 +216,20 @@ func getBrandDistill(ctx context.Context, d Deps, in DistillRef) (*DistillOut, e
 	return distillOut(run), nil
 }
 
-func startBrandDistill(ctx context.Context, d Deps, in StartDistillInput) (*DistillOut, error) {
-	ids := in.AssetIDs
-	if len(ids) == 0 && strings.TrimSpace(in.WebsiteURL) == "" {
-		if open := assistant.FocusedAsset(ctx); open != "" {
-			ids = []string{open}
-		}
+// assets is what the run reads: the assets asked for, else the open asset
+// when no website is asked for either.
+func (in StartDistillInput) assets(ctx context.Context) []string {
+	if len(in.AssetIDs) > 0 || strings.TrimSpace(in.WebsiteURL) != "" {
+		return in.AssetIDs
 	}
+	if open := assistant.FocusedAsset(ctx); open != "" {
+		return []string{open}
+	}
+	return nil
+}
+
+func startBrandDistill(ctx context.Context, d Deps, in StartDistillInput) (*DistillOut, error) {
+	ids := in.assets(ctx)
 	by := actor(ctx)
 	run, err := d.Distill.Request(ctx, branddistill.RequestInput{TenantID: tenantOf(ctx), UserID: &by, WebsiteURL: in.WebsiteURL, AssetIDs: ids})
 	if err != nil {
@@ -270,6 +277,57 @@ func answerDistill(ctx context.Context, d Deps, in AnswerDistillInput) (*Distill
 	}
 	out.Grounding = new(newAssetTitles(d).grounding(ctx, fromIdeas(cited, nil)))
 	return out, nil
+}
+
+// startDistillCard is the reading offer's card: the website as a row and
+// the assets as sources, as the run will read them.
+func startDistillCard(ctx context.Context, d Deps, in StartDistillInput) *assistantkit.Card {
+	c := &assistantkit.Card{Verb: "Read the brand", Action: assistantkit.CardActionReadBrand,
+		Footnote: "About two minutes", FootnoteKey: assistantkit.CardFootnoteBrandReading}
+	if site := strings.TrimSpace(in.WebsiteURL); site != "" {
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowWebsite, Value: site, Note: "Its homepage and up to nine pages"})
+	}
+	setCardSources(ctx, d, c, in.assets(ctx))
+	return c
+}
+
+// answerDistillCard is the answers offer's card: each answer under its
+// question, with where it came from, and the assets the answers cite. A
+// question the reading doesn't ask is left out; the call is refused on yes.
+func answerDistillCard(ctx context.Context, d Deps, in AnswerDistillInput) *assistantkit.Card {
+	var asked map[string]string
+	if run, err := latestRun(ctx, d, in.RunID); err == nil && run.Proposal != nil {
+		asked = map[string]string{}
+		for _, q := range run.Proposal.Questions {
+			asked[q.ID] = q.Text
+		}
+	}
+	c := &assistantkit.Card{Verb: "Answer " + plural(len(in.Answers), "question", "questions"),
+		Action: assistantkit.CardActionAnswerQuestions, Count: len(in.Answers)}
+	var cited []string
+	for _, a := range in.Answers {
+		question, ok := asked[a.QuestionID]
+		if asked != nil && !ok {
+			continue
+		}
+		c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowAnswer, Label: question,
+			Value: strings.TrimSpace(a.Answer), Note: strings.TrimSpace(a.From)})
+		cited = append(cited, a.AssetIDs...)
+	}
+	setCardSources(ctx, d, c, cited)
+	return c
+}
+
+// setCardSources gives c the assets ids names, once each, as its sources.
+func setCardSources(ctx context.Context, d Deps, c *assistantkit.Card, ids []string) {
+	if ids = dedupe(ids); len(ids) == 0 || d.Assets == nil {
+		return
+	}
+	metas, err := d.Assets.ListMeta(ctx, ids)
+	if err != nil || len(metas) == 0 {
+		return
+	}
+	c.Sources, c.Meta, c.DrawsOn = cardSources(metas), sourcesMeta(metas), assistantkit.CardDrawsOnSources
 }
 
 // distillSources counts what run reads. A website's address is the one
@@ -388,6 +446,9 @@ func distillSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 				}
 				return "Read the brand off the open asset"
 			},
+			Card: func(ctx context.Context, in StartDistillInput) *assistantkit.Card {
+				return startDistillCard(ctx, d, in)
+			},
 		}, assistantkit.Wrap(recorded(foundationPackName, "startBrandDistill", nil, func(ctx context.Context, in StartDistillInput) (*DistillOut, error) {
 			return startBrandDistill(ctx, d, in)
 		}))),
@@ -403,6 +464,9 @@ func distillSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			},
 			Summary: func(in AnswerDistillInput) string {
 				return "Answer " + plural(len(in.Answers), "question", "questions") + " and update the brand proposal"
+			},
+			Card: func(ctx context.Context, in AnswerDistillInput) *assistantkit.Card {
+				return answerDistillCard(ctx, d, in)
 			},
 		}, assistantkit.Wrap(recorded(foundationPackName, "answerDistillQuestions", nil, func(ctx context.Context, in AnswerDistillInput) (*DistillOut, error) {
 			return answerDistill(ctx, d, in)

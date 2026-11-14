@@ -131,14 +131,7 @@ func TestEditBrand(t *testing.T) {
 	lib := brandlib.New(brand)
 	facts := brandfacts.New(brand)
 	ctx, _ := turn(t, workspace, nil)
-	for _, m := range []any{
-		&models.Account{ID: "acc-1", Email: "jane@example.com", Name: "Jane"},
-		&models.User{ID: "u1", AccountID: "acc-1", TenantID: "tenant-1", Name: "Jane", Email: "jane@example.com", Role: models.RoleOwner},
-	} {
-		if _, err := db.NewInsert().Model(m).Exec(ctx); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-	}
+	seedOwner(t, db)
 
 	in := EditBrandInput{
 		AddFacts:     []FactInput{{Statement: "Founded in 2019"}, {Statement: "Founded in 2019"}, {Statement: "Offices in Kyiv and Lisbon"}},
@@ -179,6 +172,65 @@ func TestEditBrand(t *testing.T) {
 	}
 	refused(t, EditBrandInput{UpdateVoices: []UpdateVoiceInput{{Name: "x"}}}.precheck())
 	refused(t, EditBrandInput{RemoveFacts: []string{"f1"}, Kept: []KeptFact{{FactID: " f1", Reason: "still true"}}}.precheck())
+}
+
+// The bulk edit offer's card has a row per kind of change naming its first
+// few items, then the facts kept and why; one kind of change names the
+// button.
+func TestEditBrandCard(t *testing.T) {
+	db, actions := undoStore(t)
+	brand := repository.NewBrandRepository(db)
+	d := Deps{Brand: brand, Actions: actions}
+	facts := brandfacts.New(brand)
+	ctx, _ := turn(t, workspace, nil)
+	seedOwner(t, db)
+	var ids []string
+	for _, s := range []string{"Price 1", "Price 2", "Price 3", "Price 4", "Price 5", "Price 6", "Price 7"} {
+		f, err := addFact(ctx, d, facts, FactInput{Statement: s})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, f.Fact.ID)
+	}
+	voice, err := addVoice(ctx, d, brandlib.New(brand), VoiceInput{Name: "Formal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	card := EditBrandInput{RemoveFacts: append(slices.Clone(ids[:5]), "gone"), Kept: []KeptFact{{FactID: ids[6], Reason: "a 2026 document states it"}}}.card(ctx, d)
+	if card.Verb != "Remove 6 facts" || card.Action != assistantkit.CardActionRemove || card.Item != assistantkit.CardItemFact || card.Count != 6 || len(card.Rows) != 2 {
+		t.Fatalf("card = %+v", card)
+	}
+	// The row names the first five; the missing sixth is counted, not named.
+	if r := card.Rows[0]; r.Kind != assistantkit.CardRowChange || r.Value != "Remove 6 facts" || r.Count != 6 ||
+		!slices.Equal(r.Names, []string{"Price 1", "Price 2", "Price 3", "Price 4", "Price 5"}) {
+		t.Fatalf("change row = %+v", r)
+	}
+	if r := card.Rows[1]; r.Kind != assistantkit.CardRowKept || r.Value != "Price 7" || r.Note != "a 2026 document states it" || r.Item != assistantkit.CardItemFact {
+		t.Fatalf("kept row = %+v", r)
+	}
+
+	mixed := EditBrandInput{AddFacts: []FactInput{{Statement: " Founded in 2019 "}}, UpdateFacts: []UpdateFactInput{{FactID: ids[0]}},
+		RemoveVoices: []string{voice.Voice.ID}, AddAudiences: []AudienceInput{{Name: "CTOs"}, {Name: "CFOs"}}}.card(ctx, d)
+	if mixed.Verb != "Make 5 brand changes" || mixed.Action != assistantkit.CardActionEditBrand || mixed.Item != "" || mixed.Count != 5 || len(mixed.Rows) != 4 {
+		t.Fatalf("mixed = %+v", mixed)
+	}
+	for i, want := range []struct {
+		value, item, action string
+		names               []string
+	}{
+		{"Add 1 fact", assistantkit.CardItemFact, assistantkit.CardActionAdd, []string{"Founded in 2019"}},
+		{"Update 1 fact", assistantkit.CardItemFact, assistantkit.CardActionUpdate, []string{"Price 1"}},
+		{"Remove 1 voice", assistantkit.CardItemVoice, assistantkit.CardActionRemove, []string{"Formal"}},
+		{"Add 2 audiences", assistantkit.CardItemAudience, assistantkit.CardActionAdd, []string{"CTOs", "CFOs"}},
+	} {
+		if r := mixed.Rows[i]; r.Value != want.value || r.Item != want.item || r.Action != want.action || !slices.Equal(r.Names, want.names) {
+			t.Fatalf("row %d = %+v, want %+v", i, r, want)
+		}
+	}
+	if card := (EditBrandInput{}).card(ctx, d); card != nil {
+		t.Fatalf("empty card = %+v", card)
+	}
 }
 
 // A bulk edit stopped by an error retries the changes from the one it

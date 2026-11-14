@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
@@ -153,22 +154,104 @@ func (in EditBrandInput) precheck() error {
 	return nil
 }
 
-func (in EditBrandInput) summary() string {
-	var parts []string
-	for _, c := range []struct {
-		n          int
-		verb, what string
-	}{
-		{len(in.AddFacts), "add", "fact"}, {len(in.UpdateFacts), "update", "fact"}, {len(in.RemoveFacts), "remove", "fact"},
-		{len(in.AddVoices), "add", "voice"}, {len(in.UpdateVoices), "update", "voice"}, {len(in.RemoveVoices), "remove", "voice"},
-		{len(in.AddAudiences), "add", "audience"}, {len(in.UpdateAudiences), "update", "audience"}, {len(in.RemoveAudiences), "remove", "audience"},
-	} {
-		if c.n > 0 {
-			parts = append(parts, c.verb+" "+plural(c.n, c.what, c.what+"s"))
+// brandChanges is one kind of change of a bulk edit: N items of a kind
+// added, updated or removed.
+type brandChanges struct {
+	item, action string
+	n            int
+	// name reads the i-th item's name; empty when it can't be read.
+	name func(ctx context.Context, i int) string
+}
+
+func (c brandChanges) String() string {
+	return c.action + " " + plural(c.n, c.item, c.item+"s")
+}
+
+// changes is the edit's changes by kind, in the order they are made, kinds
+// with none left out.
+func (in EditBrandInput) changes(d Deps) []brandChanges {
+	fact := func(id func(int) string) func(context.Context, int) string {
+		return func(ctx context.Context, i int) string {
+			if f, err := d.Brand.GetFact(ctx, strings.TrimSpace(id(i))); err == nil && f != nil {
+				return f.Statement
+			}
+			return ""
 		}
 	}
-	s := strings.Join(parts, ", ")
-	return strings.ToUpper(s[:1]) + s[1:]
+	voice := func(id func(int) string) func(context.Context, int) string {
+		return func(ctx context.Context, i int) string {
+			if v, err := d.Brand.GetVoice(ctx, strings.TrimSpace(id(i))); err == nil && v != nil {
+				return v.Name
+			}
+			return ""
+		}
+	}
+	audience := func(id func(int) string) func(context.Context, int) string {
+		return func(ctx context.Context, i int) string {
+			if a, err := d.Brand.GetAudience(ctx, strings.TrimSpace(id(i))); err == nil && a != nil {
+				return a.Name
+			}
+			return ""
+		}
+	}
+	all := []brandChanges{
+		{assistantkit.CardItemFact, assistantkit.CardActionAdd, len(in.AddFacts),
+			func(_ context.Context, i int) string { return strings.TrimSpace(in.AddFacts[i].Statement) }},
+		{assistantkit.CardItemFact, assistantkit.CardActionUpdate, len(in.UpdateFacts), fact(func(i int) string { return in.UpdateFacts[i].FactID })},
+		{assistantkit.CardItemFact, assistantkit.CardActionRemove, len(in.RemoveFacts), fact(func(i int) string { return in.RemoveFacts[i] })},
+		{assistantkit.CardItemVoice, assistantkit.CardActionAdd, len(in.AddVoices),
+			func(_ context.Context, i int) string { return strings.TrimSpace(in.AddVoices[i].Name) }},
+		{assistantkit.CardItemVoice, assistantkit.CardActionUpdate, len(in.UpdateVoices), voice(func(i int) string { return in.UpdateVoices[i].VoiceID })},
+		{assistantkit.CardItemVoice, assistantkit.CardActionRemove, len(in.RemoveVoices), voice(func(i int) string { return in.RemoveVoices[i] })},
+		{assistantkit.CardItemAudience, assistantkit.CardActionAdd, len(in.AddAudiences),
+			func(_ context.Context, i int) string { return strings.TrimSpace(in.AddAudiences[i].Name) }},
+		{assistantkit.CardItemAudience, assistantkit.CardActionUpdate, len(in.UpdateAudiences),
+			audience(func(i int) string { return in.UpdateAudiences[i].AudienceID })},
+		{assistantkit.CardItemAudience, assistantkit.CardActionRemove, len(in.RemoveAudiences), audience(func(i int) string { return in.RemoveAudiences[i] })},
+	}
+	return slices.DeleteFunc(all, func(c brandChanges) bool { return c.n == 0 })
+}
+
+func (in EditBrandInput) summary() string {
+	var parts []string
+	for _, c := range in.changes(Deps{}) {
+		parts = append(parts, c.String())
+	}
+	return capitalize(strings.Join(parts, ", "))
+}
+
+// cardNames is how many items a change row names.
+const cardNames = 5
+
+// card is the bulk edit offer's card: a row per kind of change naming its
+// first few items, then the facts kept and why.
+func (in EditBrandInput) card(ctx context.Context, d Deps) *assistantkit.Card {
+	changes := in.changes(d)
+	if len(changes) == 0 {
+		return nil
+	}
+	c := &assistantkit.Card{}
+	for _, ch := range changes {
+		row := assistantkit.CardRow{Kind: assistantkit.CardRowChange, Value: capitalize(ch.String()), Item: ch.item, Action: ch.action, Count: ch.n}
+		for i := range min(ch.n, cardNames) {
+			if name := ch.name(ctx, i); name != "" {
+				row.Names = append(row.Names, name)
+			}
+		}
+		c.Rows = append(c.Rows, row)
+	}
+	if len(changes) == 1 {
+		r := c.Rows[0]
+		c.Verb, c.Action, c.Item, c.Count = r.Value, r.Action, r.Item, r.Count
+	} else {
+		c.Verb, c.Action, c.Count = "Make "+plural(in.size(), "brand change", "brand changes"), assistantkit.CardActionEditBrand, in.size()
+	}
+	if kept, err := keptFacts(ctx, d, in.Kept); err == nil {
+		for _, k := range kept {
+			c.Rows = append(c.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowKept, Value: k.Statement, Item: assistantkit.CardItemFact, Note: k.Reason})
+		}
+	}
+	return c
 }
 
 // BrandEditFailure is a change a bulk edit couldn't make.

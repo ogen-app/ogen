@@ -62,6 +62,7 @@ func foundationPack(d Deps) assistant.Pack {
 					Precheck: func(_ context.Context, in EditBrandInput) error { return in.precheck() },
 					Needs:    func(_ context.Context, in EditBrandInput) bool { return overN(d, in.size()) },
 					Summary:  func(in EditBrandInput) string { return in.summary() },
+					Card:     func(ctx context.Context, in EditBrandInput) *assistantkit.Card { return in.card(ctx, d) },
 				}, brandRetry, assistantkit.Wrap(recorded(foundationPackName, "editBrand", nil, func(ctx context.Context, in EditBrandInput) (*EditBrandOutput, error) {
 					return editBrand(ctx, d, facts, lib, in)
 				}))), ai.WithStrictSchema(false))

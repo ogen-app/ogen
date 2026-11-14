@@ -8,6 +8,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/branddistill"
@@ -127,5 +128,55 @@ func TestDistillSources(t *testing.T) {
 	mapped := &models.BrandDistillRun{Website: &models.DistillWebsite{URL: "https://villa-aurora.example"}}
 	if got := distillOut(mapped).Sources; got != (DistillSources{Website: "https://villa-aurora.example"}) {
 		t.Fatalf("mapped = %+v", got)
+	}
+}
+
+// The reading offer's card names the website and the assets it reads, the
+// open asset when nothing is named.
+func TestStartDistillCard(t *testing.T) {
+	d := Deps{Distill: &memDistill{}, Assets: memAssets{all: []models.Asset{
+		{ID: "a1", Title: "Brochure", Type: new(models.AssetTypePDF)}, {ID: "a2", Title: "Press kit"}}}}
+	ctx, _ := turn(t, workspace, nil)
+
+	card := startDistillCard(ctx, d, StartDistillInput{WebsiteURL: " https://villa-aurora.example ", AssetIDs: []string{"a1", "a2", "a1"}})
+	if card.Verb != "Read the brand" || card.Action != assistantkit.CardActionReadBrand || card.Footnote != "About two minutes" ||
+		card.FootnoteKey != assistantkit.CardFootnoteBrandReading || len(card.Rows) != 1 ||
+		card.Rows[0].Kind != assistantkit.CardRowWebsite || card.Rows[0].Value != "https://villa-aurora.example" ||
+		len(card.Sources) != 2 || card.Sources[0].Type != "PDF" || card.Meta != "from 2 assets" || card.DrawsOn != assistantkit.CardDrawsOnSources {
+		t.Fatalf("card = %+v", card)
+	}
+	if card := startDistillCard(ctx, d, StartDistillInput{WebsiteURL: "https://villa-aurora.example"}); card.Sources != nil || card.Meta != "" {
+		t.Fatalf("website card = %+v", card)
+	}
+
+	page, _ := assistant.NewViewTurnContext(tenantctx.With(t.Context(), "tenant-1"), viewcontext.ViewContext{
+		Version: viewcontext.Version, Screen: "asset", Scope: workspace, Focus: &viewcontext.Ref{Kind: viewcontext.KindAsset, ID: "a1"}}, nil)
+	if card := startDistillCard(page, d, StartDistillInput{}); card.Rows != nil || len(card.Sources) != 1 || card.Meta != "from Brochure" {
+		t.Fatalf("open asset card = %+v", card)
+	}
+}
+
+// The answers offer's card puts each answer under its question, with where
+// it came from, and cites each asset once; a question the reading doesn't
+// ask is left out.
+func TestAnswerDistillCard(t *testing.T) {
+	d := Deps{Distill: &memDistill{}, Assets: memAssets{all: []models.Asset{{ID: "a1", Title: "Brochure"}}}}
+	ctx, _ := turn(t, workspace, nil)
+
+	card := answerDistillCard(ctx, d, AnswerDistillInput{Answers: []DistillAnswerInput{
+		{QuestionID: "q1", Answer: " Families ", From: " the brochure, p. 2 ", AssetIDs: []string{"a1", " a1"}},
+		{QuestionID: "q9", Answer: "Nobody"},
+	}})
+	if card.Verb != "Answer 2 questions" || card.Action != assistantkit.CardActionAnswerQuestions || card.Count != 2 || len(card.Rows) != 1 {
+		t.Fatalf("card = %+v", card)
+	}
+	if r := card.Rows[0]; r.Kind != assistantkit.CardRowAnswer || r.Label != "Who books most?" || r.Value != "Families" || r.Note != "the brochure, p. 2" ||
+		len(card.Sources) != 1 || card.Meta != "from Brochure" {
+		t.Fatalf("row = %+v, sources = %+v", r, card.Sources)
+	}
+	// The user's own answer has no note and no sources.
+	if card := answerDistillCard(ctx, d, AnswerDistillInput{Answers: []DistillAnswerInput{{QuestionID: "q1", Answer: "Couples"}}}); card.Verb != "Answer 1 question" ||
+		card.Rows[0].Note != "" || card.Sources != nil {
+		t.Fatalf("own answer card = %+v", card)
 	}
 }

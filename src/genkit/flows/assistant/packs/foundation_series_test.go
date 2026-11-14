@@ -13,14 +13,7 @@ import (
 func TestSeries_ToolsAndUndo(t *testing.T) {
 	db, actions := undoStore(t)
 	ctx, _ := turn(t, campaign1, nil)
-	for _, m := range []any{
-		&models.Account{ID: "acc-1", Email: "jane@example.com", Name: "Jane"},
-		&models.User{ID: "u1", AccountID: "acc-1", TenantID: "tenant-1", Name: "Jane", Email: "jane@example.com", Role: models.RoleOwner},
-	} {
-		if _, err := db.NewInsert().Model(m).Exec(ctx); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-	}
+	seedOwner(t, db)
 	campaigns := repository.NewCampaignRepository(db, repository.NewTagRepository(db), repository.NewPlatformRepository(db), repository.NewCampaignTypeRepository(db))
 	if err := campaigns.Create(ctx, &models.Campaign{ID: "c1", Name: "Launch", AssetIDs: models.StringSlice{}, TargetPlatforms: models.CampaignPlatforms{},
 		CampaignTypeID: "Uk", Language: "en", PublishingTime: "09:00", PublishingDays: models.StringSlice{}, SpreadMinutes: 15,
