@@ -58,6 +58,10 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The response counts the ideas the post was made from, as reads do.
+	if n := res.Posts[0].Post.IdeaCount; n != 2 {
+		t.Fatalf("compiled post's idea count = %d, want 2", n)
+	}
 
 	post, err := posts.GetByID(ctx, res.Posts[0].Post.ID)
 	if err != nil {
