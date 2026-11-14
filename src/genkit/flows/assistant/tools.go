@@ -8,10 +8,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/analytics/timeframe"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
@@ -59,9 +61,12 @@ type turnState struct {
 	// after a navigate applies to the new list.
 	screen   viewcontext.Screen
 	campaign string
-	// window is the analytics window a set_window in the turn asked for;
-	// nil keeps the screen's.
+	// window is the analytics window the turn put on screen: the one a
+	// set_window asked for, or the one a screen the turn opened opens on.
+	// Until either, nil keeps the screen's; once the turn has moved, nil is
+	// none.
 	window *viewcontext.Window
+	moved  bool
 	// filter is the list filter a set_filter in the turn asked for on the
 	// screen it is on; nil keeps the screen's.
 	filter *string
@@ -299,6 +304,7 @@ func (st *turnState) addUI(a UIAction) {
 	if a.Type == UINavigate || a.Type == UIOpenSavedView || a.Type == UIOpenConnect || a.Type == UIOpenAddSource {
 		st.screen, st.campaign = a.Screen, a.CampaignID
 		st.filter = nil
+		st.window, st.moved = openingWindow(a.Screen, a.CampaignID, time.Now()), true
 	}
 	if a.Type == UISetFilter {
 		st.filter = a.Filter
@@ -332,14 +338,38 @@ func (st *turnState) calendarOnScreen() *viewcontext.ViewContext {
 }
 
 // currentWindow is the analytics window the turn reads: the one a
-// set_window asked for, else the screen's.
+// set_window asked for, else the one the screen the turn navigated to opens
+// on, else the user's screen's.
 func (st *turnState) currentWindow() *viewcontext.Window {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.window != nil {
+	if st.window != nil || st.moved {
 		return st.window
 	}
 	return st.view.View.Window
+}
+
+// openingWindow is the window screen opens on when the turn takes the user
+// there, which sends no window: the default span over every platform, on a
+// campaign's dashboard narrowed to that campaign. Nil off the analytics
+// dashboards.
+func openingWindow(screen viewcontext.Screen, campaignID string, now time.Time) *viewcontext.Window {
+	if !screen.Analytics() {
+		return nil
+	}
+	rng, err := timeframe.Resolve("", "", viewcontext.DefaultAnalyticsPreset, "", now.UTC())
+	if err != nil {
+		return nil
+	}
+	w := &viewcontext.Window{
+		From:   rng.From.Format(time.DateOnly),
+		To:     rng.To.AddDate(0, 0, -1).Format(time.DateOnly),
+		Preset: viewcontext.DefaultAnalyticsPreset,
+	}
+	if screen.InCampaign() {
+		w.CampaignID = campaignID
+	}
+	return w
 }
 
 func (st *turnState) uiActions() []UIAction {

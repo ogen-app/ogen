@@ -303,8 +303,9 @@ func TestSetWindowAndSelected(t *testing.T) {
 	if len(ui) != 2 || ui[1].Type != UISetWindow || ui[1].Window.To != "2026-03-31" || Window(ctx).From != "2026-03-01" {
 		t.Fatalf("ui = %+v", ui)
 	}
-	// It says what it replaced, none at first, and what changed.
-	if ui[1].Before != nil || !slices.Equal(ui[1].Changed, []string{viewcontext.WindowPeriod}) {
+	// It says what it replaced, at first the window the dashboard opened
+	// on, and what changed.
+	if ui[1].Before == nil || ui[1].Before.Preset != viewcontext.DefaultAnalyticsPreset || !slices.Equal(ui[1].Changed, []string{viewcontext.WindowPeriod}) {
 		t.Fatalf("first = %+v", ui[1])
 	}
 	if _, _, err := SetWindow(ctx, to(viewcontext.Window{From: "2026-03-01", To: "2026-03-31", Platforms: []string{"linkedin"}})); err != nil {
@@ -315,6 +316,55 @@ func TestSetWindowAndSelected(t *testing.T) {
 	}
 	if got := Selected(ctx, viewcontext.KindPost); len(got) != 2 || Selected(ctx, viewcontext.KindIdea) != nil {
 		t.Fatalf("selected = %v", got)
+	}
+}
+
+// A navigate opens the dashboard on its own window, not the one of the
+// screen left behind: a set_window after it replaces that one, and names
+// only what moved from it. Reads off the dashboards read no window.
+func TestSetWindowAfterNavigate(t *testing.T) {
+	calendar := viewcontext.ViewContext{Version: viewcontext.Version, Screen: "campaign.calendar", Scope: viewcontext.Scope{Kind: "campaign", ID: "c1"},
+		Window: &viewcontext.Window{From: "2026-11-01", To: "2026-11-30", Platforms: []string{"instagram"}}}
+	ctx, _ := NewViewTurnContext(t.Context(), calendar, nil)
+	st, _ := turnStateFrom(ctx)
+	keep := func(cur *viewcontext.Window) (viewcontext.Window, error) { return cur.Clone(), nil }
+	linkedin := func(cur *viewcontext.Window) (viewcontext.Window, error) {
+		w := cur.Clone()
+		w.Platforms = []string{"linkedin"}
+		return w, nil
+	}
+
+	st.addUI(UIAction{Type: UINavigate, Screen: "campaign.analytics", CampaignID: "c1"})
+	opening := openingWindow("campaign.analytics", "c1", time.Now())
+	if w := Window(ctx); w == nil || w.From != opening.From || w.To != opening.To || w.CampaignID != "c1" ||
+		w.Preset != viewcontext.DefaultAnalyticsPreset || len(w.Platforms) != 0 {
+		t.Fatalf("after the navigate the turn reads %+v", w)
+	}
+	if _, _, err := SetWindow(ctx, linkedin); err != nil {
+		t.Fatal(err)
+	}
+	set := st.uiActions()[1]
+	if set.Before == nil || set.Before.From != opening.From || len(set.Before.Platforms) != 0 || set.Before.CampaignID != "c1" ||
+		!slices.Equal(set.Changed, []string{viewcontext.WindowPlatforms}) {
+		t.Fatalf("set_window = %+v, before %+v", set, set.Before)
+	}
+	if set.Window.From != opening.From || set.Window.Preset != viewcontext.DefaultAnalyticsPreset || set.Window.CampaignID != "c1" {
+		t.Fatalf("the window set = %+v, want the opening period kept", set.Window)
+	}
+
+	// Navigating again opens the workspace dashboard afresh: what the last
+	// one set doesn't carry over, and an unchanged window changes nothing.
+	st.addUI(UIAction{Type: UINavigate, Screen: "analytics"})
+	if _, _, err := SetWindow(ctx, keep); err != nil {
+		t.Fatal(err)
+	}
+	if again := st.uiActions()[3]; again.Before == nil || again.Before.CampaignID != "" || len(again.Before.Platforms) != 0 || again.Changed != nil {
+		t.Fatalf("second set_window = %+v, before %+v", again, again.Before)
+	}
+
+	st.addUI(UIAction{Type: UINavigate, Screen: "campaign.ideas", CampaignID: "c1"})
+	if w := Window(ctx); w != nil {
+		t.Fatalf("off the dashboards the turn reads %+v", w)
 	}
 }
 

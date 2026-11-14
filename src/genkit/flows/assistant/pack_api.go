@@ -67,7 +67,7 @@ func SetWindow(ctx context.Context, merge func(cur *viewcontext.Window) (viewcon
 	st.planning.Lock()
 	defer st.planning.Unlock()
 	screen := st.currentScreen()
-	if screen != "analytics" && screen != "campaign.analytics" {
+	if !screen.Analytics() {
 		return "", viewcontext.Window{}, ErrNoAnalyticsScreen
 	}
 	cur := st.currentWindow()

@@ -56,6 +56,10 @@ func (s Screen) Valid() bool { return slices.Contains(screens, s) }
 // campaign to show.
 func (s Screen) InCampaign() bool { return strings.HasPrefix(string(s), "campaign.") }
 
+// Analytics reports whether s is an analytics dashboard, the workspace's or
+// a campaign's, whose window a set_window changes.
+func (s Screen) Analytics() bool { return s == "analytics" || s == "campaign.analytics" }
+
 // detailKinds names the entity each detail screen shows.
 var detailKinds = map[Screen]EntityKind{
 	"asset": KindAsset, "campaign.asset": KindAsset,
@@ -166,6 +170,11 @@ type Window struct {
 	// when the period picker shows one; empty for dates picked by hand.
 	Preset string `json:"preset,omitempty"`
 }
+
+// DefaultAnalyticsPreset is the span an analytics dashboard opens on when
+// its address names none, as the UI's period picker does, and the span a
+// read with no window covers.
+const DefaultAnalyticsPreset = "28d"
 
 // What a window change can change.
 const (
