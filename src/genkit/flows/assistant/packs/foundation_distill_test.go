@@ -20,6 +20,8 @@ type memDistill struct {
 	refined    []branddistill.Answer
 	refinedRun string
 	committed  *branddistill.CommitInput
+	// pending runs have no proposal yet.
+	pending bool
 }
 
 var distillProposal = &models.BrandProposal{
@@ -37,6 +39,9 @@ func (m *memDistill) Request(_ context.Context, in branddistill.RequestInput) (*
 }
 
 func (m *memDistill) Get(_ context.Context, _, id string) (*models.BrandDistillRun, error) {
+	if m.pending {
+		return &models.BrandDistillRun{ID: id, Status: models.BrandDistillStatusPending}, nil
+	}
 	return &models.BrandDistillRun{ID: id, Status: models.BrandDistillStatusReady, Proposal: distillProposal}, nil
 }
 
@@ -156,9 +161,22 @@ func TestStartDistillCard(t *testing.T) {
 	}
 }
 
+// Answers the reading can't take are refused before they are offered: none,
+// one to a question it doesn't ask, or any while it asks nothing yet.
+func TestAnswerDistillPrecheck(t *testing.T) {
+	ctx, _ := turn(t, workspace, nil)
+	d := Deps{Distill: &memDistill{}}
+	if err := (AnswerDistillInput{Answers: []DistillAnswerInput{{QuestionID: "q1", Answer: "Families"}}}).precheck(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, AnswerDistillInput{}.precheck(ctx, d))
+	refused(t, AnswerDistillInput{Answers: []DistillAnswerInput{{QuestionID: "q1", Answer: "Families"}, {QuestionID: "q9", Answer: "Nobody"}}}.precheck(ctx, d))
+	refused(t, AnswerDistillInput{Answers: []DistillAnswerInput{{QuestionID: "q1", Answer: "Families"}}}.precheck(ctx, Deps{Distill: &memDistill{pending: true}}))
+}
+
 // The answers offer's card puts each answer under its question, with where
-// it came from, and cites each asset once; a question the reading doesn't
-// ask is left out.
+// it came from, and cites each asset once; one to a question the reading
+// doesn't ask is left out and not counted.
 func TestAnswerDistillCard(t *testing.T) {
 	d := Deps{Distill: &memDistill{}, Assets: memAssets{all: []models.Asset{{ID: "a1", Title: "Brochure"}}}}
 	ctx, _ := turn(t, workspace, nil)
@@ -167,7 +185,7 @@ func TestAnswerDistillCard(t *testing.T) {
 		{QuestionID: "q1", Answer: " Families ", From: " the brochure, p. 2 ", AssetIDs: []string{"a1", " a1"}},
 		{QuestionID: "q9", Answer: "Nobody"},
 	}})
-	if card.Verb != "Answer 2 questions" || card.Action != assistantkit.CardActionAnswerQuestions || card.Count != 2 || len(card.Rows) != 1 {
+	if card.Verb != "Answer 1 question" || card.Action != assistantkit.CardActionAnswerQuestions || card.Count != 1 || len(card.Rows) != 1 {
 		t.Fatalf("card = %+v", card)
 	}
 	if r := card.Rows[0]; r.Kind != assistantkit.CardRowAnswer || r.Label != "Who books most?" || r.Value != "Families" || r.Note != "the brochure, p. 2" ||
