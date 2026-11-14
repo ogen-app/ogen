@@ -89,8 +89,9 @@ func setPostVoice(ctx context.Context, d Deps, in SetPostVoiceInput) (*SetPostVo
 		return nil, err
 	}
 	if !ok {
-		return nil, assistantkit.Refused("the post's voice changed since; check it again")
+		return nil, assistantkit.Refused("the post's voice changed since, or it was published; check it again")
 	}
+	assistantkit.Touch(ctx, "post", was.ID)
 	after := was
 	after.BrandVoiceID = to
 	out := &SetPostVoiceOutput{PostID: was.ID, CampaignID: c.ID, Title: was.Title, From: readsIn(ctx, d, c, was), To: readsIn(ctx, d, c, after),

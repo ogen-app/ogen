@@ -62,8 +62,8 @@ type VoiceChange struct {
 	From, To *string
 }
 
-// SetVoiceIf sets a post's own voice while it is still From, and reports
-// whether it did.
+// SetVoiceIf sets a post's own voice while it is still From and the post
+// isn't published, and reports whether it did.
 func (r *postRepository) SetVoiceIf(ctx context.Context, db bun.IDB, c VoiceChange, now time.Time) (bool, error) {
 	if db == nil {
 		db = r.db
@@ -75,6 +75,7 @@ func (r *postRepository) SetVoiceIf(ctx context.Context, db bun.IDB, c VoiceChan
 		Set("updated_at = ?", now).
 		Where("po.id = ?", c.PostID).
 		Where("po.brand_voice_id IS NOT DISTINCT FROM ?", c.From).
+		Where("po.status <> ?", models.PostStatusPublished).
 		Exec(ctx)
 	if err != nil {
 		return false, err
