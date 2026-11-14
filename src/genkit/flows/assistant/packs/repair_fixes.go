@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -53,8 +54,83 @@ type PostFixOutput struct {
 	Skipped []SkippedPost `json:"skipped,omitempty"`
 	// Failed are the posts an error stopped, worth a retry.
 	Failed []SkippedPost `json:"failed,omitempty"`
+	// Posts are the posts changed or being withdrawn, each as it was and
+	// as the fix left it, for the result card's rows.
+	Posts  []ChangedPost `json:"posts"`
 	UndoID string        `json:"undoId,omitempty"`
 	assistantkit.Partial
+}
+
+// ChangedPost is one post a fix changed: its title and platform, and what
+// changed. A field the fix didn't touch is left out.
+type ChangedPost struct {
+	PostID     string `json:"postId"`
+	Title      string `json:"title"`
+	PlatformID string `json:"platformId,omitempty"`
+	Platform   string `json:"platform,omitempty"`
+	// FromStatus and ToStatus are its status before and after; a withdrawn
+	// post goes back to ready once its publishing job is cancelled, and a
+	// deleted one has none after.
+	FromStatus models.PostStatus `json:"fromStatus"`
+	ToStatus   models.PostStatus `json:"toStatus,omitempty"`
+	// WasAt is the date an unschedule took off it.
+	WasAt *time.Time `json:"wasAt,omitempty"`
+	// ScheduledAt is the date it keeps, when it has one.
+	ScheduledAt *time.Time `json:"scheduledAt,omitempty"`
+	// FromType and ToType are a conversion's post types; Kept is what of
+	// the post carried over: "caption", "media". Kept is left out when the
+	// post's media couldn't be read, rather than claim it had none.
+	FromType string   `json:"fromType,omitempty"`
+	ToType   string   `json:"toType,omitempty"`
+	Kept     []string `json:"kept,omitempty"`
+}
+
+// kept is what of p a conversion carries over: its caption and its media,
+// media counting its attachments; nil when the count isn't known.
+func kept(p models.Post, media int, known bool) []string {
+	if !known && len(p.MediaURLs) == 0 {
+		return nil
+	}
+	out := []string{}
+	if strings.TrimSpace(p.Content) != "" {
+		out = append(out, "caption")
+	}
+	if media > 0 || len(p.MediaURLs) > 0 {
+		out = append(out, "media")
+	}
+	return out
+}
+
+// mediaCounts counts the posts' attachments by post. known is false when
+// there is no way to count them or the read failed: the counts only dress
+// a card, but no count must not read as none.
+func mediaCounts(ctx context.Context, d Deps, ids []string) (counts map[string]int, known bool) {
+	if len(ids) == 0 {
+		return map[string]int{}, true
+	}
+	if d.Attachments == nil {
+		return nil, false
+	}
+	atts, err := d.Attachments.ListByPostIDs(ctx, ids)
+	if err != nil {
+		return nil, false
+	}
+	counts = map[string]int{}
+	for _, a := range atts {
+		counts[a.PostID]++
+	}
+	return counts, true
+}
+
+// changed is p as a fix's row, before the fix.
+func changed(c *models.Campaign, p models.Post) ChangedPost {
+	cp := ChangedPost{PostID: p.ID, Title: p.Title, PlatformID: p.PlatformID, FromStatus: p.Status, ToStatus: p.Status}
+	if i := slices.IndexFunc(c.Platforms, func(pl models.Platform) bool { return pl.ID == p.PlatformID }); i >= 0 {
+		cp.Platform = c.Platforms[i].Name
+	} else if p.Platform != nil {
+		cp.Platform = p.Platform.Name
+	}
+	return cp
 }
 
 // failedAll is the error of a fix every post of which failed: nothing was
@@ -126,6 +202,13 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 				Summary: func(in PostsRef) string {
 					return fmt.Sprintf("Delete %s; this can't be undone", plural(len(in.PostIDs), "post", "posts"))
 				},
+				Card: func(ctx context.Context, in PostsRef) *assistantkit.Card {
+					c, posts, _, err := campaignPosts(ctx, d, in.CampaignID, in.PostIDs)
+					if err != nil {
+						return nil
+					}
+					return deleteCard(ctx, d, c, posts, in)
+				},
 			}, postRetry, assistantkit.Wrap(recorded(repairPackName, "deletePosts", nil, func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return deletePosts(ctx, d, in) }))),
 			ai.WithStrictSchema(false))
 		specs = append(specs, spec(repairPackName, del, assistantkit.TierProposal,
@@ -174,7 +257,7 @@ func unschedulePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, 
 	if err != nil {
 		return nil, err
 	}
-	out := &PostFixOutput{Skipped: skipped}
+	out := &PostFixOutput{Skipped: skipped, Posts: []ChangedPost{}}
 	var changes []repository.ScheduleChange
 	var first error
 	for _, p := range posts {
@@ -186,6 +269,10 @@ func unschedulePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, 
 				continue
 			}
 			out.Withdrawing++
+			// A withdrawn post keeps its date and goes back to ready.
+			row := changed(c, p)
+			row.ToStatus, row.ScheduledAt = models.PostStatusReadyForPublish, p.ScheduledAt
+			out.Posts = append(out.Posts, row)
 		case reschedule.Eligible(p.Status) && p.ScheduledAt != nil:
 			changes = append(changes, repository.ScheduleChange{PostID: p.ID, From: p.ScheduledAt})
 		case p.ScheduledAt == nil:
@@ -206,6 +293,9 @@ func unschedulePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, 
 		}
 		before = append(before, assistantundo.PostState{ID: ch.PostID, ScheduledAt: ch.From})
 		after = append(after, assistantundo.PostState{ID: ch.PostID})
+		row := changed(c, posts[slices.IndexFunc(posts, func(p models.Post) bool { return p.ID == ch.PostID })])
+		row.WasAt = ch.From
+		out.Posts = append(out.Posts, row)
 	}
 	out.Changed = len(set)
 	if len(set) > 0 {
@@ -223,11 +313,11 @@ func unschedulePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, 
 // deletePosts deletes the posts, files and Zernio copies with them; a
 // published post is kept.
 func deletePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, error) {
-	_, posts, skipped, err := campaignPosts(ctx, d, in.CampaignID, in.PostIDs)
+	c, posts, skipped, err := campaignPosts(ctx, d, in.CampaignID, in.PostIDs)
 	if err != nil {
 		return nil, err
 	}
-	out := &PostFixOutput{Skipped: skipped}
+	out := &PostFixOutput{Skipped: skipped, Posts: []ChangedPost{}}
 	var first error
 	for _, p := range posts {
 		if p.Status == models.PostStatusPublished {
@@ -243,6 +333,9 @@ func deletePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, erro
 			out.Failed = append(out.Failed, SkippedPost{PostID: p.ID, Reason: "deleting it failed: " + err.Error()})
 		case deleted:
 			out.Changed++
+			row := changed(c, p)
+			row.ToStatus = ""
+			out.Posts = append(out.Posts, row)
 		}
 	}
 	if out.Changed > 0 {
@@ -266,7 +359,7 @@ func changePostType(ctx context.Context, d Deps, in ChangePostTypeInput) (*PostF
 	if err != nil {
 		return nil, err
 	}
-	out := &PostFixOutput{Skipped: skipped}
+	out := &PostFixOutput{Skipped: skipped, Posts: []ChangedPost{}}
 	var changes []repository.PostTypeChange
 	for _, p := range posts {
 		reason := ""
@@ -295,6 +388,7 @@ func changePostType(ctx context.Context, d Deps, in ChangePostTypeInput) (*PostF
 		return nil, fmt.Errorf("change post types: %w", err)
 	}
 	var before, after []assistantundo.PostState
+	media, known := mediaCounts(ctx, d, set)
 	for _, ch := range changes {
 		if !slices.Contains(set, ch.PostID) {
 			out.Skipped = append(out.Skipped, SkippedPost{PostID: ch.PostID, Reason: "it changed since the offer"})
@@ -302,6 +396,10 @@ func changePostType(ctx context.Context, d Deps, in ChangePostTypeInput) (*PostF
 		}
 		before = append(before, assistantundo.PostState{ID: ch.PostID, PostType: ch.From, Status: ch.FromStatus})
 		after = append(after, assistantundo.PostState{ID: ch.PostID, PostType: ch.To, Status: ch.ToStatus})
+		p := posts[slices.IndexFunc(posts, func(p models.Post) bool { return p.ID == ch.PostID })]
+		row := changed(c, p)
+		row.ToStatus, row.ScheduledAt, row.FromType, row.ToType, row.Kept = ch.ToStatus, p.ScheduledAt, ch.From, ch.To, kept(p, media[p.ID], known)
+		out.Posts = append(out.Posts, row)
 	}
 	out.Changed = len(set)
 	if len(set) > 0 {

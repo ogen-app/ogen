@@ -136,7 +136,8 @@ func TestPack_BeginNeedsACampaign(t *testing.T) {
 // End reports the committed results: the write labels the turn over the
 // review, both are attached, and the reply falls back to the first.
 func TestPack_EndReportsTheWork(t *testing.T) {
-	st := &requestState{campaignID: "c1", campaign: timelineCampaign(), briefReviewResult: briefReview(), briefResult: &BriefResult{Applied: true}}
+	st := &requestState{campaignID: "c1", campaign: timelineCampaign(), briefReviewResult: briefReview(), briefReviewOut: NewReview("c1"),
+		briefResult: &BriefResult{Applied: true}}
 	st.recordWrite(actionBriefEnriched)
 	ctx, touched := assistant.NewTurnContext(t.Context(), viewcontext.Scope{Kind: models.AssistantScopeCampaign, ID: "c1"}, nil)
 	res, err := end(withRequestState(ctx, st))

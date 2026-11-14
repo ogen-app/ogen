@@ -407,6 +407,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Analyses:    r.assetAnalysisRepo,
 			Evaluations: r.postEvaluationRepo,
 			Links:       r.postIdeaRepo,
+			Dismissals:  r.dismissalRepo,
 		},
 		packDeps: packs.Deps{
 			Ideas:     ideas.New(r.ideaRepo, r.userRepo),
@@ -433,6 +434,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			DraftMax:          d.cfg.DraftPostMax,
 			Posts:             r.postRepo,
 			Remove:            postRemover{blobs: deleteAttachmentBlobs(d.store, r.postAttachmentRepo), withdraw: d.svc.withdraw, jobs: d.enqueuer},
+			Attachments:       r.postAttachmentRepo,
 			Links:             r.postIdeaRepo,
 			Dismissals:        r.dismissalRepo,
 			Analytics:         d.analytics.Service(),

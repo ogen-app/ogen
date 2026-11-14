@@ -88,6 +88,13 @@ func (r *memDismissals) Keys(_ context.Context, kind models.AssistantScopeKind, 
 	return r.scope(kind, id), nil
 }
 
+func (r *memDismissals) Restore(_ context.Context, kind models.AssistantScopeKind, id, key string) (bool, error) {
+	keys := r.scope(kind, id)
+	was := keys[key]
+	delete(keys, key)
+	return was, nil
+}
+
 func day(s string) *time.Time {
 	t, _ := time.Parse(time.DateOnly, s)
 	return &t
@@ -156,6 +163,21 @@ func TestCheckCalendar_OffersFixes(t *testing.T) {
 	out, _ = checkCalendar(ctx, d, CampaignRef{})
 	if out.Dismissed != 1 || slices.ContainsFunc(out.Findings, func(f FindingOut) bool { return f.Code == "gap" }) {
 		t.Fatalf("after dismissing: %+v", out)
+	}
+	// It is set aside with its message and no fixes, to show and restore.
+	if len(out.DismissedFindings) != 1 || out.DismissedFindings[0].Key != gap.Key || out.DismissedFindings[0].Message == "" ||
+		len(out.DismissedFindings[0].Fixes) != 0 || out.CheckedAt.IsZero() {
+		t.Fatalf("dismissed findings = %+v", out.DismissedFindings)
+	}
+	// Restored, it is a finding again; restoring twice finds nothing.
+	for i, want := range []bool{true, false} {
+		if r, err := restoreFinding(ctx, d, DismissFindingInput{Key: gap.Key}); err != nil || r.Restored != want {
+			t.Fatalf("restore %d = %+v, %v", i, r, err)
+		}
+	}
+	out, _ = checkCalendar(ctx, d, CampaignRef{})
+	if out.Dismissed != 0 || !slices.ContainsFunc(out.Findings, func(f FindingOut) bool { return f.Key == gap.Key }) {
+		t.Fatalf("after restoring: %+v", out)
 	}
 }
 
@@ -281,6 +303,59 @@ func TestApplyMoves_SkipsPostsChangedSince(t *testing.T) {
 	}
 }
 
+// A move to a slot offered as free holds only while the day is still free
+// on the post's platform, and only one move of a batch takes it.
+func TestApplyMoves_FreeSlotStillFree(t *testing.T) {
+	d, posts, _ := repairDeps()
+	ctx, _ := turn(t, campaign1, nil)
+	out, err := applyMoves(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: []Move{
+		{PostID: "p1", From: "2027-02-20", FromAt: day("2027-02-20"), To: "2027-03-03", FreeSlot: true}, // p2 is there now
+	}})
+	if err != nil || out.Moved != 0 || !slices.Equal(out.Skipped, []string{"p1"}) {
+		t.Fatalf("taken slot = %+v, %v", out, err)
+	}
+	out, err = applyMoves(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: []Move{
+		{PostID: "p1", From: "2027-02-20", FromAt: day("2027-02-20"), To: "2027-03-08", FreeSlot: true},
+		{PostID: "p2", From: "2027-03-03", FromAt: day("2027-03-03"), To: "2027-03-08", FreeSlot: true},
+	}})
+	if err != nil || out.Moved != 1 || !slices.Equal(out.Skipped, []string{"p2"}) || posts.moved[0].PostID != "p1" {
+		t.Fatalf("one slot, two moves = %+v, %v", out, err)
+	}
+	// Confirming narrows the offer the same way.
+	in, changes, err := movesThatHold(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: []Move{
+		{PostID: "p2", From: "2027-03-03", FromAt: day("2027-03-03"), To: "2027-03-04", FreeSlot: true}, // p3 is there
+	}})
+	if !isRefusal(err) || len(changes) != 1 || !strings.Contains(changes[0], "another post on its platform") {
+		t.Fatalf("narrowed = %+v, %v, %v", in, changes, err)
+	}
+}
+
+// A run says what it moved, from and to which times, by the posts' status,
+// how many scheduled posts it left, and can be undone.
+func TestApplyMoves_SaysWhatMovedAndUndoes(t *testing.T) {
+	d, _, _ := repairDeps()
+	actions := &memActions{}
+	d.Actions = actions
+	ctx, _ := turn(t, campaign1, nil)
+	out, err := applyMoves(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: []Move{
+		{PostID: "p1", From: "2027-02-20", FromAt: day("2027-02-20"), To: "2027-03-02"},
+		{PostID: "p2", From: "2027-03-03", FromAt: day("2027-03-03"), To: "2027-03-08"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Moved != 2 || len(out.Moves) != 2 || out.Moves[0].Title != "Early" || out.Moves[0].ToAt == nil ||
+		!out.Moves[0].ToAt.Equal(time.Date(2027, 3, 2, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("moves = %+v", out.Moves)
+	}
+	if out.ByStatus[models.PostStatusDraft] != 1 || out.ByStatus[models.PostStatusReadyForPublish] != 1 || out.Locked != 1 {
+		t.Fatalf("by status %v, locked %d", out.ByStatus, out.Locked)
+	}
+	if out.UndoID == "" || len(actions.rows) != 1 || actions.rows[0].Kind != models.AssistantActionPostSchedules {
+		t.Fatalf("undo = %q, logged %+v", out.UndoID, actions.rows)
+	}
+}
+
 func TestOptimiseCalendar(t *testing.T) {
 	d, _, _ := repairDeps()
 	sink := &offers{}
@@ -298,8 +373,12 @@ func TestOptimiseCalendar(t *testing.T) {
 		}
 	}
 	// The scheduled post is the one kept in place, for the before and after.
-	if len(out.Locked) != 1 || out.Locked[0].PostID != "p3" || out.Locked[0].Date != "2027-03-04" {
+	if len(out.Locked) != 1 || out.Locked[0].PostID != "p3" || out.Locked[0].Date != "2027-03-04" || out.Locked[0].At.IsZero() {
 		t.Fatalf("locked = %+v", out.Locked)
+	}
+	// The moves land at a time, within the campaign's dates.
+	if out.Moves[0].ToAt == nil || out.Window != (Window{From: "2027-03-01", To: "2027-03-31"}) || out.CheckedAt.IsZero() {
+		t.Fatalf("to %v, window %+v", out.Moves[0].ToAt, out.Window)
 	}
 	undated := Deps{Campaigns: &memCampaigns{c: &models.Campaign{ID: "c1"}}, Posts: &memPosts{}}
 	_, err = optimiseCalendar(ctx, undated, CampaignRef{})
@@ -366,8 +445,8 @@ func TestCheckCalendar_DismissesOneFindingOfACode(t *testing.T) {
 	}
 }
 
-// Each brief finding gets its own brief edit and one shared by all of them;
-// a post finding gets a rewrite and an open; a dismissed finding is left out.
+// Each brief finding gets its own brief edit; a post finding gets a rewrite
+// and an open; a dismissed finding is set aside, without its fixes.
 func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 	d, posts, dismissals := repairDeps()
 	posts.posts[1].Content = "twelve chars"
@@ -403,9 +482,14 @@ func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 	if len(out.Findings) != 3 || out.Dismissed != 1 {
 		t.Fatalf("findings = %+v, dismissed %d", out.Findings, out.Dismissed)
 	}
+	if len(out.DismissedFindings) != 1 || out.DismissedFindings[0].Key != "b3" || len(out.DismissedFindings[0].Fixes) != 0 {
+		t.Fatalf("dismissed findings = %+v", out.DismissedFindings)
+	}
+	if !slices.Equal(out.ReadFrom, []string{"brief", "posts"}) || out.CheckedAt.IsZero() {
+		t.Fatalf("read from %v at %v", out.ReadFrom, out.CheckedAt)
+	}
 	persona, tone, post := out.Findings[0], out.Findings[1], out.Findings[2]
-	if persona.Key != "b1" || len(persona.Fixes) != 2 || len(tone.Fixes) != 2 || persona.Fixes[1].ProposalID != tone.Fixes[1].ProposalID ||
-		persona.Fixes[0].ProposalID == tone.Fixes[0].ProposalID {
+	if persona.Key != "b1" || len(persona.Fixes) != 1 || len(tone.Fixes) != 1 || persona.Fixes[0].ProposalID == tone.Fixes[0].ProposalID {
 		t.Fatalf("brief fixes = %+v / %+v", persona.Fixes, tone.Fixes)
 	}
 	own := sink.got[slices.IndexFunc(sink.got, func(p assistantkit.Proposal) bool { return p.Summary == "Improve the brief's persona" })]

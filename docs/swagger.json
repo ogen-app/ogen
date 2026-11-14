@@ -3985,6 +3985,67 @@
                 }
             }
         },
+        "/api/campaigns/{id}/findings/dismissed": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the keys of the campaign's dismissed findings, the latest first,\nwith when and by whom, so a reloaded assistant thread can show the\nfindings dismissed since it checked as dismissed.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "List a campaign's dismissed problems",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.DismissedFindingsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/campaigns/{id}/findings/{key}/dismiss": {
             "post": {
                 "security": [
@@ -3997,6 +4058,75 @@
                     "campaigns"
                 ],
                 "summary": "Dismiss a campaign problem",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "The problem's key",
+                        "name": "key",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Takes a dismissal of the campaign back by the finding's key, so the\noverview and the campaign's assistant raise the finding again while a\ncheck gives that key. Restoring a key that isn't dismissed is a no-op.",
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Restore a dismissed campaign problem",
                 "parameters": [
                     {
                         "type": "string",
@@ -15200,7 +15330,15 @@
         "calendarcheck.Finding": {
             "type": "object",
             "properties": {
+                "blocksPublishing": {
+                    "description": "BlocksPublishing marks a finding whose posts will be refused when\nthey publish, as against one that is only worth a look.",
+                    "type": "boolean"
+                },
                 "code": {
+                    "type": "string"
+                },
+                "detail": {
+                    "description": "Detail says more under the message: what the finding will cost, or\nthe rule it breaks.",
                     "type": "string"
                 },
                 "fixes": {
@@ -15220,6 +15358,13 @@
                     "type": "array",
                     "items": {
                         "type": "string"
+                    }
+                },
+                "posts": {
+                    "description": "Posts are PostIDs' posts with their titles and days, in that order.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/calendarcheck.PostRef"
                     }
                 },
                 "severity": {
@@ -15259,6 +15404,13 @@
                 "postType": {
                     "type": "string"
                 },
+                "slots": {
+                    "description": "Slots are the free days a move_post fix can move its post to,\nYYYY-MM-DD, nearest first; To is the first.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "title": {
                     "type": "string"
                 },
@@ -15291,6 +15443,20 @@
                 "FixUnschedule",
                 "FixDelete"
             ]
+        },
+        "calendarcheck.PostRef": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
         },
         "calendarcheck.Severity": {
             "type": "string",
@@ -15350,6 +15516,17 @@
                 "value": {},
                 "value_type": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.DismissedFindingsResponse": {
+            "type": "object",
+            "properties": {
+                "dismissed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/overview.Dismissal"
+                    }
                 }
             }
         },
@@ -23168,6 +23345,20 @@
                 }
             }
         },
+        "overview.Dismissal": {
+            "type": "object",
+            "properties": {
+                "dismissedAt": {
+                    "type": "string"
+                },
+                "dismissedBy": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                }
+            }
+        },
         "overview.Distribution": {
             "type": "object",
             "properties": {
@@ -23271,6 +23462,13 @@
                 },
                 "campaignId": {
                     "type": "string"
+                },
+                "dismissedProblems": {
+                    "description": "DismissedProblems are the dismissed ones the calendar still has, for\nthe card to show and restore.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/calendarcheck.Finding"
+                    }
                 },
                 "distribution": {
                     "$ref": "#/definitions/overview.Distribution"

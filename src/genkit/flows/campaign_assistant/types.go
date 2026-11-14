@@ -43,11 +43,12 @@ type CampaignAssistantResponse struct {
 	// turn. Action is then "posts_redistributed".
 	Redistribute *RedistributeResult `json:"redistribute,omitempty" jsonschema:"-"`
 	// BriefReview is set by the server when the checkBrief tool ran this turn
-	// (read-only). Action is then "brief_reviewed".
-	BriefReview *consistency.BriefReview `json:"briefReview,omitempty" jsonschema:"-"`
+	// (read-only), as the tool returned it. Action is then "brief_reviewed".
+	BriefReview *ReviewOutput `json:"briefReview,omitempty" jsonschema:"-"`
 	// PostsReview is set by the server when the checkPostsConsistency tool ran
-	// this turn (read-only). Action is then "posts_reviewed".
-	PostsReview *consistency.PostsReview `json:"postsReview,omitempty" jsonschema:"-"`
+	// this turn (read-only), as the tool returned it. Action is then
+	// "posts_reviewed".
+	PostsReview *ReviewOutput `json:"postsReview,omitempty" jsonschema:"-"`
 	// Platforms is set by the server when updateCampaignPlatforms added
 	// platforms or post types this turn. Action is then "platforms_updated".
 	Platforms *PlatformsResult `json:"platforms,omitempty" jsonschema:"-"`
@@ -212,6 +213,9 @@ type CampaignAssistantRepos struct {
 	// Links maps the campaign's posts to their ideas, for the calendar
 	// check's "same idea close together"; nil skips that check.
 	Links repository.PostIdeaRepository
+	// Dismissals leaves the findings the user dismissed out of the brief
+	// and posts reviews; nil leaves them all in.
+	Dismissals repository.AssistantDismissalRepository
 }
 
 // CampaignAssistantFlowConfig holds the campaign pack's services and limits.

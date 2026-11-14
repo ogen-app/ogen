@@ -19,6 +19,10 @@ func isGated(name string) bool {
 	return ok
 }
 
+// IsGated reports whether a proposal-tier tool of that name is defined, so
+// another pack can offer a call to it.
+func IsGated(name string) bool { return isGated(name) }
+
 // checkTier reports a tool whose tier and gate disagree: proposal-tier work
 // must wait behind a gate, and only it does.
 func (s Spec) checkTier() error {

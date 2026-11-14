@@ -32,4 +32,24 @@ func TestAssistantDismissals(t *testing.T) {
 	if keys, err := repo.Keys(other, models.AssistantScopeCampaign, "c1"); err != nil || len(keys) != 0 {
 		t.Fatalf("another tenant read %v (%v)", keys, err)
 	}
+
+	list, err := repo.List(ctx, models.AssistantScopeCampaign, "c1")
+	if err != nil || len(list) != 1 || list[0].FindingKey != "gap:abc" || list[0].CreatedBy != "u1" || list[0].CreatedAt.IsZero() {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+	// Another tenant can't restore it; the tenant can, once.
+	if ok, err := repo.Restore(other, models.AssistantScopeCampaign, "c1", "gap:abc"); err != nil || ok {
+		t.Fatalf("another tenant restored: %v, %v", ok, err)
+	}
+	for i, want := range []bool{true, false} {
+		if ok, err := repo.Restore(ctx, models.AssistantScopeCampaign, "c1", "gap:abc"); err != nil || ok != want {
+			t.Fatalf("restore %d = %v, %v", i, ok, err)
+		}
+	}
+	if keys, err := repo.Keys(ctx, models.AssistantScopeCampaign, "c1"); err != nil || len(keys) != 0 {
+		t.Fatalf("keys after restore = %v, %v", keys, err)
+	}
+	if keys, err := repo.Keys(ctx, models.AssistantScopeCampaign, "c2"); err != nil || !keys["gap:def"] {
+		t.Fatalf("restore reached another campaign: %v, %v", keys, err)
+	}
 }

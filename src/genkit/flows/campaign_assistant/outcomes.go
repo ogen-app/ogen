@@ -78,11 +78,11 @@ func (st *requestState) outcomes() []outcome {
 	if r := st.redistributeResult; r != nil {
 		out = append(out, redistributeOutcome(r))
 	}
-	if r := st.briefReviewResult; r != nil {
-		out = append(out, briefReviewOutcome(r))
+	if r := st.briefReviewResult; r != nil && st.briefReviewOut != nil {
+		out = append(out, briefReviewOutcome(r, st.briefReviewOut))
 	}
-	if r := st.postsReviewResult; r != nil {
-		out = append(out, postsReviewOutcome(r))
+	if r := st.postsReviewResult; r != nil && st.postsReviewOut != nil {
+		out = append(out, postsReviewOutcome(r, st.postsReviewOut))
 	}
 	return out
 }
@@ -178,32 +178,37 @@ func redistributeOutcome(r *RedistributeResult) outcome {
 	}
 }
 
-func briefReviewOutcome(r *consistency.BriefReview) outcome {
-	explanation := fmt.Sprintf("I found %d consistency issue(s) in the brief.", len(r.Findings))
-	if len(r.Findings) == 0 {
+// briefReviewOutcome reports the brief's review as the tool returned it:
+// the open findings, the dismissed ones left out. r is the flow's, for
+// whether the brief is consistent.
+func briefReviewOutcome(r *consistency.BriefReview, out *ReviewOutput) outcome {
+	explanation := fmt.Sprintf("I found %d consistency issue(s) in the brief.", len(out.Findings))
+	if len(out.Findings) == 0 {
 		explanation = "The brief looks consistent — no issues found."
 	}
 	return outcome{
 		action:      actionBriefReviewed,
 		explanation: explanation,
-		attach:      func(resp *CampaignAssistantResponse) { resp.BriefReview = r },
+		attach:      func(resp *CampaignAssistantResponse) { resp.BriefReview = out },
 		event:       SSEEventCheckBriefComplete,
-		payload:     CheckBriefCompleteEventPayload{Consistent: r.Consistent, FindingCount: len(r.Findings)},
+		payload:     CheckBriefCompleteEventPayload{Consistent: r.Consistent, FindingCount: len(out.Findings)},
 		readOnly:    true,
 	}
 }
 
-func postsReviewOutcome(r *consistency.PostsReview) outcome {
-	explanation := fmt.Sprintf("%d of %d checked post(s) drift from the brief.", len(r.Findings), r.Checked)
-	if len(r.Findings) == 0 {
+// postsReviewOutcome reports the posts' review as the tool returned it:
+// the open findings, the dismissed ones left out.
+func postsReviewOutcome(r *consistency.PostsReview, out *ReviewOutput) outcome {
+	explanation := fmt.Sprintf("%d of %d checked post(s) drift from the brief.", len(out.Findings), r.Checked)
+	if len(out.Findings) == 0 {
 		explanation = fmt.Sprintf("Checked %d post(s); they all follow the brief.", r.Checked)
 	}
 	return outcome{
 		action:      actionPostsReviewed,
 		explanation: explanation,
-		attach:      func(resp *CampaignAssistantResponse) { resp.PostsReview = r },
+		attach:      func(resp *CampaignAssistantResponse) { resp.PostsReview = out },
 		event:       SSEEventCheckPostsComplete,
-		payload:     CheckPostsCompleteEventPayload{Checked: r.Checked, Total: r.Total, Capped: r.Capped, DriftCount: len(r.Findings)},
+		payload:     CheckPostsCompleteEventPayload{Checked: r.Checked, Total: r.Total, Capped: r.Capped, DriftCount: len(out.Findings)},
 		readOnly:    true,
 	}
 }
