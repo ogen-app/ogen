@@ -25,7 +25,8 @@ rsync -az --delete \
 	"$root/" "$host:$dir/"
 
 set +e
-ssh -t "$host" "zsh -lc 'cd ~/$dir && make test PG_TEST_CONTAINER=ogen-test-pg-$name PG_TEST_PORT=$port'"
+# GOPATH/bin, where `make test` installs ginkgo, is often not on the remote PATH.
+ssh -t "$host" "zsh -lc 'export PATH=\$(go env GOPATH)/bin:\$PATH; cd ~/$dir && make test PG_TEST_CONTAINER=ogen-test-pg-$name PG_TEST_PORT=$port'"
 rc=$?
 set -e
 
