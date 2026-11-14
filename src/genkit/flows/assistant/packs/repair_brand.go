@@ -29,8 +29,10 @@ type CheckBrandInput struct {
 	CampaignID string   `json:"campaignId,omitempty" jsonschema:"description=Check this campaign's unpublished posts"`
 }
 
-// BrandFinding is a way a post breaks the brand, with its fixes: rewriting
-// the post, while its copy isn't locked, and opening it.
+// BrandFinding is a way a post breaks the brand, with its fixes, most
+// useful first: rewriting the post while its copy isn't locked, taking it
+// off the calendar when it breaks a guardrail, deleting a generated draft no
+// one has edited, and opening it.
 type BrandFinding struct {
 	brand_check.Finding
 	// Key dismisses the finding, in the post's campaign, while the post
@@ -163,7 +165,7 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 		return nil, assistantkit.Refused("couldn't check the posts: " + err.Error())
 	}
 	out.Checked = res.Checked
-	if err := out.addFindings(ctx, d, res.Findings, byID); err != nil {
+	if err := out.addFindings(ctx, d, res.Findings, byID, campaigns); err != nil {
 		return nil, err
 	}
 	slices.SortStableFunc(out.Findings, func(a, b BrandFinding) int { return cmp.Compare(severityRank(a.Severity), severityRank(b.Severity)) })
@@ -172,7 +174,11 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 
 // addFindings keys the check's findings and offers their fixes, leaving out
 // those dismissed in the post's campaign, and counts the posts left clean.
-func (out *CheckBrandOutput) addFindings(ctx context.Context, d Deps, found []brand_check.Finding, byID map[string]*models.Post) error {
+func (out *CheckBrandOutput) addFindings(ctx context.Context, d Deps, found []brand_check.Finding, byID map[string]*models.Post, campaigns map[string]*models.Campaign) error {
+	untouched, err := untouchedDrafts(ctx, d, found, byID)
+	if err != nil {
+		return err
+	}
 	dismissed := map[string]map[string]bool{}
 	flagged := map[string]bool{}
 	for _, f := range found {
@@ -192,7 +198,7 @@ func (out *CheckBrandOutput) addFindings(ctx context.Context, d Deps, found []br
 			out.Dismissed++
 			continue
 		}
-		fixes, err := brandFixes(ctx, d, p, f)
+		fixes, err := brandFixes(ctx, d, campaigns[p.CampaignID], p, f, untouched[p.ID])
 		if err != nil {
 			return err
 		}
@@ -217,9 +223,40 @@ func brandFindingKey(p *models.Post, f brand_check.Finding) string {
 	return "brand_" + f.Rule + ":" + hex.EncodeToString(h.Sum(nil))[:12]
 }
 
-// brandFixes offers to rewrite the post to fix the finding, while its copy
-// isn't locked and the writer is here, and to open it.
-func brandFixes(ctx context.Context, d Deps, p *models.Post, f brand_check.Finding) ([]FixOffer, error) {
+// untouchedDrafts are the flagged posts that are drafts the assistant or a
+// plan wrote and no one has saved copy for since, which a finding offers to
+// delete. Without the versions, or anything to delete with, there are none.
+func untouchedDrafts(ctx context.Context, d Deps, found []brand_check.Finding, byID map[string]*models.Post) (map[string]bool, error) {
+	out := map[string]bool{}
+	if d.Versions == nil || d.Remove == nil {
+		return out, nil
+	}
+	var ids []string
+	for _, f := range found {
+		// A post with no grounding mode was written by hand.
+		if p, ok := byID[f.PostID]; ok && p.Status == models.PostStatusDraft && p.GroundingMode != nil && !out[p.ID] {
+			out[p.ID] = true
+			ids = append(ids, p.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	edited, err := d.Versions.EditedPostIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range edited {
+		delete(out, id)
+	}
+	return out, nil
+}
+
+// brandFixes offers a finding's fixes, most useful first: rewriting the post
+// while its copy isn't locked and the writer is here; for a guardrail, taking
+// it off the calendar while it has a date; deleting it when it is a draft no
+// one has edited; and opening it. The alternatives need the post's campaign.
+func brandFixes(ctx context.Context, d Deps, c *models.Campaign, p *models.Post, f brand_check.Finding, untouched bool) ([]FixOffer, error) {
 	var out []FixOffer
 	if d.Revise != nil && !p.Status.IsSubmitted() {
 		instruction := "Bring the post in line with the brand. The issue: " + f.Issue
@@ -232,6 +269,24 @@ func brandFixes(ctx context.Context, d Deps, p *models.Post, f brand_check.Findi
 			return nil, err
 		}
 		out = append(out, FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixKind(consistency.FixRevisePost), Title: "Rewrite it to follow the brand", PostID: p.ID}, ProposalID: id})
+	}
+	if c != nil {
+		var alternatives []calendarcheck.Fix
+		if f.Rule != brand_check.RuleVoice && p.ScheduledAt != nil && p.Status != models.PostStatusPublished {
+			alternatives = append(alternatives, calendarcheck.Fix{Kind: calendarcheck.FixUnschedule, Title: "Take it off the calendar", PostIDs: []string{p.ID}})
+		}
+		if untouched {
+			alternatives = append(alternatives, calendarcheck.Fix{Kind: calendarcheck.FixDelete, Title: "Delete it", PostIDs: []string{p.ID}})
+		}
+		for _, fix := range alternatives {
+			offer, ok, err := offerFix(ctx, d, c, []models.Post{*p}, fix, new(""))
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out = append(out, offer)
+			}
+		}
 	}
 	return append(out, FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixOpenPost, Title: "Open the post", PostID: p.ID}}), nil
 }

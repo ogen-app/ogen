@@ -24,6 +24,10 @@ type PostVersionRepository interface {
 	GetLatestByPostID(ctx context.Context, postID string) (*models.PostVersion, error)
 	GetByPostIDAndVersionNumber(ctx context.Context, postID string, versionNumber int) (*models.PostVersion, error)
 	CountByPostID(ctx context.Context, postID string) (int, error)
+	// EditedPostIDs are those of postIDs a person has saved copy for: a
+	// user version other than the post assistant's snapshot of the post as
+	// it was.
+	EditedPostIDs(ctx context.Context, postIDs []string) ([]string, error)
 }
 
 type postVersionRepository struct {
@@ -123,4 +127,19 @@ func (r *postVersionRepository) CountByPostID(ctx context.Context, postID string
 		Model((*models.PostVersion)(nil)).
 		Where("post_id = ?", postID).
 		Count(ctx)
+}
+
+func (r *postVersionRepository) EditedPostIDs(ctx context.Context, postIDs []string) ([]string, error) {
+	ids := []string{}
+	if len(postIDs) == 0 {
+		return ids, nil
+	}
+	err := r.db.NewSelect().
+		Model((*models.PostVersion)(nil)).
+		ColumnExpr("DISTINCT pv.post_id").
+		Where("pv.post_id IN (?)", bun.List(postIDs)).
+		Where("pv.creator = ?", models.PostVersionCreatorUser).
+		Where("pv.note <> ?", models.PostVersionNoteInitial).
+		Scan(ctx, &ids)
+	return ids, err
 }
