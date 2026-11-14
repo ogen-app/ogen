@@ -179,3 +179,59 @@ func TestCompile_PhaseMustBeTheCampaignTypes(t *testing.T) {
 		t.Fatalf("audit log = %+v (%v), want the compile", entries, err)
 	}
 }
+
+// An idea a content plan reserved for a series keeps its series, and the
+// post compiled from it takes the series and its format on the plan's
+// Tuesday, though the campaign publishes only Monday, Wednesday and Friday.
+func TestCompile_SeriesIdea(t *testing.T) {
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.Exec("SET session_replication_role = replica"); err != nil {
+		t.Fatalf("disable fks: %v", err)
+	}
+	ctx := tenantctx.With(context.Background(), models.DefaultTenantID)
+
+	campaigns := repository.NewCampaignRepository(db, repository.NewTagRepository(db), repository.NewPlatformRepository(db), repository.NewCampaignTypeRepository(db))
+	ideas := repository.NewIdeaRepository(db)
+	posts := repository.NewPostRepository(db)
+	start, end := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 29, 0, 0, 0, 0, time.UTC)
+	if _, err := db.NewInsert().Model(&models.Campaign{
+		ID: "cmp-series", Name: "Spring", CampaignTypeID: "t", CreatedBy: "u1", PublishingTime: "09:00",
+		StartDate: &start, EndDate: &end,
+		AssetIDs: models.StringSlice{}, PublishingDays: models.StringSlice{"mon", "wed", "fri"},
+		TargetPlatforms: models.CampaignPlatforms{{ID: "linkedin"}},
+	}).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	format := models.ContentFormatDigest
+	if _, err := db.NewInsert().Model(&models.Series{ID: "ser-1", Name: "Tuesday digest", Supply: models.SeriesSupplySelf, ContentFormat: &format}).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	campaign := "cmp-series"
+	tuesday, _ := models.ParseCalendarDate("2026-11-17")
+	if err := ideas.Create(ctx, &models.Idea{ID: "ids-1", Title: "This week", CampaignID: &campaign, SeriesID: new("ser-1"),
+		Plan: models.IdeaPlan{PlatformID: new("linkedin"), TargetDate: &tuesday}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ideas.GetByID(ctx, "ids-1"); err != nil || got.SeriesID == nil || *got.SeriesID != "ser-1" {
+		t.Fatalf("idea read back = %+v, %v", got, err)
+	}
+
+	svc := compose.New(db, ideas, campaigns, repository.NewPostIdeaRepository(db), nil, nil).WithSeries(repository.NewSeriesRepository(db))
+	res, err := svc.Compile(ctx, compose.Input{IdeaIDs: []string{"ids-1"}, Actor: "u1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post, err := posts.GetByID(ctx, res.Posts[0].Post.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if post.SeriesID == nil || *post.SeriesID != "ser-1" || post.ContentFormat == nil || *post.ContentFormat != format {
+		t.Fatalf("post series = %v, format = %v", post.SeriesID, post.ContentFormat)
+	}
+	if post.ScheduledAt == nil || post.ScheduledAt.UTC().Format(time.DateOnly) != "2026-11-17" || res.Posts[0].Date != "2026-11-17" {
+		t.Fatalf("scheduled at %v (%s); want the series' Tuesday", post.ScheduledAt, res.Posts[0].Date)
+	}
+}

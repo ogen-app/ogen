@@ -21496,6 +21496,11 @@ const docTemplate = `{
                 "remind_at": {
                     "type": "string"
                 },
+                "series_id": {
+                    "description": "SeriesID is the series a content plan reserved the idea for; a post\nmade from it takes the series and its format, and keeps the plan date's\nweekday. Nil for every other idea. It survives the series being deleted\n(series are soft-deleted).",
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "source_asset": {
                     "description": "SourceAsset is hydrated on reads while the asset exists.",
                     "allOf": [

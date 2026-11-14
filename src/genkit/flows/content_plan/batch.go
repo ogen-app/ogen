@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/campaignphase"
+	"github.com/ogen-app/ogen/src/domain/models"
 )
 
 // batchSpec is the slot allocator's output for a single batch. Carried into the
@@ -24,6 +25,48 @@ type batchSpec struct {
 	PhaseCounts      []phaseCount
 	PlatformCounts   []platformCount
 	DateWindow       dateWindow
+	// Series is the series a series batch writes for, and Slots its posts
+	// in order, each with its day, platform and phase fixed. Both are nil
+	// for the other batches.
+	Series *seriesBrief
+	Slots  []fixedSlot
+	// Unplanned asks the model for as many posts as it sees fit: the
+	// regular part of a plan without a goal.
+	Unplanned bool
+}
+
+// seriesBrief is what a series batch's prompt says about its series.
+type seriesBrief struct {
+	ID            string
+	Name          string
+	Promise       string
+	Recipe        string
+	ContentFormat string
+}
+
+// fixedSlot is one series post: the day its rhythm puts it on, and the
+// platform and phase it gets. Number is its place in the batch, from 1.
+type fixedSlot struct {
+	Number       int
+	SeriesID     string
+	Date         string
+	PlatformID   string
+	PlatformName string
+	PhaseID      string
+	PhaseName    string
+}
+
+// place puts post on the slot, whatever the model said.
+func (s fixedSlot) place(post *DraftPost) {
+	post.PublishDate, post.PlatformID, post.PhaseID = s.Date, s.PlatformID, s.PhaseID
+	post.SeriesID = &s.SeriesID
+}
+
+// seriesRun is one series the campaign runs on a rhythm and the days, as
+// YYYY-MM-DD, its posts fall on.
+type seriesRun struct {
+	series models.Series
+	days   []string
 }
 
 type phaseCount struct {
@@ -77,11 +120,7 @@ func planBatches(
 		maxPostsPerBatch = totalPosts
 	}
 
-	// The repository may not order phases, and front-loading depends on it.
-	sortedPhases := slices.Clone(phases)
-	slices.SortStableFunc(sortedPhases, func(a, b resolvedPhase) int {
-		return cmp.Compare(a.Sequence, b.Sequence)
-	})
+	sortedPhases := bySequence(phases)
 
 	// Chunking preserves slot order, so phase/date locality holds within a
 	// batch wherever possible.
@@ -96,6 +135,82 @@ func planBatches(
 	return specs
 }
 
+// bySequence is phases in sequence order. The repository may not order
+// them, and front-loading depends on it.
+func bySequence(phases []resolvedPhase) []resolvedPhase {
+	sorted := slices.Clone(phases)
+	slices.SortStableFunc(sorted, func(a, b resolvedPhase) int {
+		return cmp.Compare(a.Sequence, b.Sequence)
+	})
+	return sorted
+}
+
+// seriesBatches lays out each run's posts on the days its rhythm gives, in
+// batches of at most maxPostsPerBatch, one series per batch. A post's phase
+// is the one whose window holds its day; platforms take turns across every
+// series post, so one series doesn't stay on one platform. Indexes are left
+// for the caller to number.
+func seriesBatches(runs []seriesRun, phases []resolvedPhase, platforms []resolvedPlatform, startDate, endDate time.Time, maxPostsPerBatch int) []batchSpec {
+	if len(phases) == 0 || len(platforms) == 0 {
+		return nil
+	}
+	sortedPhases := bySequence(phases)
+	windows := phaseWindows(sortedPhases, startDate, endDate)
+	var specs []batchSpec
+	turn := 0
+	for _, run := range runs {
+		brief := &seriesBrief{ID: run.series.ID, Name: run.series.Name, Promise: run.series.Promise, Recipe: run.series.Recipe}
+		if f := run.series.ContentFormat; f != nil {
+			brief.ContentFormat = string(*f)
+		}
+		slots := make([]slot, len(run.days))
+		for i, day := range run.days {
+			slots[i] = slot{phaseIdx: phaseOn(day, windows), platformIdx: turn % len(platforms), window: dateWindow{Start: day, End: day}}
+			turn++
+		}
+		for chunk := range slices.Chunk(slots, max(maxPostsPerBatch, 1)) {
+			spec := specForChunk(chunk, sortedPhases, platforms)
+			spec.Series = brief
+			for i, sl := range chunk {
+				ph, pl := sortedPhases[sl.phaseIdx], platforms[sl.platformIdx]
+				spec.Slots = append(spec.Slots, fixedSlot{
+					Number: i + 1, SeriesID: brief.ID, Date: sl.window.Start,
+					PlatformID: pl.ID, PlatformName: pl.Name, PhaseID: ph.ID, PhaseName: ph.Name,
+				})
+			}
+			specs = append(specs, spec)
+		}
+	}
+	return specs
+}
+
+// phaseOn is the phase whose window holds day; a day between or outside the
+// windows goes to the last phase that started before it, else the first.
+func phaseOn(day string, windows []dateWindow) int {
+	idx := 0
+	for i, w := range windows {
+		if w.Start > day {
+			break
+		}
+		idx = i
+		if day <= w.End {
+			return i
+		}
+	}
+	return idx
+}
+
+// phaseWindows is each phase's date window: pinned by the campaign's manual
+// phase plan, else split from the campaign dates.
+func phaseWindows(phases []resolvedPhase, startDate, endDate time.Time) []dateWindow {
+	// A manual phase plan is stored whole, so it applies only when every
+	// phase carries a pinned window.
+	if manual := manualWindows(phases); manual != nil {
+		return manual
+	}
+	return computeDateWindows(startDate, endDate, len(phases))
+}
+
 // slot is one planned post: its phase, platform and date window.
 type slot struct {
 	phaseIdx    int
@@ -106,12 +221,7 @@ type slot struct {
 // buildSlots lays out every planned post in (phase, platform) order.
 func buildSlots(totalPosts int, phases []resolvedPhase, platforms []resolvedPlatform, startDate, endDate time.Time) []slot {
 	phasePosts := evenSplit(totalPosts, len(phases))
-	phaseWindows := computeDateWindows(startDate, endDate, len(phases))
-	// A manual phase plan is stored whole, so it applies only when every
-	// phase carries a pinned window.
-	if manual := manualWindows(phases); manual != nil {
-		phaseWindows = manual
-	}
+	windows := phaseWindows(phases, startDate, endDate)
 
 	slots := make([]slot, 0, totalPosts)
 	for pi := range phases {
@@ -120,7 +230,7 @@ func buildSlots(totalPosts int, phases []resolvedPhase, platforms []resolvedPlat
 		}
 		for pli, n := range evenSplit(phasePosts[pi], len(platforms)) {
 			for range n {
-				slots = append(slots, slot{phaseIdx: pi, platformIdx: pli, window: phaseWindows[pi]})
+				slots = append(slots, slot{phaseIdx: pi, platformIdx: pli, window: windows[pi]})
 			}
 		}
 	}

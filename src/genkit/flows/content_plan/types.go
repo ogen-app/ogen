@@ -43,6 +43,9 @@ type DraftPost struct {
 	ToneNotes   string   `json:"toneNotes"               jsonschema:"description=How the campaign tone guidelines apply to this specific post"`
 	PhaseID     string   `json:"phaseId"                 jsonschema:"description=Exact phase ID from the campaign phases list; every post must be assigned to one phase"`
 	AssetRefs   []string `json:"assetRefs,omitempty"     jsonschema:"description=IDs of assets whose facts or ideas were directly used in this post; omit if none"`
+	// SeriesID is the series a reserved slot was written for, set
+	// server-side from the slot; nil for the plan's other ideas.
+	SeriesID *string `json:"seriesId,omitempty"`
 	// BrandVoiceID is the resolved brand voice for this post, set
 	// server-side after generation. json:"-" keeps it out of the model schema.
 	BrandVoiceID *string `json:"-"`
