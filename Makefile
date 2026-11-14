@@ -1,12 +1,15 @@
-.PHONY: build run lint test test-integration evals coverage _ginkgo _air _pg-test-up tidy docker docker-genkit clean openapi genkit proto
+.PHONY: build run lint test test-remote test-integration evals coverage _ginkgo _air _pg-test-up tidy docker docker-genkit clean openapi genkit proto
 
 GINKGO_FLAGS = --github-output -r -randomize-all -randomize-suites -race -trace -procs=4 -poll-progress-after=10s -poll-progress-interval=10s
 
 # Postgres for the unit suite (CON-87 WS5). A throwaway pgvector container on
 # host port 5433 — avoids clashing with a dev `docker compose` on 5432 — with
 # max_connections bumped because each test provisions its own database.
-PG_TEST_CONTAINER = ogen-test-pg
-PG_TEST_DSN = postgres://ogen:ogen@localhost:5433/postgres?sslmode=disable
+# Container and port are overridable so parallel runs (one per worktree) on the
+# same Docker host don't remove each other's database.
+PG_TEST_CONTAINER ?= ogen-test-pg
+PG_TEST_PORT ?= 5433
+PG_TEST_DSN = postgres://ogen:ogen@localhost:$(PG_TEST_PORT)/postgres?sslmode=disable
 
 # ── Go ────────────────────────────────────────────────────────────────────────
 build:
@@ -25,7 +28,7 @@ _pg-test-up:
 	@docker rm -f $(PG_TEST_CONTAINER) >/dev/null 2>&1 || true
 	@docker run -d --name $(PG_TEST_CONTAINER) \
 		-e POSTGRES_USER=ogen -e POSTGRES_PASSWORD=ogen -e POSTGRES_DB=postgres \
-		-p 5433:5432 pgvector/pgvector:pg17 -c max_connections=500 >/dev/null
+		-p $(PG_TEST_PORT):5432 pgvector/pgvector:pg17 -c max_connections=500 >/dev/null
 	@printf "Waiting for postgres"; \
 	tries=30; \
 	until docker exec $(PG_TEST_CONTAINER) pg_isready -U ogen >/dev/null 2>&1; do \
@@ -40,6 +43,10 @@ test: _ginkgo _pg-test-up
 	docker rm -f $(PG_TEST_CONTAINER) >/dev/null 2>&1; \
 	[ $$EXIT -eq 0 ] && go tool cover -func=coverage.out; \
 	exit $$EXIT
+
+# Runs `make test` on another machine over SSH (REMOTE_HOST, default mac2).
+test-remote:
+	@scripts/test-remote.sh
 
 test-integration:
 	docker compose -f docker-compose.integration.yml up -d
