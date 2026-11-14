@@ -109,6 +109,23 @@ func repairPack(d Deps) assistant.Pack {
 				specs = append(specs, spec(repairPackName, revise, assistantkit.TierProposal,
 					`Call this when the user, in a campaign's thread, asks to rewrite one of its posts by an instruction; pass the post's id and the instruction verbatim. It is offered for the user to confirm. A review or brand-check finding's "rewrite it" fix is already this offer. In the post's own thread, use editPost instead.`))
 			}
+			if d.Brand != nil {
+				voice := genkit.DefineTool(g, "setPostVoice",
+					"Sets the voice one of the campaign's posts is read and rewritten in: a voice of its own, or the campaign's when none is named. The copy stays as it is. It is offered for the user to confirm before it runs.",
+					assistantkit.Gated("setPostVoice", assistantkit.Gate[SetPostVoiceInput]{
+						Summary: func(in SetPostVoiceInput) string {
+							if in.VoiceID == "" {
+								return "Use the campaign's voice for the post"
+							}
+							return "Change the post's voice"
+						},
+					}, assistantkit.Wrap(recorded(repairPackName, "setPostVoice", nil, func(ctx context.Context, in SetPostVoiceInput) (*SetPostVoiceOutput, error) {
+						return setPostVoice(ctx, d, in)
+					}))),
+					ai.WithStrictSchema(false))
+				specs = append(specs, spec(repairPackName, voice, assistantkit.TierProposal,
+					`Call this when the user, in a campaign's thread, asks for one of its posts to be in another voice, or in the campaign's voice; pass the post's id and the voice's id from getBrand, or no voice for the campaign's. It is offered for the user to confirm. It doesn't rewrite the copy: say so, and offer revisePost when they want the copy in the new voice too. A brand-check finding's "use … the campaign's voice" fix is already this offer.`))
+			}
 			if d.CheckBrand != nil {
 				brand := genkit.DefineTool(g, "checkBrand",
 					"Checks posts against the brand they're written for: the voice and its channel notes, banned words, claims the guardrails rule out, claims no fact backs, and a missing disclaimer. Takes the posts named, else the thread's post, else a campaign's unpublished posts. Each finding quotes the post and opens it to fix.",
@@ -116,7 +133,7 @@ func repairPack(d Deps) assistant.Pack {
 						return checkBrand(ctx, d, in)
 					})), ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, brand, assistantkit.TierRead,
-					`Call this when the user asks whether posts are on brand, in the voice, or within the guardrails — "are these on brand?", "check the selected posts against our voice". Pass the selected posts' ids when there is a selection. Relay the findings, most serious first, with the quoted words, and say how many posts were clean. A finding's fixes ("rewrite it", "take it off the calendar", "delete it") are already offered for the user to confirm, the first being the one to suggest; don't offer them again. In the post's own thread, offer to fix it with editPost instead.`))
+					`Call this when the user asks whether posts are on brand, in the voice, or within the guardrails — "are these on brand?", "check the selected posts against our voice". Pass the selected posts' ids when there is a selection. Relay the findings, most serious first, with the quoted words, and say how many posts were clean. A finding's fixes ("rewrite it", "use … the campaign's voice", "take it off the calendar", "delete it") are already offered for the user to confirm, the first being the one to suggest; don't offer them again. In the post's own thread, offer to fix it with editPost instead.`))
 			}
 			return specs, nil
 		},

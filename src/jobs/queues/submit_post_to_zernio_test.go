@@ -113,6 +113,9 @@ func (r *fakePostRepo) SetScheduleIf(context.Context, bun.IDB, []repository.Sche
 func (r *fakePostRepo) SetPostTypeIf(context.Context, bun.IDB, []repository.PostTypeChange, time.Time) ([]string, error) {
 	return nil, nil
 }
+func (r *fakePostRepo) SetVoiceIf(context.Context, bun.IDB, repository.VoiceChange, time.Time) (bool, error) {
+	return false, nil
+}
 func (r *fakePostRepo) AddUsedAssetIDs(context.Context, string, []string) (*models.Post, error) {
 	return nil, nil
 }

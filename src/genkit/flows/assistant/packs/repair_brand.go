@@ -30,9 +30,9 @@ type CheckBrandInput struct {
 }
 
 // BrandFinding is a way a post breaks the brand, with its fixes, most
-// useful first: rewriting the post while its copy isn't locked, taking it
-// off the calendar when it breaks a guardrail, deleting a generated draft no
-// one has edited, and opening it.
+// useful first: rewriting the post while its copy isn't locked, reading it
+// in its campaign's voice, taking it off the calendar when it breaks a
+// guardrail, deleting a generated draft no one has edited, and opening it.
 type BrandFinding struct {
 	brand_check.Finding
 	// Key dismisses the finding, in the post's campaign, while the post
@@ -253,8 +253,9 @@ func untouchedDrafts(ctx context.Context, d Deps, found []brand_check.Finding, b
 }
 
 // brandFixes offers a finding's fixes, most useful first: rewriting the post
-// while its copy isn't locked and the writer is here; for a guardrail, taking
-// it off the calendar while it has a date; deleting it when it is a draft no
+// while its copy isn't locked and the writer is here; for the voice, reading
+// it in its campaign's voice in place of its own; for a guardrail, taking it
+// off the calendar while it has a date; deleting it when it is a draft no
 // one has edited; and opening it. The alternatives need the post's campaign.
 func brandFixes(ctx context.Context, d Deps, c *models.Campaign, p *models.Post, f brand_check.Finding, untouched bool) ([]FixOffer, error) {
 	var out []FixOffer
@@ -269,6 +270,15 @@ func brandFixes(ctx context.Context, d Deps, c *models.Campaign, p *models.Post,
 			return nil, err
 		}
 		out = append(out, FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixKind(consistency.FixRevisePost), Title: "Rewrite it to follow the brand", PostID: p.ID}, ProposalID: id})
+	}
+	if c != nil && d.Brand != nil {
+		voice, err := voiceFix(ctx, d, c, p, f)
+		if err != nil {
+			return nil, err
+		}
+		if voice != nil {
+			out = append(out, *voice)
+		}
 	}
 	if c != nil {
 		var alternatives []calendarcheck.Fix

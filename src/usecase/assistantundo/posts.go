@@ -101,14 +101,45 @@ func beforeAfter(a *models.AssistantAction) (before, after []PostState, err erro
 	return b.Posts, f.Posts, nil
 }
 
-// WithPosts lets s undo posts taken off the calendar, rewritten or changed
-// to another post type, and posts made from ideas.
+// WithPosts lets s undo posts taken off the calendar, rewritten, changed
+// to another post type or to another voice, and posts made from ideas.
 func (s *Service) WithPosts(posts repository.PostRepository) *Service {
 	s.undoers[models.AssistantActionPostSchedules] = postSchedules{posts}
 	s.undoers[models.AssistantActionPostTypes] = postTypes{posts}
 	s.undoers[models.AssistantActionPostCreated] = postCreated{posts}
 	s.undoers[models.AssistantActionPostRewritten] = postRewrite{}
+	s.undoers[models.AssistantActionPostVoice] = postVoice{posts}
 	return s
+}
+
+// postVoiceState is a post's own voice; nil reads in its campaign's.
+type postVoiceState struct {
+	VoiceID *string `json:"voiceId"`
+}
+
+// PostVoice is a post's own voice for the undo log of a voice change.
+func PostVoice(voiceID *string) models.JSONMap { return toMap(postVoiceState{VoiceID: voiceID}) }
+
+type postVoice struct{ posts repository.PostRepository }
+
+// Undo gives the post its voice back while it still has the one the change
+// gave it.
+func (u postVoice) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	var before, after postVoiceState
+	if err := fromMap(a.Before, &before); err != nil {
+		return err
+	}
+	if err := fromMap(a.After, &after); err != nil {
+		return err
+	}
+	ok, err := u.posts.SetVoiceIf(ctx, tx, repository.VoiceChange{PostID: a.EntityID, From: after.VoiceID, To: before.VoiceID}, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrChangedSince
+	}
+	return nil
 }
 
 type postSchedules struct{ posts repository.PostRepository }

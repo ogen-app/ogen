@@ -71,6 +71,9 @@ type PostRepository interface {
 	// while it still has the change's From type and status, on db. It
 	// returns the ids it changed. A nil db is the pool.
 	SetPostTypeIf(ctx context.Context, db bun.IDB, changes []PostTypeChange, now time.Time) ([]string, error)
+	// SetVoiceIf sets a post's own brand voice while it is still the
+	// change's From, on db, and reports whether it did. A nil db is the pool.
+	SetVoiceIf(ctx context.Context, db bun.IDB, change VoiceChange, now time.Time) (bool, error)
 	// UpdateSubmission is the publish workers' compare-and-set write; see
 	// posts_submission.go.
 	UpdateSubmission(ctx context.Context, post *models.Post, heldID string, columns ...string) (bool, error)

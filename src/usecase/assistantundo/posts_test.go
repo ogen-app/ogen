@@ -134,3 +134,48 @@ func TestUndo_PostRewritten(t *testing.T) {
 		t.Fatalf("latest version = %+v, %v", v, err)
 	}
 }
+
+// Undoing a voice change gives the post its own voice back, but not over a
+// later change.
+func TestUndo_PostVoice(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, nil)
+	posts := repository.NewPostRepository(f.db)
+	brand := repository.NewBrandRepository(f.db)
+	for _, id := range []string{"formal", "plain"} {
+		if err := brand.CreateVoice(f.ctx, &models.BrandVoice{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := assistantundo.New(f.db, f.actions, f.campaigns).WithPosts(posts)
+	undoPost(t, f, posts, "a", nil, models.PostStatusDraft, "")
+	set := func(from, to *string) {
+		if ok, err := posts.SetVoiceIf(f.ctx, nil, repository.VoiceChange{PostID: "a", From: from, To: to}, time.Now()); err != nil || !ok {
+			t.Fatalf("set voice = %v, %v", ok, err)
+		}
+	}
+	// The fix took the post's own voice away, so it reads in the campaign's.
+	set(nil, new("formal"))
+	set(new("formal"), nil)
+	log := func() string {
+		id, err := assistantundo.Record(f.ctx, f.actions, &models.AssistantAction{ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1",
+			Kind: models.AssistantActionPostVoice, EntityID: "a", Before: assistantundo.PostVoice(new("formal")),
+			After: assistantundo.PostVoice(nil), CreatedBy: "user-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	set(nil, new("plain"))
+	if _, err := svc.Undo(f.ctx, log(), "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+		t.Fatalf("undo over a later change = %v", err)
+	}
+	set(new("plain"), nil)
+	if _, err := svc.Undo(f.ctx, log(), "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := posts.GetByID(f.ctx, "a"); p.BrandVoiceID == nil || *p.BrandVoiceID != "formal" {
+		t.Fatalf("voice = %v, want formal", p.BrandVoiceID)
+	}
+}
