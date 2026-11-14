@@ -120,9 +120,6 @@ func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity s
 	return rng, sc, err
 }
 
-// defaultPreset is the span a read with no dates and no window covers.
-const defaultPreset = "28d"
-
 // presetOf is the relative span the read's dates resolve, as rangeAndScope
 // picks them: the call's dates are none, its window that span, the
 // screen's dates its preset, and none at all the default.
@@ -136,7 +133,7 @@ func presetOf(ctx context.Context, in AnalyticsQuery) string {
 	if w := assistant.Window(ctx); w != nil && (w.From != "" || w.To != "") {
 		return w.Preset
 	}
-	return defaultPreset
+	return viewcontext.DefaultAnalyticsPreset
 }
 
 // appliedFor is a windowed read's filters, with the span its dates

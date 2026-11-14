@@ -50,7 +50,7 @@ func TestAnalyticsOverview_CitesTheWindow(t *testing.T) {
 	if out, err = analyticsOverview(ctx, d, AnalyticsQuery{Window: "12w"}); err != nil || out.Applied.Preset != "12w" {
 		t.Fatalf("span = %+v, %v", out, err)
 	}
-	if out, err = analyticsOverview(analyticsTurn(t, nil), d, AnalyticsQuery{}); err != nil || out.Applied.Preset != defaultPreset {
+	if out, err = analyticsOverview(analyticsTurn(t, nil), d, AnalyticsQuery{}); err != nil || out.Applied.Preset != viewcontext.DefaultAnalyticsPreset {
 		t.Fatalf("default = %+v, %v", out, err)
 	}
 }

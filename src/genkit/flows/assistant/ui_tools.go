@@ -56,7 +56,8 @@ type UIAction struct {
 	// and campaign.
 	Window *viewcontext.Window `json:"window,omitempty"`
 	// Before is the window a set_window replaced, for its before → after
-	// rows; nil when the screen had none.
+	// rows: the screen's, or after a navigate in the turn the one the
+	// dashboard opens on; nil when the screen had none.
 	Before *viewcontext.Window `json:"before,omitempty"`
 	// Changed names what a set_window changed, of viewcontext's
 	// WindowPeriod, WindowPlatforms and WindowCampaign.
