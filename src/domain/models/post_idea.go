@@ -26,6 +26,13 @@ type PostSourceIdea struct {
 	Origin IdeaOrigin `json:"origin" swaggertype:"string" enums:",asset_analysis,content_plan,assistant"`
 }
 
+// LinkedIdea is an idea a post was made from, by id and title; the title is
+// empty when the idea is gone.
+type LinkedIdea struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
 // IdeaSlot is a dated idea on the calendar: a day an idea plans to land on,
 // drawn beside the posts but never one of them. Kind is always "idea", so
 // the client can mix slots and posts in one day.

@@ -187,10 +187,20 @@ type closeRule struct {
 // a pair counted once. The fix moves the later post when it can be moved,
 // else the earlier, to the nearest day far enough from every post it
 // shares the thing with.
-func (k *calendar) closeTogether(ideas map[string][]string) []Finding {
+func (k *calendar) closeTogether(ideas map[string][]models.LinkedIdea) []Finding {
+	// shared are the ideas a's and b's posts both come from, in a's order.
+	shared := func(a, b *models.Post) []models.LinkedIdea {
+		var out []models.LinkedIdea
+		for _, i := range ideas[a.ID] {
+			if slices.ContainsFunc(ideas[b.ID], func(o models.LinkedIdea) bool { return o.ID == i.ID }) {
+				out = append(out, i)
+			}
+		}
+		return out
+	}
 	rules := []closeRule{
 		{code: CodeSameIdea, days: SameIdeaDays, what: "come from the same idea", shares: func(a, b *models.Post) bool {
-			return slices.ContainsFunc(ideas[a.ID], func(id string) bool { return slices.Contains(ideas[b.ID], id) })
+			return len(shared(a, b)) > 0
 		}},
 		{code: CodeSameSource, days: SameSourceDays, what: "use the same source", shares: func(a, b *models.Post) bool {
 			return slices.ContainsFunc(a.UsedAssetIDs, func(id string) bool { return slices.Contains(b.UsedAssetIDs, id) })
@@ -212,6 +222,9 @@ func (k *calendar) closeTogether(ideas map[string][]string) []Finding {
 						apart(days(a.day, b.day)), cmp.Or(platformName(k.c, a.PlatformID), "no platform")),
 					Detail: fmt.Sprintf("%s; posts that %s go out at least %s apart on one platform.",
 						dayList([]time.Time{a.day, b.day}), r.what, plural(r.days, "day", "days"))}
+				if r.code == CodeSameIdea {
+					f.Ideas = shared(a.Post, b.Post)
+				}
 				for _, p := range []dated{b, a} {
 					fix, ok := k.move(p, func(d time.Time) bool { return k.farFrom(p, d, r) })
 					if ok {

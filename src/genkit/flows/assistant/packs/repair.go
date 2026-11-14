@@ -191,7 +191,7 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 	if err != nil {
 		return nil, err
 	}
-	var ideas map[string][]string
+	var ideas map[string][]models.LinkedIdea
 	if d.Links != nil {
 		if ideas, err = d.Links.IdeasOfCampaignPosts(ctx, c.ID); err != nil {
 			return nil, fmt.Errorf("read the posts' ideas: %w", err)

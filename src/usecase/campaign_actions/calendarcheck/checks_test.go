@@ -65,7 +65,8 @@ func TestCheck_SameIdeaClose(t *testing.T) {
 		{ID: "b", Title: "B", Status: models.PostStatusDraft, PlatformID: "li", ScheduledAt: at("2026-12-09T09:00")},
 		{ID: "x", Title: "X", Status: models.PostStatusDraft, PlatformID: "x", ScheduledAt: at("2026-12-07T09:00")},
 	}
-	ideas := map[string][]string{"a": {"i1"}, "b": {"i2", "i1"}, "x": {"i1"}}
+	i1, i2 := models.LinkedIdea{ID: "i1", Title: "Breakfast on the terrace"}, models.LinkedIdea{ID: "i2", Title: "Other"}
+	ideas := map[string][]models.LinkedIdea{"a": {i1}, "b": {i2, i1}, "x": {i1}}
 	got := Check(campaign(), posts, ideas, *at("2026-11-01T00:00"))
 	f := find(got, CodeSameIdea)
 	if f == nil || !slices.Equal(f.PostIDs, []string{"a", "b"}) {
@@ -84,6 +85,10 @@ func TestCheck_SameIdeaClose(t *testing.T) {
 	}
 	if len(f.Posts) != 2 || f.Posts[0].Title != "A" || f.Posts[1].Title != "B" {
 		t.Fatalf("posts = %+v", f.Posts)
+	}
+	// Only the idea both posts share is named.
+	if !slices.Equal(f.Ideas, []models.LinkedIdea{i1}) {
+		t.Fatalf("ideas = %+v", f.Ideas)
 	}
 	if n := len(slices.DeleteFunc(slices.Clone(got), func(f Finding) bool { return f.Code != CodeSameIdea })); n != 1 {
 		t.Fatalf("%d same-idea findings, want 1", n)

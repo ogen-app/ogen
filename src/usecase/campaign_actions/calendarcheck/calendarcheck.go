@@ -143,7 +143,10 @@ type Finding struct {
 	PostIDs          []string `json:"postIds,omitempty"`
 	// Posts are PostIDs' posts with their titles and days, in that order.
 	Posts []PostRef `json:"posts,omitempty"`
-	Fixes []Fix     `json:"fixes"`
+	// Ideas are, on a same_idea_close finding, the ideas its posts share, in
+	// the earlier post's order.
+	Ideas []models.LinkedIdea `json:"ideas,omitempty"`
+	Fixes []Fix               `json:"fixes"`
 	// scope tells apart findings of one code over the same posts, such as
 	// the goal's periods, in the key.
 	scope string
@@ -158,10 +161,10 @@ type PostRef struct {
 }
 
 // Check returns the campaign's calendar findings, warnings first. ideas
-// maps a post to the ideas it was made from. now is the clock "soon" reads;
-// a post's date is its day in the campaign's timezone, and the campaign's
-// start and end are calendar dates already.
-func Check(c *models.Campaign, posts []models.Post, ideas map[string][]string, now time.Time) []Finding {
+// maps a post to the ideas it was made from, in order. now is the clock
+// "soon" reads; a post's date is its day in the campaign's timezone, and the
+// campaign's start and end are calendar dates already.
+func Check(c *models.Campaign, posts []models.Post, ideas map[string][]models.LinkedIdea, now time.Time) []Finding {
 	loc := Location(c)
 	day := func(t time.Time) time.Time {
 		y, m, d := t.In(loc).Date()

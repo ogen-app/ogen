@@ -20,8 +20,8 @@ type PostIdeaRepository interface {
 	// PostsOfIdea returns the posts made from an idea, oldest first.
 	PostsOfIdea(ctx context.Context, ideaID string) ([]models.IdeaPostRef, error)
 	// IdeasOfCampaignPosts maps each of a campaign's posts made from ideas
-	// to their ids, in order.
-	IdeasOfCampaignPosts(ctx context.Context, campaignID string) (map[string][]string, error)
+	// to their ids and titles, in order.
+	IdeasOfCampaignPosts(ctx context.Context, campaignID string) (map[string][]models.LinkedIdea, error)
 }
 
 type postIdeaRepository struct {
@@ -75,24 +75,29 @@ func (r *postIdeaRepository) PostsOfIdea(ctx context.Context, ideaID string) ([]
 	return out, err
 }
 
-func (r *postIdeaRepository) IdeasOfCampaignPosts(ctx context.Context, campaignID string) (map[string][]string, error) {
+func (r *postIdeaRepository) IdeasOfCampaignPosts(ctx context.Context, campaignID string) (map[string][]models.LinkedIdea, error) {
 	tenantID, ok := tenantctx.From(ctx)
 	if !ok {
 		return nil, tenantctx.ErrNoTenant
 	}
-	var links []models.PostIdea
-	err := r.db.NewSelect().Model(&links).
-		Column("pi.post_id", "pi.idea_id").
+	var links []struct {
+		PostID string `bun:"post_id"`
+		ID     string `bun:"id"`
+		Title  string `bun:"title"`
+	}
+	err := r.db.NewSelect().Model((*models.PostIdea)(nil)).
+		ColumnExpr("pi.post_id, pi.idea_id AS id, coalesce(i.title, '') AS title").
 		Join("JOIN posts AS po ON po.id = pi.post_id AND po.tenant_id = ?", tenantID).
+		Join("LEFT JOIN ideas AS i ON i.id = pi.idea_id AND i.tenant_id = ?", tenantID).
 		Where("po.campaign_id = ?", campaignID).
 		OrderExpr("pi.post_id, pi.position, pi.idea_id").
-		Scan(ctx)
+		Scan(ctx, &links)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string][]string)
+	out := make(map[string][]models.LinkedIdea)
 	for _, l := range links {
-		out[l.PostID] = append(out[l.PostID], l.IdeaID)
+		out[l.PostID] = append(out[l.PostID], models.LinkedIdea{ID: l.ID, Title: l.Title})
 	}
 	return out, nil
 }

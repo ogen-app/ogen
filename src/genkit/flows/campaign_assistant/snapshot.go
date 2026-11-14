@@ -133,7 +133,7 @@ func sourceItems(c *models.Campaign, metas []models.Asset, digests map[string]re
 // links are read for "same idea close together"; without them that check is
 // skipped rather than the whole summary.
 func calendar(ctx context.Context, repos CampaignAssistantRepos, c *models.Campaign, posts []models.Post, now time.Time) *state.Calendar {
-	var ideas map[string][]string
+	var ideas map[string][]models.LinkedIdea
 	if repos.Links != nil {
 		got, err := repos.Links.IdeasOfCampaignPosts(ctx, c.ID)
 		if err != nil {
