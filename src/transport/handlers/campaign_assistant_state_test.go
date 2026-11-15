@@ -29,7 +29,7 @@ func TestCampaignAssistantState(t *testing.T) {
 		}
 		return &campaign_assistant.CampaignState{
 			State:    state.Snapshot{Goal: &state.Goal{Target: 20, Planned: 14, Room: 6}},
-			Starters: []campaign_assistant.Starter{{Kind: "draft", Label: "Draft 6 posts", Instruction: "Draft 6 posts to reach the campaign's goal."}},
+			Starters: []campaign_assistant.Starter{{Kind: "draft", Count: 6, Label: "Draft 6 posts", Instruction: "Draft 6 posts to reach the campaign's goal."}},
 		}, nil
 	}, auth).Register(app)
 
@@ -43,12 +43,12 @@ func TestCampaignAssistantState(t *testing.T) {
 				Room int `json:"room"`
 			} `json:"goal"`
 		} `json:"state"`
-		Starters []map[string]string `json:"starters"`
+		Starters []map[string]any `json:"starters"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("status = %d, err = %v", resp.StatusCode, err)
 	}
-	if body.State.Goal.Room != 6 || len(body.Starters) != 1 || body.Starters[0]["label"] != "Draft 6 posts" {
+	if body.State.Goal.Room != 6 || len(body.Starters) != 1 || body.Starters[0]["label"] != "Draft 6 posts" || body.Starters[0]["count"] != 6.0 {
 		t.Fatalf("body = %+v", body)
 	}
 
