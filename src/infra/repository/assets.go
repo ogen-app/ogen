@@ -339,13 +339,18 @@ func (r *assetRepository) ApplyTagsBefore(ctx context.Context, assetIDs, add, re
 			before[assets[i].ID] = slices.Clone(assets[i].TagIDs)
 			assets[i].TagIDs = mergeTagIDs(assets[i].TagIDs, add, remove)
 			assets[i].UpdatedAt = now
-			assets[i].MarkEdited(ctx)
-			// Only the tag set, its timestamp and editor — never title/content,
-			// so this can't disturb an in-flight document edit or trigger a
-			// re-embed.
+			// Only the tag set, its timestamp and, when the set changed, its
+			// editor — never title/content, so this can't disturb an
+			// in-flight document edit or trigger a re-embed. A write that
+			// changes no tag leaves whoever last tagged it as the editor.
+			columns := []string{"tag_ids", "updated_at"}
+			if !sameIDs(assets[i].TagIDs, before[assets[i].ID]) {
+				assets[i].MarkEdited(ctx)
+				columns = editedColumns(ctx, columns...)
+			}
 			if _, err := tx.NewUpdate().
 				Model(&assets[i]).
-				Column(editedColumns(ctx, "tag_ids", "updated_at")...).
+				Column(columns...).
 				WherePK().
 				Exec(ctx); err != nil {
 				return err
@@ -399,8 +404,14 @@ func (r *assetRepository) SetTagsIf(ctx context.Context, tx bun.IDB, from, to ma
 		if assets[i].TagIDs == nil {
 			assets[i].TagIDs = models.StringSlice{}
 		}
-		assets[i].MarkEdited(ctx)
-		if _, err := tx.NewUpdate().Model(&assets[i]).Column(editedColumns(ctx, "tag_ids", "updated_at")...).WherePK().Exec(ctx); err != nil {
+		// Every asset still has from's tags: only one whose set changes
+		// takes the editor.
+		columns := []string{"tag_ids", "updated_at"}
+		if !sameIDs(from[assets[i].ID], to[assets[i].ID]) {
+			assets[i].MarkEdited(ctx)
+			columns = editedColumns(ctx, columns...)
+		}
+		if _, err := tx.NewUpdate().Model(&assets[i]).Column(columns...).WherePK().Exec(ctx); err != nil {
 			return nil, err
 		}
 	}
