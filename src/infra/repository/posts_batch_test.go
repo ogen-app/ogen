@@ -206,4 +206,13 @@ func TestPostWritesRecordTheEditor(t *testing.T) {
 	if editorOf(draft.ID) != "user-1" {
 		t.Fatalf("after a member's write the editor = %q; want user-1", editorOf(draft.ID))
 	}
+
+	// Removing a source the post doesn't have changes nothing, so it takes
+	// no editor.
+	if _, err := repo.RemoveUsedAssetID(logging.WithUserID(ctx, "user-3"), draft.ID, "not-a-source"); err != nil {
+		t.Fatalf("remove an absent source: %v", err)
+	}
+	if editorOf(draft.ID) != "user-1" {
+		t.Fatalf("after a no-op source write the editor = %q; want user-1 kept", editorOf(draft.ID))
+	}
 }

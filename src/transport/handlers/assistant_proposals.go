@@ -65,8 +65,9 @@ const maxOptionInputLen = 2048
 // @Description  changed, in plain words), "changes" (the same as [{reason,code,item?,count?,of?,day?,title?,by?}]:
 // @Description  code deleted|left_campaign|scheduled|published|moved|day_closed|slot_taken|other, Count of the offer's Of
 // @Description  items, Day the posts' day for moves, by [{userId,name,count}] the members who did it) and, when what still
-// @Description  holds is offered afresh, "replacedBy" naming that offer, whose card has "replaces" and on each counted row
-// @Description  "was", its count on the replaced offer; the result carries the same "changes". From then on only the
+// @Description  holds is offered afresh, "replacedBy" naming that offer, whose card has "replaces" and, on each counted row
+// @Description  the replaced card also had (same kind and subject), "was": its count there; a row it didn't have has no
+// @Description  "was". The result carries the same "changes". From then on only the
 // @Description  fresh offer can be confirmed. A confirmed offer that was checked again and held resolves with
 // @Description  "rechecked": true; one with no check never has it. A run that did part of the job says so; its result lists "notMade"
 // @Description  and, when some items are worth retrying, an optional "retryProposalId" offering just those, whose

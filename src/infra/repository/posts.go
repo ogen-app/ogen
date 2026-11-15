@@ -455,15 +455,19 @@ func (r *postRepository) mutateUsedAssets(ctx context.Context, id, setExpr strin
 		if err != nil {
 			return err // sql.ErrNoRows when missing or in another tenant
 		}
-		if changes(current.UsedAssetIDs) && current.Status.IsSubmitted() {
+		changed := changes(current.UsedAssetIDs)
+		if changed && current.Status.IsSubmitted() {
 			return &PostSubmittedError{Status: current.Status}
 		}
-		res, err := setEditor(ctx, tx.NewUpdate().
+		q := tx.NewUpdate().
 			Model((*models.Post)(nil)).
 			Set(setExpr, arg).
-			Set("updated_at = ?", time.Now().UTC())).
-			Where("po.id = ?", id).
-			Exec(ctx)
+			Set("updated_at = ?", time.Now().UTC())
+		// A write that changes no source leaves the last editor as it was.
+		if changed {
+			q = setEditor(ctx, q)
+		}
+		res, err := q.Where("po.id = ?", id).Exec(ctx)
 		if err != nil {
 			return err
 		}
