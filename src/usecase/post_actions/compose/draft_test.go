@@ -138,9 +138,19 @@ func TestRunDraft_LinksEachPostAndKeepsWhatWasWritten(t *testing.T) {
 	}
 	plan.Jobs[0].DateFrom = DateFromPlan
 	var streamed []string
-	res, err := s.RunDraft(t.Context(), plan, func(p DraftedPost) { streamed = append(streamed, p.PostID) })
+	var started []DraftStart
+	res, err := s.RunDraft(t.Context(), plan, DraftHooks{
+		Started: func(st DraftStart) { started = append(started, st) },
+		Post:    func(p DraftedPost) { streamed = append(streamed, p.PostID) },
+	})
 	if err == nil || len(res.Posts) != 1 || !slices.Equal(streamed, []string{"p1"}) || len(res.Warnings) != 1 {
 		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+	// Each job is named before it is written, the failed one too, with the
+	// posts written before it.
+	if len(started) != 2 || started[0].Done != 0 || started[1].Done != 1 || started[1].Total != 2 ||
+		!slices.Equal(started[1].Ideas, []DraftStartIdea{{ID: "b", Title: "Idea b"}}) || started[0].PlatformID != "linkedin" {
+		t.Fatalf("started = %+v", started)
 	}
 	if !slices.Equal(links.links["p1"], []string{"a"}) {
 		t.Fatalf("links = %v", links.links)

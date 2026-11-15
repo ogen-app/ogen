@@ -137,9 +137,10 @@ func (f *fakeDrafts) PlanDraft(_ context.Context, in compose.DraftInput, maxPost
 	return &compose.DraftPlan{Jobs: make([]compose.DraftJob, 2)}, nil
 }
 
-func (f *fakeDrafts) RunDraft(_ context.Context, _ *compose.DraftPlan, onPost func(compose.DraftedPost)) (*compose.DraftResult, error) {
+func (f *fakeDrafts) RunDraft(_ context.Context, _ *compose.DraftPlan, hooks compose.DraftHooks) (*compose.DraftResult, error) {
+	hooks.Started(compose.DraftStart{Ideas: []compose.DraftStartIdea{{ID: "i1", Title: "Idea"}}, PlatformID: "linkedin", Count: 1, Total: 2})
 	p := compose.DraftedPost{Written: compose.Written{PostID: "p1", PlatformID: "linkedin"}, IdeaIDs: []string{"i1"}}
-	onPost(p)
+	hooks.Post(p)
 	if f.runErr != nil {
 		return nil, f.runErr
 	}
@@ -163,16 +164,21 @@ func TestDraftIdeas(t *testing.T) {
 		t.Fatalf("status = %d: %s", status, body)
 	}
 	frames := parseSSEStream(strings.NewReader(body))
-	if len(frames) != 2 || frames[0].event != "post" || frames[1].event != "complete" {
+	if len(frames) != 3 || frames[0].event != "started" || frames[1].event != "post" || frames[2].event != "complete" {
 		t.Fatalf("events = %+v", frames)
 	}
+	var started compose.DraftStart
+	if err := json.Unmarshal([]byte(frames[0].data), &started); err != nil || started.PlatformID != "linkedin" ||
+		!slices.Equal(started.Ideas, []compose.DraftStartIdea{{ID: "i1", Title: "Idea"}}) || started.Total != 2 {
+		t.Fatalf("started event = %s (%v)", frames[0].data, err)
+	}
 	var post compose.DraftedPost
-	if err := json.Unmarshal([]byte(frames[0].data), &post); err != nil || post.PostID != "p1" || !slices.Equal(post.IdeaIDs, []string{"i1"}) {
-		t.Fatalf("post event = %s (%v)", frames[0].data, err)
+	if err := json.Unmarshal([]byte(frames[1].data), &post); err != nil || post.PostID != "p1" || !slices.Equal(post.IdeaIDs, []string{"i1"}) {
+		t.Fatalf("post event = %s (%v)", frames[1].data, err)
 	}
 	var done compose.DraftResult
-	if err := json.Unmarshal([]byte(frames[1].data), &done); err != nil || len(done.Posts) != 1 || done.Posts[0].PostID != "p1" {
-		t.Fatalf("complete event = %s (%v)", frames[1].data, err)
+	if err := json.Unmarshal([]byte(frames[2].data), &done); err != nil || len(done.Posts) != 1 || done.Posts[0].PostID != "p1" {
+		t.Fatalf("complete event = %s (%v)", frames[2].data, err)
 	}
 	if !drafts.got.Together || drafts.got.Instruction != "punchier" || drafts.got.Actor != "user-1" || drafts.max != 5 {
 		t.Fatalf("input = %+v, max %d", drafts.got, drafts.max)
@@ -187,15 +193,15 @@ func TestDraftIdeas(t *testing.T) {
 	drafts.planErr, drafts.runErr = nil, errors.New("writer down")
 	_, body = call(t, app, "POST", "/api/ideas/draft", `{"idea_ids":["i1"]}`)
 	frames = parseSSEStream(strings.NewReader(body))
-	if len(frames) != 2 || frames[0].event != "post" || frames[1].event != "error" {
+	if len(frames) != 3 || frames[1].event != "post" || frames[2].event != "error" {
 		t.Fatalf("events = %+v", frames)
 	}
 	var failed struct {
 		Message string `json:"message"`
 		Code    int    `json:"code"`
 	}
-	if err := json.Unmarshal([]byte(frames[1].data), &failed); err != nil || failed.Code != 500 || failed.Message != "writer down" {
-		t.Fatalf("error event = %s (%v)", frames[1].data, err)
+	if err := json.Unmarshal([]byte(frames[2].data), &failed); err != nil || failed.Code != 500 || failed.Message != "writer down" {
+		t.Fatalf("error event = %s (%v)", frames[2].data, err)
 	}
 	up = false
 	if status, _ := call(t, app, "POST", "/api/ideas/draft", `{"idea_ids":["i1"]}`); status != 503 {
