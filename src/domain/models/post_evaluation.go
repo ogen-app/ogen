@@ -227,9 +227,11 @@ type PostEvaluation struct {
 type QualityTrigger string
 
 const (
-	QualityTriggerManual    QualityTrigger = "manual"
-	QualityTriggerReady     QualityTrigger = "ready"
-	QualityTriggerVersion   QualityTrigger = "version"
+	QualityTriggerManual  QualityTrigger = "manual"
+	QualityTriggerReady   QualityTrigger = "ready"
+	QualityTriggerVersion QualityTrigger = "version"
+	// QualityTriggerDrafted is a draft the assistant just wrote.
+	QualityTriggerDrafted   QualityTrigger = "drafted"
 	QualityTriggerScheduled QualityTrigger = "scheduled"
 	QualityTriggerPublished QualityTrigger = "published"
 )

@@ -463,6 +463,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		CheckPosts:        checkPostsFn,
 		DeletePost:        deletePostFn(r.packDeps.Remove),
 		CancelPost:        cancelPostFn(r.packDeps.Remove),
+		QualityAuto:       r.qualityAuto,
 	}, r.campaignAssistRepos)
 	if err != nil {
 		return fmt.Errorf("init campaign pack: %w", err)

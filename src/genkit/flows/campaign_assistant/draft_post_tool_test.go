@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 // fakeMessagesRepo is a minimal AssistantMessageRepository that returns
@@ -257,6 +259,47 @@ func TestToolDraftPost_BudgetAcrossPlatforms(t *testing.T) {
 	if st.draftPostResult == nil || st.draftPostResult.PostCount != 5 {
 		t.Fatalf("draftPostResult = %+v", st.draftPostResult)
 	}
+}
+
+// Every draft the tool writes is queued for scoring, in its campaign's
+// tenant, so its card can show the fit once it is known.
+func TestToolDraftPost_QueuesTheDraftsForScoring(t *testing.T) {
+	var calls []draft_post.DraftPostRequest
+	st := newDraftState([]models.AssistantMessage{
+		modelMsg(`{"action":"answered","explanation":"the research"}`),
+	}, &calls)
+	st.campaign.TenantID = "t1"
+	q := &queuedScores{}
+	st.qualityAuto = qualityauto.New(q, nil, qualityauto.Config{Enabled: true, DraftedDelay: 30 * time.Second})
+	ctx := withRequestState(t.Context(), st)
+
+	out, err := toolDraftPost(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 1})
+	if err != nil || !out.Succeeded() {
+		t.Fatalf("out = %+v err=%v", out, err)
+	}
+	var want []string
+	for _, r := range st.draftPostResult.Posts {
+		want = append(want, "t1/"+r.ID+"/drafted")
+	}
+	slices.Sort(q.got)
+	slices.Sort(want)
+	if len(want) != 2 || !slices.Equal(q.got, want) {
+		t.Fatalf("queued %v, want %v", q.got, want)
+	}
+}
+
+// queuedScores records the assessments queued, as tenant/post/trigger.
+type queuedScores struct {
+	repository.PostQualityQueueRepository
+	mu  sync.Mutex
+	got []string
+}
+
+func (q *queuedScores) Schedule(_ context.Context, tenantID, postID string, trigger models.QualityTrigger, _ time.Time) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.got = append(q.got, tenantID+"/"+postID+"/"+string(trigger))
+	return nil
 }
 
 // One platform the engine refuses doesn't hide the drafts another saved: the

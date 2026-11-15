@@ -64,6 +64,7 @@ type Config struct {
 	Enabled      bool
 	ReadyDelay   time.Duration
 	VersionDelay time.Duration
+	DraftedDelay time.Duration
 }
 
 // TenantStatusReader reads a tenant's lifecycle status; assessments of a
@@ -121,6 +122,8 @@ func (s *Service) delay(trigger models.QualityTrigger) time.Duration {
 		return s.cfg.ReadyDelay
 	case models.QualityTriggerVersion:
 		return s.cfg.VersionDelay
+	case models.QualityTriggerDrafted:
+		return s.cfg.DraftedDelay
 	}
 	return 0
 }

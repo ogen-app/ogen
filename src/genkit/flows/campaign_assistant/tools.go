@@ -37,6 +37,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 	"github.com/ogen-app/ogen/src/usecase/notify"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 	"github.com/ogen-app/ogen/src/usecase/scheduling"
 )
 
@@ -76,6 +77,8 @@ type requestState struct {
 	deletePost    func(ctx context.Context, post *models.Post, actor string) (bool, error)
 	cancelPost    func(ctx context.Context, postID, actor string) error
 	maxDraftPosts int
+	// qualityAuto queues the drafts draftPost writes for scoring.
+	qualityAuto *qualityauto.Service
 	// proposalThreshold is the largest generatePosts / draftPost batch run
 	// without asking; 0 means the default.
 	proposalThreshold int
@@ -239,6 +242,7 @@ func newRequestState(cfg CampaignAssistantFlowConfig, repos CampaignAssistantRep
 		proposalThreshold: cfg.ProposalThreshold,
 		checkBrief:        cfg.CheckBrief,
 		checkPosts:        cfg.CheckPosts,
+		qualityAuto:       cfg.QualityAuto,
 	}
 }
 
@@ -1091,6 +1095,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 		return assistantkit.Refuse[DraftPostOutput](strings.Join(refused, "; ")), nil
 	}
 	allWarn = append(allWarn, refused...)
+	st.scoreDrafts(ctx, rows)
 
 	st.draftPostResult = &DraftPostResult{
 		PostCount:   total,
@@ -1117,6 +1122,14 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 		Posts:          draftedRefs(resps, platformNames),
 		Grounding:      grounding,
 	}), nil
+}
+
+// scoreDrafts queues the new drafts for scoring, so their cards can show a
+// fit once it is known.
+func (st *requestState) scoreDrafts(ctx context.Context, rows []DraftedRow) {
+	for _, r := range rows {
+		st.qualityAuto.Schedule(ctx, &models.Post{ID: r.ID, TenantScoped: models.TenantScoped{TenantID: st.campaign.TenantID}, Status: models.PostStatusDraft}, models.QualityTriggerDrafted)
+	}
 }
 
 // PostRef names a post on a result card: its title, its platform, and its
