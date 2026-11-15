@@ -2,6 +2,7 @@ package packs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -35,26 +36,36 @@ func stillThere(ctx context.Context, d Deps, kind viewcontext.EntityKind, campai
 
 // recheckIDs is a Gate.Recheck for a call on a list of ids of kind: of reads
 // the call's ids and their campaign, if they must be its, and with narrows
-// the call to the ones still there, saying how many went.
+// the call to the ones still there, saying how many went. When none is,
+// the refusal comes with the same change, every one of them gone.
 func recheckIDs[In any](d Deps, kind viewcontext.EntityKind, of func(context.Context, In) (campaignID string, ids []string), with func(In, []string) In) func(context.Context, In) (In, []assistantkit.Change, error) {
 	return func(ctx context.Context, in In) (In, []assistantkit.Change, error) {
 		campaignID, ids := of(ctx, in)
+		all := len(dedupe(ids))
 		keep, err := stillThere(ctx, d, kind, campaignID, ids)
+		if _, ok := errors.AsType[*assistantkit.Refusal](err); ok {
+			return in, []assistantkit.Change{idsGone(kind, campaignID, all, all)}, err
+		}
 		if err != nil {
 			return in, nil, err
 		}
-		all := len(dedupe(ids))
 		if len(keep) == all {
 			return in, nil, nil
 		}
-		gone := assistantkit.Change{Reason: fmt.Sprintf("%d of the %d %ss no longer exist", all-len(keep), all, kind),
-			Code: assistantkit.ChangeDeleted, Item: string(kind), Count: all - len(keep), Of: all}
-		if campaignID != "" {
-			gone.Reason = fmt.Sprintf("%d of the %d %ss are no longer in the campaign", all-len(keep), all, kind)
-			gone.Code = assistantkit.ChangeLeftCampaign
-		}
-		return with(in, keep), []assistantkit.Change{gone}, nil
+		return with(in, keep), []assistantkit.Change{idsGone(kind, campaignID, all-len(keep), all)}, nil
 	}
+}
+
+// idsGone is n of a call's all ids of kind gone: deleted, or out of the
+// campaign when they must be campaignID's.
+func idsGone(kind viewcontext.EntityKind, campaignID string, n, all int) assistantkit.Change {
+	gone := assistantkit.Change{Reason: fmt.Sprintf("%d of the %d %ss no longer exist", n, all, kind),
+		Code: assistantkit.ChangeDeleted, Item: string(kind), Count: n, Of: all}
+	if campaignID != "" {
+		gone.Reason = fmt.Sprintf("%d of the %d %ss are no longer in the campaign", n, all, kind)
+		gone.Code = assistantkit.ChangeLeftCampaign
+	}
+	return gone
 }
 
 // ideasIn reads a call's idea ids, which may be any campaign's.

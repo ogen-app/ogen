@@ -849,13 +849,22 @@ func moveChanges(ctx context.Context, d Deps, moves []Move, failed []failedMove)
 // moveReason words a change to posts an offer moved: who did what to which
 // posts, e.g. "Marta scheduled 2 of the Thursday posts since — scheduled
 // posts stay put"; to is the day they can't go to, for a change that says.
+// The members are named only when they made the change to every one of the
+// posts: otherwise the sentence would credit them with the rest.
 func moveReason(ctx context.Context, ch assistantkit.Change, to string) string {
 	subject, object := postsOn(ch)
 	was := "was"
 	if ch.Count > 1 {
 		was = "were"
 	}
-	who := editors.Names(ctx, ch.By)
+	known := 0
+	for _, b := range ch.By {
+		known += b.Count
+	}
+	who := ""
+	if known == ch.Count {
+		who = editors.Names(ctx, ch.By)
+	}
 	if who == "you" {
 		who = "You"
 	}
