@@ -57,6 +57,9 @@ type turnState struct {
 	planning sync.Mutex
 
 	mu sync.Mutex
+	// cites are the parts of the packs' blocks the final reply says it
+	// relied on, for the packs' End.
+	cites []string
 	// screen and campaign follow the turn's navigations, so a filter set
 	// after a navigate applies to the new list.
 	screen   viewcontext.Screen
@@ -417,6 +420,19 @@ func (st *turnState) restart(packs packList) (string, bool) {
 
 func withTurnState(ctx context.Context, st *turnState) context.Context {
 	return assistantkit.WithTouches(context.WithValue(ctx, turnStateKey{}, st), &st.touches)
+}
+
+// ReplyCites are the parts of the packs' blocks the turn's final reply says
+// it relied on (its "cites"), each once and in the order given; nil before
+// the reply is final or when it named none. A pack's End reads them.
+func ReplyCites(ctx context.Context) []string {
+	st, ok := ctx.Value(turnStateKey{}).(*turnState)
+	if !ok {
+		return nil
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return slices.Clone(st.cites)
 }
 
 func turnStateFrom(ctx context.Context) (*turnState, error) {

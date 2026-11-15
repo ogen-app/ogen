@@ -80,6 +80,9 @@ type evalCase struct {
 	orReply bool
 	// hotel runs the case on the Hotel de Russie's spa reopening campaign.
 	hotel bool
+	// cites are the <campaign_state> parts a plain answer's "cites" must
+	// name.
+	cites []string
 }
 
 // evalOffer is an earlier turn that ended in an offer: what the user asked,
@@ -171,6 +174,8 @@ var evalCases = []evalCase{
 		want: []string{"draftPost", "generatePosts", "updateCampaignPlatforms"}},
 	// A yes to a waiting offer takes it, on the first try.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "yes please", offered: offerThreads, want: []string{"confirmOffer"}},
+	// CON-503: an answer from <campaign_state> says which of it it read.
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "How many more posts fit under our goal?", atGoal: true, not: writes, cites: []string{"goal"}},
 	// CON-483: dropping a platform goes through the platform tool, which
 	// holds it back for a scheduled post; the user's pick is the choice's.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Drop LinkedIn from the campaign.",
@@ -506,7 +511,7 @@ func TestPackEvals(t *testing.T) {
 		CheckBrand:  func(context.Context, brand_check.Request) (*brand_check.Result, error) { return nil, nil },
 		MoreLike:    func(context.Context, more_like_these.Request) ([]more_like_these.Idea, error) { return nil, nil },
 		Remove:      evalRemover{},
-		Revise:      func(context.Context, string, string, string) (Revised, error) { return Revised{Versioned: true}, nil },
+		Revise:      func(context.Context, string, string, string) (packs.Revised, error) { return packs.Revised{Versioned: true}, nil },
 		AutoPublish: evalAllowlist{}, ConnectPlatform: func(string) (string, bool) { return "LinkedIn", true },
 		Digest: evalDigest{}, Versions: evalVersions{}, PostLogs: evalPostLogs{},
 	})
@@ -575,6 +580,20 @@ func (c evalCase) judge(r *assistant.Routing) (bool, string) {
 	case len(c.want) > 0 && len(got) == 0 && c.orReply:
 	case len(c.want) > 0 && (len(got) == 0 || !slices.Contains(c.want, got[0])):
 		return false, fmt.Sprintf("first call isn't one of %v", c.want)
+	}
+	if len(c.cites) > 0 {
+		var env struct {
+			Cites []string `json:"cites"`
+		}
+		i, j := strings.Index(r.Reply, "{"), strings.LastIndex(r.Reply, "}")
+		if i < 0 || j < i || json.Unmarshal([]byte(r.Reply[i:j+1]), &env) != nil {
+			return false, "reply has no cites"
+		}
+		for _, want := range c.cites {
+			if !slices.Contains(env.Cites, want) {
+				return false, fmt.Sprintf("cites %v, want %v", env.Cites, c.cites)
+			}
+		}
 	}
 	return true, ""
 }
