@@ -110,6 +110,7 @@ var IdeaGroups = []string{
 // IdeaQuery is one read of the ideas list. Different fields combine with AND.
 type IdeaQuery struct {
 	Pile        AssetValueFilter
+	IDs         AssetValueFilter
 	Origin      AssetValueFilter
 	SourceAsset AssetValueFilter
 	Kind        AssetValueFilter

@@ -218,7 +218,7 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Summary      List workspace ideas
 // @Description  Filters, counts, groups and pages the workspace's ideas.
 // @Description
-// @Description  Every filter takes a comma-separated list meaning "any of these"; its `_not` twin excludes values. Different fields combine with AND. `pile` splits the ideas into `waiting` (undecided, or `later` with its reminder passed), `yes`, `later` (still snoozed) and `no`. `source_asset` and `campaign_id` take ids plus `none` (written ideas or a deleted source; workspace-wide). `kind` is the source asset's kind; `author` takes user ids and matches manual ideas only. `fit` bands are `high` (70–100), `medium` (40–69), `low` (10–39) and `unscored`. `used` is `used` once a post was made from the idea (any status) and `unused` before; every idea carries `post_count`. `text` matches title or note as a case-insensitive substring. `created` takes the presets `1d`, `7d`, `30d` and `month` in `tz`; `created_after` and `created_before` take RFC 3339 or YYYY-MM-DD.
+// @Description  Every filter takes a comma-separated list meaning "any of these"; its `_not` twin excludes values. Different fields combine with AND. `pile` splits the ideas into `waiting` (undecided, or `later` with its reminder passed), `yes`, `later` (still snoozed) and `no`. `ids` keeps the ideas named, at most 200 across `ids` and `ids_not` (an unknown id matches nothing), so a link can open exactly the ideas a card shows. `source_asset` and `campaign_id` take ids plus `none` (written ideas or a deleted source; workspace-wide). `kind` is the source asset's kind; `author` takes user ids and matches manual ideas only. `fit` bands are `high` (70–100), `medium` (40–69), `low` (10–39) and `unscored`. `used` is `used` once a post was made from the idea (any status) and `unused` before; every idea carries `post_count`. `text` matches title or note as a case-insensitive substring. `created` takes the presets `1d`, `7d`, `30d` and `month` in `tz`; `created_after` and `created_before` take RFC 3339 or YYYY-MM-DD.
 // @Description
 // @Description  `scope_campaign` confines the whole read, totals and counts included, to one campaign's ideas; the campaign_id facet is not returned there. `piles` count the match of every filter but `pile`. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value an idea in scope has, with 0 for those nothing matches. `facet_labels.source_asset` labels every asset of the source_asset facet.
 // @Description
@@ -232,6 +232,8 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Security     CookieAuth
 // @Param        pile            query  string  false  "waiting, yes, later, no"
 // @Param        pile_not        query  string  false  "Piles to exclude"
+// @Param        ids             query  string  false  "Idea ids (at most 200 with ids_not)"
+// @Param        ids_not         query  string  false  "Idea ids to exclude"
 // @Param        text            query  string  false  "Title or note substring (at most 200 characters)"
 // @Param        origin          query  string  false  "asset_analysis, content_plan, assistant, manual"
 // @Param        origin_not      query  string  false  "Origins to exclude"

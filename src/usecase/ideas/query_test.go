@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,19 +56,21 @@ func TestParseQueryReadsEveryFilter(t *testing.T) {
 
 func TestParseQueryRejectsNamingTheParameter(t *testing.T) {
 	for raw, param := range map[string]string{
-		"pile=someday":                        "pile",
-		"kind_not=pdf,film":                   "kind",
-		"fit=great":                           "fit",
-		"origin=robot":                        "origin",
-		"sort=random":                         "sort",
-		"group=tag":                           "group",
-		"limit=0":                             "limit",
-		"limit=201":                           "limit",
-		"facets=origin,verdict":               "facets",
-		"created=yesterday":                   "created",
-		"created=7d&created_after=2026-10-01": "created",
-		"created_before=soon":                 "created_before",
-		"tz=Mars/Base":                        "tz",
+		"pile=someday":                          "pile",
+		"kind_not=pdf,film":                     "kind",
+		"fit=great":                             "fit",
+		"origin=robot":                          "origin",
+		"sort=random":                           "sort",
+		"group=tag":                             "group",
+		"limit=0":                               "limit",
+		"limit=201":                             "limit",
+		"facets=origin,verdict":                 "facets",
+		"created=yesterday":                     "created",
+		"created=7d&created_after=2026-10-01":   "created",
+		"created_before=soon":                   "created_before",
+		"tz=Mars/Base":                          "tz",
+		"ids=" + manyIDs(MaxIDs+1):              "ids",
+		"ids=" + manyIDs(MaxIDs) + "&ids_not=x": "ids",
 	} {
 		v, _ := url.ParseQuery(raw)
 		_, err := ParseQuery(v, time.Now())
@@ -75,4 +79,28 @@ func TestParseQueryRejectsNamingTheParameter(t *testing.T) {
 			t.Errorf("%q: err = %v, want invalid_filter on %s", raw, err, param)
 		}
 	}
+}
+
+func TestParseQueryReadsIDs(t *testing.T) {
+	v, _ := url.ParseQuery("ids=i1,i2&ids=i2&ids_not=i3")
+	q, err := ParseQuery(v, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(q.IDs.Any, []string{"i1", "i2"}) || !slices.Equal(q.IDs.Not, []string{"i3"}) {
+		t.Errorf("ids = %+v", q.IDs)
+	}
+	v, _ = url.ParseQuery("ids=" + manyIDs(MaxIDs))
+	if q, err = ParseQuery(v, time.Now()); err != nil || len(q.IDs.Any) != MaxIDs {
+		t.Errorf("%d ids: %d read, err %v, want the cap allowed", MaxIDs, len(q.IDs.Any), err)
+	}
+}
+
+// manyIDs is n distinct ids, comma-joined.
+func manyIDs(n int) string {
+	ids := make([]string, n)
+	for i := range n {
+		ids[i] = "i" + strconv.Itoa(i)
+	}
+	return strings.Join(ids, ",")
 }

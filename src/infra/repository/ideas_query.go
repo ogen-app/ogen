@@ -50,11 +50,11 @@ func ideaRowOrder(q models.IdeaQuery) []assetSortKey {
 
 // ideaPreds turns a query's filters into conditions on a facts row f, one per
 // field. Every filtered field but text and created is a facts column of the
-// field's name.
+// field's name; ids is the id column.
 func ideaPreds(q models.IdeaQuery) []assetPred {
 	var preds []assetPred
 	for field, f := range map[string]models.AssetValueFilter{
-		"pile": q.Pile, models.IdeaFacetOrigin: q.Origin, models.IdeaFacetSourceAsset: q.SourceAsset,
+		"pile": q.Pile, "id": q.IDs, models.IdeaFacetOrigin: q.Origin, models.IdeaFacetSourceAsset: q.SourceAsset,
 		models.IdeaFacetKind: q.Kind, models.IdeaFacetCampaign: q.Campaign, models.IdeaFacetFit: q.Fit,
 		models.IdeaFacetPhase: q.Phase, models.IdeaFacetAuthor: q.Author, models.IdeaFacetUsed: q.Used,
 	} {
