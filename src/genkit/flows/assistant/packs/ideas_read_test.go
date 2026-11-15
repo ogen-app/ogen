@@ -32,7 +32,7 @@ func readDeps() Deps {
 		FitBreakdown: &ideafit.Breakdown{Lens: ideafit.LensCampaign, CampaignID: &c1,
 			Criteria: map[string]ideafit.Rating{"evidence": {Level: 4, Why: "a clear claim backs it"}}, Caps: []ideafit.Cap{ideafit.CapOffBrief}}}
 	repo.byID["i2"].CreatedByName, repo.byID["i2"].CampaignID, repo.byID["i2"].AssetIDs = "Olena", &c1, []string{"a1"}
-	d.Assets = memAssets{all: []models.Asset{{ID: "a1", Title: "Brochure"}}}
+	d.Assets = memAssets{all: []models.Asset{{ID: "a1", Title: "Brochure", Type: new("PDF")}}}
 	d.Analyses = lensRepo{lenses: []models.AssetAnalysis{{ID: "an1", AssetID: "a1", CampaignID: &c1, Status: models.AssetAnalysisStatusReady,
 		Gist: "Pricing advice for founders.", Summary: strings.Repeat("s", ideaAnalysisRunes+10)}}}
 	d.Links = ideaPosts{}
@@ -41,7 +41,8 @@ func readDeps() Deps {
 }
 
 // getIdea explains an idea: its parts, each rating with what its level
-// means, the cap, its source with the passage it came from and analysis, and
+// means, the cap, its source with its type, the passage it came from and its
+// analysis, and
 // the posts made from it. A hand-written idea says no lens scored it.
 func TestGetIdea(t *testing.T) {
 	d := readDeps()
@@ -50,7 +51,7 @@ func TestGetIdea(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Angle != "myth-busting" || out.Rationale == "" || len(out.Sources) != 1 || out.SourceAsset == nil || out.SourceAsset.Title != "Brochure" {
+	if out.Angle != "myth-busting" || out.Rationale == "" || len(out.Sources) != 1 || out.SourceAsset == nil || out.SourceAsset.Title != "Brochure" || out.SourceAsset.Type != "PDF" {
 		t.Fatalf("idea = %+v", out)
 	}
 	if p := out.SourceAsset.Passage; p.ChunkID != "a1:4" || p.Label != "p. 12" || p.Page == nil || *p.Page != 12 {

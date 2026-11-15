@@ -68,11 +68,12 @@ type GetIdeaOutput struct {
 	Note2     string               `json:"explain,omitempty"`
 }
 
-// AssetName is an asset by id and title, with where in it the idea came
-// from.
+// AssetName is an asset by id, title and stored type (PDF, DOC, MD, URL,
+// IMG, AUDIO), with where in it the idea came from.
 type AssetName struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
+	Type  string `json:"type,omitempty"`
 	Passage
 }
 
@@ -142,7 +143,7 @@ func getIdea(ctx context.Context, d Deps, in GetIdeaInput) (*GetIdeaOutput, erro
 	}
 	if idea.SourceAssetID != nil && d.Assets != nil {
 		if metas, err := d.Assets.ListMeta(ctx, []string{*idea.SourceAssetID}); err == nil && len(metas) == 1 {
-			out.SourceAsset = &AssetName{ID: metas[0].ID, Title: metas[0].Title, Passage: passageOf(idea.SourceLocator)}
+			out.SourceAsset = &AssetName{ID: metas[0].ID, Title: metas[0].Title, Type: deref(metas[0].Type), Passage: passageOf(idea.SourceLocator)}
 		}
 	}
 	if idea.SourceAssetID != nil && idea.AssetAnalysisID != nil && d.Analyses != nil {
