@@ -93,6 +93,9 @@ type ProposalOutcome struct {
 	Text  string `json:"text"`
 	Made  int    `json:"made,omitzero"`
 	Total int    `json:"total,omitzero"`
+	// Rechecked is set when the offer was checked again before it ran and
+	// found unchanged.
+	Rechecked bool `json:"rechecked,omitzero"`
 	// Result is the work's result, as the answer turn's "result" holds
 	// it; left out when it is too large to keep.
 	Result json.RawMessage `json:"result,omitempty" swaggertype:"object"`

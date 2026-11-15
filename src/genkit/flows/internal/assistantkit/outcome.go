@@ -67,6 +67,9 @@ type Outcome[T any] struct {
 	// words, when that is why it ran nothing: it was refused, or what still
 	// holds was offered afresh (ProposalID).
 	Changes []string `json:"changes,omitempty"`
+	// Rechecked is set on a confirmed run whose offer was checked again
+	// before it ran and found unchanged.
+	Rechecked bool `json:"rechecked,omitzero"`
 }
 
 // Partial is how much of the job a run did: Made of Total items, the ones

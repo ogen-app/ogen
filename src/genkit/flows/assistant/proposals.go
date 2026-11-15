@@ -95,6 +95,9 @@ type ProposalResolved struct {
 	// ReplacedBy is the fresh offer of what still holds, for a stale offer
 	// that has one.
 	ReplacedBy string `json:"replacedBy,omitempty"`
+	// Rechecked is set on a confirmed offer that was checked again before
+	// it ran and found unchanged; an offer with no check never has it.
+	Rechecked bool `json:"rechecked,omitzero"`
 }
 
 // The resolved statuses that are no answer the user gave.
@@ -261,6 +264,9 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 		return nil, rerr
 	}
 	if err == nil {
+		if rechecked(result) {
+			st.markRechecked(p.ID)
+		}
 		t.recordOutcome(ctx, p, in.OptionID, result)
 	}
 	return result, err
@@ -282,7 +288,7 @@ func (t *toolSet) recordOutcome(ctx context.Context, p *models.AssistantProposal
 		return
 	}
 	part := partialResult(result)
-	o := &models.ProposalOutcome{Text: answered(p, true, optionID, result), Made: part.made, Total: part.total}
+	o := &models.ProposalOutcome{Text: answered(p, true, optionID, result), Made: part.made, Total: part.total, Rechecked: rechecked(result)}
 	if m, ok := result.(map[string]any); ok && m["result"] != nil {
 		if b, err := json.Marshal(m["result"]); err == nil && len(b) <= maxOutcomeResult {
 			o.Result = b
@@ -658,6 +664,14 @@ func staleResult(raw any) (changes []string, replacedBy string, ok bool) {
 		replacedBy, _ = m["proposalId"].(string)
 	}
 	return changes, replacedBy, true
+}
+
+// rechecked reports whether a confirmed run's offer was checked again
+// before it ran, and held.
+func rechecked(raw any) bool {
+	m, _ := raw.(map[string]any)
+	v, _ := m["rechecked"].(bool)
+	return v
 }
 
 // partial is how much of the job a confirmed run did.

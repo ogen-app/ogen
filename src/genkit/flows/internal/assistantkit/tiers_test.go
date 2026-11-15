@@ -109,15 +109,16 @@ func TestGated_ConfirmedRechecks(t *testing.T) {
 	sink := &memSink{}
 	ctx := &ai.ToolContext{Context: WithOffer(WithConfirmed(WithProposalSink(t.Context(), sink)), "offer-1")}
 
-	// Nothing changed: the precheck's conflict was answered, and it runs.
-	if out, err := run(ctx, idsIn{IDs: []string{"a", "b"}}); err != nil || !out.Succeeded() || len(ran) != 2 || out.Changes != nil {
+	// Nothing changed: the precheck's conflict was answered, and it runs,
+	// saying it was checked again.
+	if out, err := run(ctx, idsIn{IDs: []string{"a", "b"}}); err != nil || !out.Succeeded() || len(ran) != 2 || out.Changes != nil || !out.Rechecked {
 		t.Fatalf("unchanged: out = %+v, err = %v, ran = %v", out, err, ran)
 	}
 	// Some went: nothing runs, and what still holds is offered afresh,
 	// replacing the offer confirmed, with what changed.
 	ran, gone["b"] = nil, true
 	out, err := run(ctx, idsIn{IDs: []string{"a", "b"}})
-	if err != nil || out.Status != StatusProposed || len(ran) != 0 || out.Summary != "Touch a" || !strings.HasPrefix(out.Reason, ChangedSince) ||
+	if err != nil || out.Status != StatusProposed || len(ran) != 0 || out.Summary != "Touch a" || !strings.HasPrefix(out.Reason, ChangedSince) || out.Rechecked ||
 		!slices.Equal(out.Changes, []string{"b was deleted"}) {
 		t.Fatalf("narrowed: out = %+v, err = %v, ran = %v", out, err, ran)
 	}
@@ -170,7 +171,8 @@ func TestGatedRetry_OffersWhatWasLeft(t *testing.T) {
 	sink := &memSink{}
 	ctx := &ai.ToolContext{Context: WithOffer(WithConfirmed(WithProposalSink(t.Context(), sink)), "offer-1")}
 	out, err := halfTool()(ctx, idsIn{IDs: []string{"a", "x", "b"}})
-	if err != nil || !out.Succeeded() {
+	// Its gate has no check, so it says none ran.
+	if err != nil || !out.Succeeded() || out.Rechecked {
 		t.Fatalf("out = %+v, err = %v", out, err)
 	}
 	// What the run left rides in its result, where every reader sees it.

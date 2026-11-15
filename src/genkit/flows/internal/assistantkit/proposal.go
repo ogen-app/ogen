@@ -201,7 +201,8 @@ const ChangedSince = "Things changed since the offer: "
 // changed while it waited: a call its precheck now refuses runs nothing, and
 // one that narrowed is offered afresh with what still holds. Either way the
 // outcome lists what changed. A conflict the precheck raises again was the
-// user's to answer, and they did.
+// user's to answer, and they did. A call that was checked again and ran is
+// marked Rechecked.
 func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], in In, next ai.ToolFunc[In, Outcome[Out]]) (Outcome[Out], error) {
 	if gate.Precheck != nil {
 		err := gate.Precheck(ctx, in)
@@ -236,7 +237,9 @@ func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], 
 			return out, err
 		}
 	}
-	return next(ctx, in)
+	out, err := next(ctx, in)
+	out.Rechecked = gate.Precheck != nil || gate.Recheck != nil
+	return out, err
 }
 
 // changedSince is a confirmed call that ran nothing because r now holds;
