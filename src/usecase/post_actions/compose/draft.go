@@ -213,12 +213,55 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 	return out, nil
 }
 
+// DraftHooks are what a caller sees of a run as it goes; either may be nil.
+type DraftHooks struct {
+	// Started sees each job just before it is written.
+	Started func(DraftStart)
+	// Post sees each post as it lands.
+	Post func(DraftedPost)
+}
+
+// DraftStart is a job about to be written: the ideas it comes from, the
+// platform and post type, how many posts it asks for, and, of the plan's
+// total posts, how many are written before it.
+type DraftStart struct {
+	Ideas      []DraftStartIdea `json:"ideas"`
+	PlatformID string           `json:"platformId"`
+	PostType   string           `json:"postType,omitempty"`
+	Count      int              `json:"count"`
+	Done       int              `json:"done"`
+	Total      int              `json:"total"`
+}
+
+// DraftStartIdea is one idea a job is written from.
+type DraftStartIdea struct {
+	ID    string `json:"ideaId"`
+	Title string `json:"title"`
+}
+
+// start is job about to be written, with done posts of the plan before it.
+func (p *DraftPlan) start(job DraftJob, done int) DraftStart {
+	ideas := make([]DraftStartIdea, len(job.IdeaIDs))
+	for i, id := range job.IdeaIDs {
+		ideas[i].ID = id
+		if j := slices.IndexFunc(p.Ideas, func(idea models.Idea) bool { return idea.ID == id }); j >= 0 {
+			ideas[i].Title = p.Ideas[j].Title
+		}
+	}
+	return DraftStart{Ideas: ideas, PlatformID: job.Request.PlatformID, PostType: job.Request.PostType,
+		Count: job.Request.Count, Done: done, Total: p.Posts()}
+}
+
 // RunDraft runs a plan's jobs in order and links every written post to its
-// ideas. onPost, when set, sees each post as it lands. A writer error stops
-// the run; the posts written before it are kept, linked and returned.
-func (s *Service) RunDraft(ctx context.Context, plan *DraftPlan, onPost func(DraftedPost)) (*DraftResult, error) {
+// ideas. hooks see each job as it starts and each post as it lands. A writer
+// error stops the run; the posts written before it are kept, linked and
+// returned.
+func (s *Service) RunDraft(ctx context.Context, plan *DraftPlan, hooks DraftHooks) (*DraftResult, error) {
 	res := &DraftResult{Posts: []DraftedPost{}}
 	for _, job := range plan.Jobs {
+		if hooks.Started != nil {
+			hooks.Started(plan.start(job, len(res.Posts)))
+		}
 		written, warnings, err := s.draft(ctx, withWindow(job.Request))
 		res.Warnings = append(res.Warnings, warnings...)
 		for _, w := range written {
@@ -233,8 +276,8 @@ func (s *Service) RunDraft(ctx context.Context, plan *DraftPlan, onPost func(Dra
 				p.UsedAssetIDs = []string{}
 			}
 			res.Posts = append(res.Posts, p)
-			if onPost != nil {
-				onPost(p)
+			if hooks.Post != nil {
+				hooks.Post(p)
 			}
 		}
 		if err != nil {
@@ -256,7 +299,7 @@ func (s *Service) Write(ctx context.Context, req DraftRequest, ideaIDs []string,
 	if req.WindowStart != "" || req.WindowEnd != "" {
 		job.DateFrom = DateFromAsked
 	}
-	return s.RunDraft(ctx, &DraftPlan{Jobs: []DraftJob{job}}, onPost)
+	return s.RunDraft(ctx, &DraftPlan{Jobs: []DraftJob{job}}, DraftHooks{Post: onPost})
 }
 
 // withWindow completes a one-sided publish window, which the writer needs

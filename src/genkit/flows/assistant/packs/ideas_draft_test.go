@@ -68,6 +68,55 @@ func TestDraftIdeas_Grounding(t *testing.T) {
 	}
 }
 
+// Each post is named before it is written, so the rail's placeholder can say
+// which idea is next: in order, each ahead of its post, the one the writer
+// failed on too.
+func TestDraftIdeas_StartedNamesTheNextPost(t *testing.T) {
+	d, _ := draftDeps(2)
+	var kinds []assistant.SSEEventKind
+	var started []IdeaDraftStartedEvent
+	ctx, _ := turn(t, workspace, func(kind assistant.SSEEventKind, data any) {
+		switch kind {
+		case "idea_draft_started":
+			started = append(started, data.(IdeaDraftStartedEvent))
+		case "idea_draft_post":
+		default:
+			return
+		}
+		kinds = append(kinds, kind)
+	})
+	if _, err := draftIdeas(ctx, d, DraftIdeasInput{IdeaIDs: []string{"i1", "i2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(kinds, []assistant.SSEEventKind{"idea_draft_started", "idea_draft_post", "idea_draft_started"}) {
+		t.Fatalf("events = %v", kinds)
+	}
+	first, second := started[0], started[1]
+	if first.Ideas[0].ID != "i1" || first.Ideas[0].Title == "" || first.PlatformID != "linkedin" || first.Done != 0 || first.Total != 2 {
+		t.Fatalf("first = %+v", first)
+	}
+	if second.Ideas[0].ID != "i2" || second.Done != 1 || second.Count != 1 {
+		t.Fatalf("second = %+v", second)
+	}
+}
+
+// Drafted together, one post is named with every idea it comes from.
+func TestDraftIdeas_StartedTogether(t *testing.T) {
+	d, _ := draftDeps(0)
+	var started []IdeaDraftStartedEvent
+	ctx, _ := turn(t, workspace, func(kind assistant.SSEEventKind, data any) {
+		if kind == "idea_draft_started" {
+			started = append(started, data.(IdeaDraftStartedEvent))
+		}
+	})
+	if _, err := draftIdeas(ctx, d, DraftIdeasInput{IdeaIDs: []string{"i1", "i2"}, Together: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(started) != 1 || len(started[0].Ideas) != 2 || started[0].Ideas[1].ID != "i2" || started[0].Total != 1 {
+		t.Fatalf("started = %+v", started)
+	}
+}
+
 // A writer that fails part way keeps what it wrote, with a warning; one
 // that wrote nothing fails.
 func TestDraftIdeas_StoppedEarly(t *testing.T) {

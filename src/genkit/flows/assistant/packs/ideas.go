@@ -747,6 +747,10 @@ type IdeaDraftEvent struct {
 	Total int `json:"total"`
 }
 
+// IdeaDraftStartedEvent is an idea_draft_started event: the post about to be
+// written, before its idea_draft_post.
+type IdeaDraftStartedEvent = compose.DraftStart
+
 func planDraft(ctx context.Context, d Deps, in DraftIdeasInput) (*compose.DraftPlan, error) {
 	date, err := calendarDate(in.TargetDate)
 	if err != nil {
@@ -772,16 +776,19 @@ func draftIdeas(ctx context.Context, d Deps, in DraftIdeasInput) (*DraftIdeasOut
 	}
 	titles := newAssetTitles(d)
 	out := &DraftIdeasOutput{Posts: []DraftedIdeaPost{}}
-	res, err := d.Compose.RunDraft(ctx, plan, func(p compose.DraftedPost) {
-		assistantkit.Touch(ctx, "post", p.PostID)
-		ideas := slices.DeleteFunc(slices.Clone(plan.Ideas), func(i models.Idea) bool { return !slices.Contains(p.IdeaIDs, i.ID) })
-		g := titles.grounding(ctx, fromIdeas(p.UsedAssetIDs, ideas))
-		if len(plan.Jobs) > 0 {
-			g = analysed(ctx, d, &plan.Jobs[0].Request.CampaignID, g)
-		}
-		drafted := DraftedIdeaPost{DraftedPost: p, Grounding: g}
-		out.Posts = append(out.Posts, drafted)
-		assistant.Emit(ctx, "idea_draft_post", IdeaDraftEvent{DraftedIdeaPost: drafted, Done: len(out.Posts), Total: plan.Posts()})
+	res, err := d.Compose.RunDraft(ctx, plan, compose.DraftHooks{
+		Started: func(s compose.DraftStart) { assistant.Emit(ctx, "idea_draft_started", IdeaDraftStartedEvent(s)) },
+		Post: func(p compose.DraftedPost) {
+			assistantkit.Touch(ctx, "post", p.PostID)
+			ideas := slices.DeleteFunc(slices.Clone(plan.Ideas), func(i models.Idea) bool { return !slices.Contains(p.IdeaIDs, i.ID) })
+			g := titles.grounding(ctx, fromIdeas(p.UsedAssetIDs, ideas))
+			if len(plan.Jobs) > 0 {
+				g = analysed(ctx, d, &plan.Jobs[0].Request.CampaignID, g)
+			}
+			drafted := DraftedIdeaPost{DraftedPost: p, Grounding: g}
+			out.Posts = append(out.Posts, drafted)
+			assistant.Emit(ctx, "idea_draft_post", IdeaDraftEvent{DraftedIdeaPost: drafted, Done: len(out.Posts), Total: plan.Posts()})
+		},
 	})
 	if err != nil && (res == nil || len(res.Posts) == 0) {
 		return nil, err

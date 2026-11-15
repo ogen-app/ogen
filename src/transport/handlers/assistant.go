@@ -167,7 +167,9 @@ type assistantTurnRequest struct {
 // @Description  · <made> of <total> made", a stale one as "Stale: <summary>", an expired one as "Expired: <summary>".
 // @Description  Packs stream their own progress between: the campaign pack forwards the campaign assistant's events
 // @Description  (content_plan_idea, generate_posts_idea, draft_post_*, …), and draftIdeas sends "idea_draft_post" per post,
-// @Description  shaped as one of its result's posts plus done (posts written so far) and total (posts planned).
+// @Description  shaped as one of its result's posts plus done (posts written so far) and total (posts planned), each
+// @Description  after an "idea_draft_started" {ideas:[{ideaId,title}],platformId,postType,count,done,total} naming the
+// @Description  post about to be written (with together, all of its ideas) and how many are written before it.
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream

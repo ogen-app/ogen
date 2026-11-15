@@ -45,7 +45,7 @@ func NewIdeaPostsHandler(
 // IdeaDrafts writes posts from ideas; *compose.Service.
 type IdeaDrafts interface {
 	PlanDraft(ctx context.Context, in compose.DraftInput, maxPosts int) (*compose.DraftPlan, error)
-	RunDraft(ctx context.Context, plan *compose.DraftPlan, onPost func(compose.DraftedPost)) (*compose.DraftResult, error)
+	RunDraft(ctx context.Context, plan *compose.DraftPlan, hooks compose.DraftHooks) (*compose.DraftResult, error)
 }
 
 // WithDraft enables POST /api/ideas/draft: at most maxPosts posts a request,
@@ -184,6 +184,7 @@ type draftIdeasRequest struct {
 
 // Event names of the draft stream.
 const (
+	ideaDraftEventStarted  = "started"
 	ideaDraftEventPost     = "post"
 	ideaDraftEventComplete = "complete"
 	ideaDraftEventError    = "error"
@@ -200,14 +201,16 @@ const (
 // @Description  each. Without a target date, given or planned, the posts are left unscheduled: no scheduled_at,
 // @Description  off the calendar until someone dates them. Requests that can't run are a plain 400 before the
 // @Description  stream opens.
-// @Description  Events: "post" {postId,title,platformId,postType,publishDate,dateFrom,excerpt,campaignId,ideaIds,usedAssetIds} (no publishDate or dateFrom when unscheduled; dateFrom is asked for the target_date sent, plan for the ideas' plan date) as each post is saved; "complete"
+// @Description  Events: "started" {ideas:[{ideaId,title}],platformId,postType,count,done,total} before each post
+// @Description  (or, with together, each platform's post) is written: its ideas, how many posts it asks for, and
+// @Description  how many of the total planned are written before it; "post" {postId,title,platformId,postType,publishDate,dateFrom,excerpt,campaignId,ideaIds,usedAssetIds} (no publishDate or dateFrom when unscheduled; dateFrom is asked for the target_date sent, plan for the ideas' plan date) as each post is saved; "complete"
 // @Description  {posts,warnings}; "error" {message,code}, after which the posts already written are kept.
 // @Tags         ideas
 // @Accept       json
 // @Produce      text/event-stream
 // @Security     CookieAuth
 // @Param        body  body  draftIdeasRequest  true  "Ideas, platforms and steering"
-// @Success      200  "SSE stream: post / complete / error"
+// @Success      200  "SSE stream: started / post / complete / error"
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
 // @Failure      503  {object}  map[string]string
@@ -251,7 +254,10 @@ func (h *IdeaPostsHandler) Draft(c *fiber.Ctx) error {
 		ideaIDs[i] = idea.ID
 	}
 	streamFlow(c, func(emit sseEmit) {
-		res, err := drafts.RunDraft(flowCtx, plan, func(p compose.DraftedPost) { emit(ideaDraftEventPost, p) })
+		res, err := drafts.RunDraft(flowCtx, plan, compose.DraftHooks{
+			Started: func(s compose.DraftStart) { emit(ideaDraftEventStarted, s) },
+			Post:    func(p compose.DraftedPost) { emit(ideaDraftEventPost, p) },
+		})
 		// What was written, which a writer failure or a dropped draft leaves
 		// short of the plan.
 		var written int
