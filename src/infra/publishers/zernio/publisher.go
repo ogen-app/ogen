@@ -67,12 +67,13 @@ func (p *Publisher) PlatformViews(ctx context.Context) ([]publishers.PlatformVie
 		}
 		for _, r := range rows {
 			byPlatform[r.Platform] = append(byPlatform[r.Platform], publishers.Account{
-				ID:          r.ID,
-				Username:    r.Username,
-				DisplayName: r.DisplayName,
-				AvatarURL:   r.AvatarURL,
-				IsActive:    r.IsActive,
-				ConnectedAt: r.ConnectedAt,
+				ID:             r.ID,
+				Username:       r.Username,
+				DisplayName:    r.DisplayName,
+				AvatarURL:      r.AvatarURL,
+				IsActive:       r.IsActive,
+				ConnectedAt:    r.ConnectedAt,
+				TokenExpiresAt: r.TokenExpiresAt,
 			})
 		}
 	}

@@ -10,11 +10,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers"
+	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
@@ -248,8 +251,47 @@ func TestPlatformIndexMatch(t *testing.T) {
 			t.Errorf("match(%+v) = %q,%v want %q,%v", tt.view, id, ok, tt.wantID, tt.wantOK)
 		}
 	}
-	if got := toAccountViews(nil); got == nil || len(got) != 0 {
-		t.Errorf("toAccountViews(nil) = %#v, want empty non-nil", got)
+	if got := toAccountViews(nil, nil); got == nil || len(got) != 0 {
+		t.Errorf("toAccountViews(nil, nil) = %#v, want empty non-nil", got)
+	}
+}
+
+type scheduledCounts struct {
+	counts []repository.ScheduledCount
+	err    error
+}
+
+func (s scheduledCounts) ScheduledCounts(context.Context) ([]repository.ScheduledCount, error) {
+	return s.counts, s.err
+}
+
+// Settings' accounts carry their token expiry and the posts waiting on
+// them, counted over every platform's accounts; a failed count leaves the
+// counts out, and no counter leaves them out too.
+func TestPlatformsAccountsWaitingAndExpiry(t *testing.T) {
+	li := zernio.LookupSqidByZernioID("linkedin")
+	expires := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	byPub := [][]publishers.PlatformView{{
+		{PublisherPlatformID: "linkedin", Accounts: []publishers.Account{{ID: "li1", TokenExpiresAt: &expires}}},
+		{PublisherPlatformID: "instagram", Accounts: []publishers.Account{{ID: "ig1"}}},
+	}}
+	h := &PlatformsHandler{scheduled: scheduledCounts{counts: []repository.ScheduledCount{{PlatformID: li, Count: 2}}}}
+	waiting := h.waitingPosts(t.Context(), byPub)
+	views := toAccountViews(byPub[0][0].Accounts, waiting)
+	if len(views) != 1 || views[0].WaitingPosts == nil || *views[0].WaitingPosts != 2 || views[0].TokenExpiresAt == nil || !views[0].TokenExpiresAt.Equal(expires) {
+		t.Fatalf("linkedin = %+v", views)
+	}
+	if ig := toAccountViews(byPub[0][1].Accounts, waiting); ig[0].WaitingPosts == nil || *ig[0].WaitingPosts != 0 || ig[0].TokenExpiresAt != nil {
+		t.Fatalf("instagram = %+v, want 0 waiting and no expiry", ig)
+	}
+
+	h.scheduled = scheduledCounts{err: errors.New("db down")}
+	if w := h.waitingPosts(t.Context(), byPub); w != nil {
+		t.Fatalf("failed count = %v, want none", w)
+	}
+	h.scheduled = nil
+	if w := h.waitingPosts(t.Context(), byPub); w != nil {
+		t.Fatalf("no counter = %v, want none", w)
 	}
 }
 

@@ -76,4 +76,7 @@ type Account struct {
 	AvatarURL   string
 	IsActive    bool
 	ConnectedAt time.Time
+	// TokenExpiresAt is when the account's token lapses; nil when the
+	// publisher doesn't know or refreshes it itself.
+	TokenExpiresAt *time.Time
 }
