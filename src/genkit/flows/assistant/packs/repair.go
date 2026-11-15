@@ -808,6 +808,9 @@ func whyMoveFails(c *models.Campaign, p *models.Post, m Move) string {
 // each thing that happened to posts on one day, in the order first met. A
 // change a member makes, scheduling or moving a post, says who made it.
 func moveChanges(ctx context.Context, d Deps, moves []Move, failed []failedMove) []assistantkit.Change {
+	if len(failed) == 0 {
+		return nil
+	}
 	type key struct{ code, day, to string }
 	groups := map[key][]failedMove{}
 	var order []key
