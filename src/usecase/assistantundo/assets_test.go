@@ -8,6 +8,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 )
 
@@ -17,7 +18,7 @@ func TestUndo_AssetTags(t *testing.T) {
 	f := newFixture(t)
 	tags := repository.NewTagRepository(f.db)
 	assets := repository.NewAssetRepository(f.db, tags, repository.NewAssetFileRepository(f.db))
-	svc := assistantundo.New(f.db, f.actions, f.campaigns).WithAssets(assets)
+	svc := assistantundo.New(f.db, f.actions, f.campaigns).WithAssets(assets, repository.NewUserRepository(f.db))
 	tag := func(name string) string {
 		tg, err := tags.FindOrCreateByName(f.ctx, name, "", "user-1")
 		if err != nil {
@@ -64,13 +65,15 @@ func TestUndo_AssetTags(t *testing.T) {
 	if !slices.Equal(tagsOf("a1"), []string{launch}) || !slices.Equal(tagsOf("a2"), []string{launch}) {
 		t.Fatalf("tagged = %v, %v", tagsOf("a1"), tagsOf("a2"))
 	}
-	// a2 was retagged since: nothing is put back.
-	if _, err := assets.ApplyTags(f.ctx, []string{"a2"}, []string{extra}, nil); err != nil {
+	// Jane retagged a2 since: nothing is put back, and the conflict says
+	// she did.
+	if _, err := assets.ApplyTags(logging.WithUserID(f.ctx, "user-1"), []string{"a2"}, []string{extra}, nil); err != nil {
 		t.Fatal(err)
 	}
 	_, err := svc.Undo(f.ctx, id, "user-1")
-	if ce, ok := errors.AsType[*assistantundo.ChangedSinceError](err); !errors.Is(err, assistantundo.ErrChangedSince) || !ok || ce.Changed != 1 || ce.Of != 2 {
-		t.Fatalf("undo over a later change = %v; want 1 of the 2 changed since", err)
+	if ce, ok := errors.AsType[*assistantundo.ChangedSinceError](err); !errors.Is(err, assistantundo.ErrChangedSince) || !ok || ce.Changed != 1 || ce.Of != 2 ||
+		!slices.Equal(ce.By, []models.ChangedBy{{UserID: "user-1", Name: "Jane", Count: 1}}) {
+		t.Fatalf("undo over a later change = %+v; want 1 of the 2 changed since, by Jane", err)
 	}
 	if !slices.Equal(tagsOf("a1"), []string{launch}) {
 		t.Fatalf("a1 = %v; want it left as it was", tagsOf("a1"))

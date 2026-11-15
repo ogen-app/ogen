@@ -30,6 +30,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/platforms"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
+	"github.com/ogen-app/ogen/src/usecase/editors"
 	"github.com/ogen-app/ogen/src/usecase/scheduling"
 )
 
@@ -61,7 +62,7 @@ func repairPack(d Deps) assistant.Pack {
 			apply := genkit.DefineTool(g, "applyCalendarMoves",
 				"Moves posts to new dates exactly as offered. Only runs once the user confirmed the offer.",
 				assistantkit.Gated("applyCalendarMoves", assistantkit.Gate[ApplyMovesInput]{
-					Recheck: func(ctx context.Context, in ApplyMovesInput) (ApplyMovesInput, []string, error) {
+					Recheck: func(ctx context.Context, in ApplyMovesInput) (ApplyMovesInput, []assistantkit.Change, error) {
 						return movesThatHold(ctx, d, in)
 					},
 					Summary: func(in ApplyMovesInput) string { return fmt.Sprintf("Move %s", plural(len(in.Moves), "post", "posts")) },
@@ -735,8 +736,9 @@ func slotTaken(c *models.Campaign, posts []models.Post, p *models.Post, m Move, 
 }
 
 // movesThatHold narrows confirmed moves to the ones that still hold, saying
-// why each other one doesn't; none is a refusal.
-func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesInput, []string, error) {
+// what changed for the others, by what happened to them, the day they were
+// on and who did it; none is a refusal.
+func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesInput, []assistantkit.Change, error) {
 	c, err := d.loadCampaign(ctx, CampaignRef{CampaignID: in.CampaignID})
 	if err != nil {
 		return in, nil, err
@@ -745,7 +747,7 @@ func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesI
 	if err != nil {
 		return in, nil, err
 	}
-	var changes []string
+	var failed []failedMove
 	deleted := 0
 	claimed := map[string]bool{}
 	keep := slices.DeleteFunc(slices.Clone(in.Moves), func(m Move) bool {
@@ -755,20 +757,22 @@ func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesI
 			return true
 		}
 		if _, ok := moveHolds(c, &posts[i], m); !ok {
-			changes = append(changes, whyMoveFails(c, &posts[i], m))
+			failed = append(failed, failedMove{code: whyMoveFails(c, &posts[i], m), move: m, post: &posts[i]})
 			return true
 		}
 		if slotTaken(c, posts, &posts[i], m, claimed) {
-			changes = append(changes, whySlotTaken(&posts[i], m))
+			failed = append(failed, failedMove{code: assistantkit.ChangeSlotTaken, move: m, post: &posts[i]})
 			return true
 		}
 		return false
 	})
-	switch {
-	case deleted == 1:
-		changes = append(changes, "A post the offer moved was deleted")
-	case deleted > 1:
-		changes = append(changes, fmt.Sprintf("%d posts the offer moved were deleted", deleted))
+	changes := moveChanges(ctx, d, in.Moves, failed)
+	if deleted > 0 {
+		gone := assistantkit.Change{Reason: "A post the offer moved was deleted", Code: assistantkit.ChangeDeleted, Item: "post", Count: deleted, Of: len(in.Moves)}
+		if deleted > 1 {
+			gone.Reason = fmt.Sprintf("%d posts the offer moved were deleted", deleted)
+		}
+		changes = append(changes, gone)
 	}
 	if len(keep) == 0 {
 		return in, changes, assistantkit.Refused("none of those moves hold any more: the posts were moved, scheduled or deleted since")
@@ -779,30 +783,117 @@ func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesI
 	return in, changes, nil
 }
 
-// whyMoveFails says why m no longer holds for p, which is still there.
-func whyMoveFails(c *models.Campaign, p *models.Post, m Move) string {
-	title := "A post"
-	if p.Title != "" {
-		title = "“" + p.Title + "”"
-	}
-	switch {
-	case p.Status == models.PostStatusPublished:
-		return title + " was published since"
-	case !reschedule.Eligible(p.Status):
-		return title + " was scheduled since — scheduled posts stay put"
-	case !sameInstant(p.ScheduledAt, m.FromAt):
-		return title + " was moved since"
-	}
-	return title + " can't go to " + m.To + " any more: the campaign doesn't publish then"
+// failedMove is a move that no longer holds for its post, which is still
+// there, and why: one of the assistantkit Change slugs.
+type failedMove struct {
+	code string
+	move Move
+	post *models.Post
 }
 
-// whySlotTaken says that a free slot a move chose has a post on it now.
-func whySlotTaken(p *models.Post, m Move) string {
-	title := "A post"
-	if p.Title != "" {
-		title = "“" + p.Title + "”"
+// whyMoveFails is why m no longer holds for p, which is still there.
+func whyMoveFails(c *models.Campaign, p *models.Post, m Move) string {
+	switch {
+	case p.Status == models.PostStatusPublished:
+		return assistantkit.ChangePublished
+	case !reschedule.Eligible(p.Status):
+		return assistantkit.ChangeScheduled
+	case !sameInstant(p.ScheduledAt, m.FromAt):
+		return assistantkit.ChangeMoved
 	}
-	return title + " can't go to " + m.To + " any more: another post on its platform is there now"
+	return assistantkit.ChangeDayClosed
+}
+
+// moveChanges is what changed for the failed moves of moves, one change for
+// each thing that happened to posts on one day, in the order first met. A
+// change a member makes, scheduling or moving a post, says who made it.
+func moveChanges(ctx context.Context, d Deps, moves []Move, failed []failedMove) []assistantkit.Change {
+	type key struct{ code, day, to string }
+	groups := map[key][]failedMove{}
+	var order []key
+	for _, f := range failed {
+		k := key{f.code, f.move.From, ""}
+		// Where the post can't go is part of what changed.
+		if f.code == assistantkit.ChangeDayClosed || f.code == assistantkit.ChangeSlotTaken {
+			k.to = f.move.To
+		}
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], f)
+	}
+	changes := make([]assistantkit.Change, 0, len(order))
+	for _, k := range order {
+		g := groups[k]
+		ch := assistantkit.Change{Code: k.code, Item: "post", Count: len(g), Day: k.day,
+			Of: len(slices.DeleteFunc(slices.Clone(moves), func(m Move) bool { return m.From != k.day }))}
+		if len(g) == 1 {
+			ch.Title = g[0].post.Title
+		}
+		if k.code == assistantkit.ChangeScheduled || k.code == assistantkit.ChangeMoved {
+			by := make([]string, len(g))
+			for i, f := range g {
+				by[i] = f.post.UpdatedBy
+			}
+			ch.By = editors.Tally(ctx, d.Users, by)
+		}
+		ch.Reason = moveReason(ctx, ch, k.to)
+		changes = append(changes, ch)
+	}
+	return changes
+}
+
+// moveReason words a change to posts an offer moved: who did what to which
+// posts, e.g. "Marta scheduled 2 of the Thursday posts since — scheduled
+// posts stay put"; to is the day they can't go to, for a change that says.
+func moveReason(ctx context.Context, ch assistantkit.Change, to string) string {
+	subject, object := postsOn(ch)
+	was := "was"
+	if ch.Count > 1 {
+		was = "were"
+	}
+	who := editors.Names(ctx, ch.By)
+	if who == "you" {
+		who = "You"
+	}
+	switch ch.Code {
+	case assistantkit.ChangeScheduled:
+		if who != "" {
+			return who + " scheduled " + object + " since — scheduled posts stay put"
+		}
+		return subject + " " + was + " scheduled since — scheduled posts stay put"
+	case assistantkit.ChangeMoved:
+		if who != "" {
+			return who + " moved " + object + " since"
+		}
+		return subject + " " + was + " moved since"
+	case assistantkit.ChangePublished:
+		return subject + " " + was + " published since"
+	case assistantkit.ChangeSlotTaken:
+		return subject + " can't go to " + to + " any more: another post on its platform is there now"
+	}
+	return subject + " can't go to " + to + " any more: the campaign doesn't publish then"
+}
+
+// postsOn names a change's posts, at the start of a sentence and inside
+// one: one by its title, several by the day they were on, e.g. "2 of the
+// Thursday posts".
+func postsOn(ch assistantkit.Change) (subject, object string) {
+	if ch.Count == 1 {
+		if ch.Title != "" {
+			return "“" + ch.Title + "”", "“" + ch.Title + "”"
+		}
+		return "A post", "a post"
+	}
+	day := "undated"
+	if t, err := time.Parse(time.DateOnly, ch.Day); err == nil {
+		day = t.Weekday().String()
+	}
+	if ch.Count == ch.Of {
+		return fmt.Sprintf("The %d %s posts", ch.Count, day), fmt.Sprintf("the %d %s posts", ch.Count, day)
+	}
+	s := fmt.Sprintf("%d of the %s posts", ch.Count, day)
+	return s, s
 }
 
 // moveTarget is the instant a move lands on: its date, at the campaign's

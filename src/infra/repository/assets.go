@@ -91,9 +91,10 @@ type AssetRepository interface {
 	ApplyTagsBefore(ctx context.Context, assetIDs, add, remove []string) ([]models.Asset, map[string][]string, error)
 	// SetTagsIf gives each asset of to its tag ids, all or none, while every
 	// one still has the tag ids from gives it (in any order) and exists.
-	// Otherwise it changes nothing and returns the ids of the assets that
-	// moved since: retagged or gone.
-	SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) (moved []string, err error)
+	// Otherwise it changes nothing and returns the assets that moved since,
+	// retagged or gone, each with its last editor: "" for one gone, or no
+	// member edited.
+	SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) (moved map[string]string, err error)
 	Delete(ctx context.Context, id string) (bool, error)
 }
 
@@ -184,6 +185,7 @@ func (r *assetRepository) GetBySourceURL(ctx context.Context, sourceURL string) 
 }
 
 func (r *assetRepository) Update(ctx context.Context, asset *models.Asset) error {
+	asset.MarkEdited(ctx)
 	_, err := r.db.NewUpdate().Model(asset).WherePK().Exec(ctx)
 	return err
 }
@@ -226,11 +228,11 @@ func (r *assetRepository) CreatorOf(ctx context.Context, id string) (string, err
 }
 
 func (r *assetRepository) UpdateContent(ctx context.Context, id, title, content string) error {
-	_, err := r.db.NewUpdate().
+	_, err := setEditor(ctx, r.db.NewUpdate().
 		Model((*models.Asset)(nil)).
 		Set("title = ?", title).
 		Set("content = ?", content).
-		Set("updated_at = ?", time.Now().UTC()).
+		Set("updated_at = ?", time.Now().UTC())).
 		Where("id = ?", id).
 		Exec(ctx)
 	return err
@@ -276,10 +278,10 @@ func (r *assetRepository) SetContent(ctx context.Context, id, content string) er
 
 // SetAltText sets an image asset's alt text unconditionally.
 func (r *assetRepository) SetAltText(ctx context.Context, id, altText string) error {
-	_, err := r.db.NewUpdate().
+	_, err := setEditor(ctx, r.db.NewUpdate().
 		Model((*models.Asset)(nil)).
 		Set("alt_text = ?", altText).
-		Set("updated_at = ?", time.Now().UTC()).
+		Set("updated_at = ?", time.Now().UTC())).
 		Where("id = ?", id).
 		Exec(ctx)
 	return err
@@ -337,11 +339,13 @@ func (r *assetRepository) ApplyTagsBefore(ctx context.Context, assetIDs, add, re
 			before[assets[i].ID] = slices.Clone(assets[i].TagIDs)
 			assets[i].TagIDs = mergeTagIDs(assets[i].TagIDs, add, remove)
 			assets[i].UpdatedAt = now
-			// Only the tag set and its timestamp — never title/content, so this
-			// can't disturb an in-flight document edit or trigger a re-embed.
+			assets[i].MarkEdited(ctx)
+			// Only the tag set, its timestamp and editor — never title/content,
+			// so this can't disturb an in-flight document edit or trigger a
+			// re-embed.
 			if _, err := tx.NewUpdate().
 				Model(&assets[i]).
-				Column("tag_ids", "updated_at").
+				Column(editedColumns(ctx, "tag_ids", "updated_at")...).
 				WherePK().
 				Exec(ctx); err != nil {
 				return err
@@ -367,7 +371,7 @@ func (r *assetRepository) ApplyTagsBefore(ctx context.Context, assetIDs, add, re
 	return updated, before, nil
 }
 
-func (r *assetRepository) SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) ([]string, error) {
+func (r *assetRepository) SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) (map[string]string, error) {
 	if len(to) == 0 {
 		return nil, nil
 	}
@@ -376,10 +380,16 @@ func (r *assetRepository) SetTagsIf(ctx context.Context, tx bun.IDB, from, to ma
 	if err := tx.NewSelect().Model(&assets).Where("a.id IN (?)", bun.List(ids)).For("UPDATE").Scan(ctx); err != nil {
 		return nil, err
 	}
-	moved := slices.DeleteFunc(slices.Clone(ids), func(id string) bool {
+	moved := map[string]string{}
+	for _, id := range ids {
 		i := slices.IndexFunc(assets, func(a models.Asset) bool { return a.ID == id })
-		return i >= 0 && sameIDs(assets[i].TagIDs, from[id])
-	})
+		switch {
+		case i < 0:
+			moved[id] = ""
+		case !sameIDs(assets[i].TagIDs, from[id]):
+			moved[id] = assets[i].UpdatedBy
+		}
+	}
 	if len(moved) > 0 {
 		return moved, nil
 	}
@@ -389,7 +399,8 @@ func (r *assetRepository) SetTagsIf(ctx context.Context, tx bun.IDB, from, to ma
 		if assets[i].TagIDs == nil {
 			assets[i].TagIDs = models.StringSlice{}
 		}
-		if _, err := tx.NewUpdate().Model(&assets[i]).Column("tag_ids", "updated_at").WherePK().Exec(ctx); err != nil {
+		assets[i].MarkEdited(ctx)
+		if _, err := tx.NewUpdate().Model(&assets[i]).Column(editedColumns(ctx, "tag_ids", "updated_at")...).WherePK().Exec(ctx); err != nil {
 			return nil, err
 		}
 	}

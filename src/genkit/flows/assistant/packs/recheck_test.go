@@ -51,7 +51,8 @@ func TestRecheckIDs(t *testing.T) {
 		t.Fatalf("all there: %+v, %v, %v; want it as offered", got, changes, err)
 	}
 	got, changes, err := recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"i1", "gone", "i2"}, CampaignID: "c1"})
-	if err != nil || !slices.Equal(got.IdeaIDs, []string{"i1", "i2"}) || got.CampaignID != "c1" || !slices.Equal(changes, []string{"1 of the 3 ideas no longer exist"}) {
+	if err != nil || !slices.Equal(got.IdeaIDs, []string{"i1", "i2"}) || got.CampaignID != "c1" || !slices.Equal(assistantkit.Reasons(changes), []string{"1 of the 3 ideas no longer exist"}) ||
+		changes[0].Code != assistantkit.ChangeDeleted || changes[0].Item != "idea" || changes[0].Count != 1 || changes[0].Of != 3 {
 		t.Fatalf("some gone: %+v, %v, %v", got, changes, err)
 	}
 	_, _, err = recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"gone"}})
@@ -64,7 +65,7 @@ func TestRecheckIDs_CampaignPosts(t *testing.T) {
 	recheck := recheckIDs(d, viewcontext.KindPost, campaignPostsIn, withPosts)
 	ctx, _ := turn(t, campaign1, nil)
 	if got, changes, err := recheck(ctx, PostsRef{PostIDs: []string{"p1", "p2"}}); err != nil || !slices.Equal(got.PostIDs, []string{"p1"}) ||
-		!slices.Equal(changes, []string{"1 of the 2 posts are no longer in the campaign"}) {
+		!slices.Equal(assistantkit.Reasons(changes), []string{"1 of the 2 posts are no longer in the campaign"}) || changes[0].Code != assistantkit.ChangeLeftCampaign {
 		t.Fatalf("got %+v, %v, %v", got, changes, err)
 	}
 }
@@ -78,7 +79,8 @@ func TestMovesThatHold(t *testing.T) {
 		{PostID: "gone", To: "2027-03-10"},
 	}}
 	got, changes, err := movesThatHold(ctx, d, in)
-	if err != nil || len(got.Moves) != 1 || got.Moves[0].PostID != "p1" || !slices.Equal(changes, []string{"A post the offer moved was deleted"}) {
+	if err != nil || len(got.Moves) != 1 || got.Moves[0].PostID != "p1" || !slices.Equal(assistantkit.Reasons(changes), []string{"A post the offer moved was deleted"}) ||
+		changes[0].Code != assistantkit.ChangeDeleted || changes[0].Count != 1 || changes[0].Of != 2 {
 		t.Fatalf("got %+v, %v, %v", got, changes, err)
 	}
 	if got, changes, err := movesThatHold(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: in.Moves[:1]}); err != nil || len(got.Moves) != 1 || changes != nil {
@@ -113,16 +115,50 @@ func TestWhyMoveFails(t *testing.T) {
 	at := day("2027-02-20")
 	m := Move{PostID: "p1", FromAt: at, To: "2027-03-02"}
 	for _, tc := range []struct {
-		post models.Post
-		want string
+		post       models.Post
+		code, want string
 	}{
-		{models.Post{Title: "Spa", Status: models.PostStatusScheduled, ScheduledAt: at}, "“Spa” was scheduled since — scheduled posts stay put"},
-		{models.Post{Title: "Spa", Status: models.PostStatusPublished, ScheduledAt: at}, "“Spa” was published since"},
-		{models.Post{Status: models.PostStatusDraft, ScheduledAt: day("2027-02-21")}, "A post was moved since"},
-		{models.Post{Title: "Spa", Status: models.PostStatusDraft, ScheduledAt: at}, "“Spa” can't go to 2027-03-02 any more: the campaign doesn't publish then"},
+		{models.Post{Title: "Spa", Status: models.PostStatusScheduled, ScheduledAt: at}, assistantkit.ChangeScheduled, "“Spa” was scheduled since — scheduled posts stay put"},
+		{models.Post{Title: "Spa", Status: models.PostStatusPublished, ScheduledAt: at}, assistantkit.ChangePublished, "“Spa” was published since"},
+		{models.Post{Status: models.PostStatusDraft, ScheduledAt: day("2027-02-21")}, assistantkit.ChangeMoved, "A post was moved since"},
+		{models.Post{Title: "Spa", Status: models.PostStatusDraft, ScheduledAt: at}, assistantkit.ChangeDayClosed, "“Spa” can't go to 2027-03-02 any more: the campaign doesn't publish then"},
 	} {
-		if got := whyMoveFails(c, &tc.post, m); got != tc.want {
-			t.Errorf("%+v: got %q, want %q", tc.post, got, tc.want)
+		code := whyMoveFails(c, &tc.post, m)
+		changes := moveChanges(t.Context(), Deps{}, []Move{m}, []failedMove{{code: code, move: m, post: &tc.post}})
+		if code != tc.code || len(changes) != 1 || changes[0].Reason != tc.want || changes[0].Title != tc.post.Title {
+			t.Errorf("%+v: got %q %+v, want %q %q", tc.post, code, changes, tc.code, tc.want)
 		}
+	}
+}
+
+// Moves that no longer hold are told by what happened on which day, and who
+// did it: the members by name, the one confirming as you.
+func TestMoveChanges_WhoAndWhichDay(t *testing.T) {
+	ctx, _ := turn(t, campaign1, nil)
+	d := Deps{Users: memUsers{}}
+	thu := func(id string) Move { return Move{PostID: id, From: "2026-12-24", To: "2026-12-25"} }
+	moves := []Move{thu("p1"), thu("p2"), thu("p3"), {PostID: "p4", From: "2026-12-28", To: "2026-12-29"}}
+	failed := []failedMove{
+		{code: assistantkit.ChangeScheduled, move: moves[0], post: &models.Post{Title: "A", UpdatedBy: "u2"}},
+		{code: assistantkit.ChangeScheduled, move: moves[1], post: &models.Post{Title: "B", UpdatedBy: "u2"}},
+		{code: assistantkit.ChangeMoved, move: moves[3], post: &models.Post{Title: "Spa", UpdatedBy: "u1"}},
+		{code: assistantkit.ChangePublished, move: moves[2], post: &models.Post{Title: "C", UpdatedBy: "u2"}},
+	}
+	changes := moveChanges(ctx, d, moves, failed)
+	want := []string{
+		"max@acme.test scheduled 2 of the Thursday posts since — scheduled posts stay put",
+		"You moved “Spa” since",
+		"“C” was published since",
+	}
+	if !slices.Equal(assistantkit.Reasons(changes), want) {
+		t.Fatalf("reasons = %q, want %q", assistantkit.Reasons(changes), want)
+	}
+	if s := changes[0]; s.Code != assistantkit.ChangeScheduled || s.Count != 2 || s.Of != 3 || s.Day != "2026-12-24" || s.Title != "" ||
+		!slices.Equal(s.By, []models.ChangedBy{{UserID: "u2", Name: "max@acme.test", Count: 2}}) {
+		t.Fatalf("scheduled = %+v", s)
+	}
+	// A publish is the publisher's: no member is named for it.
+	if p := changes[2]; p.By != nil || p.Count != 1 || p.Title != "C" {
+		t.Fatalf("published = %+v", p)
 	}
 }

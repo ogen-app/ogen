@@ -62,9 +62,13 @@ const maxOptionInputLen = 2048
 // @Description  like a chat turn: the work's own events, "proposal_created" for any fresh offer, "proposal_resolved",
 // @Description  then "complete" with a assistant.Response. When what the offer was made on changed since, nothing
 // @Description  runs and the offer stays open: "proposal_resolved" says status "stale" with "reasons" (what
-// @Description  changed, in plain words) and, when what still holds is offered afresh, "replacedBy" naming that
-// @Description  offer, whose card has "replaces"; the result carries the same as "changes". From then on only the
-// @Description  fresh offer can be confirmed. A run that did part of the job says so; its result lists "notMade"
+// @Description  changed, in plain words), "changes" (the same as [{reason,code,item?,count?,of?,day?,title?,by?}]:
+// @Description  code deleted|left_campaign|scheduled|published|moved|day_closed|slot_taken|other, Count of the offer's Of
+// @Description  items, Day the posts' day for moves, by [{userId,name,count}] the members who did it) and, when what still
+// @Description  holds is offered afresh, "replacedBy" naming that offer, whose card has "replaces" and on each counted row
+// @Description  "was", its count on the replaced offer; the result carries the same "changes". From then on only the
+// @Description  fresh offer can be confirmed. A confirmed offer that was checked again and held resolves with
+// @Description  "rechecked": true; one with no check never has it. A run that did part of the job says so; its result lists "notMade"
 // @Description  and, when some items are worth retrying, an optional "retryProposalId" offering just those, whose
 // @Description  card has "retryOf". An option whose card has "input" (e.g. {"kind":"url","label":"Page link"})
 // @Description  runs with the typed value sent as "input".

@@ -41,12 +41,12 @@ func (r *postRepository) SetScheduleIf(ctx context.Context, db bun.IDB, changes 
 		rows[i] = scheduleChangeRow{ID: c.PostID, FromAt: c.From, ToAt: c.To}
 	}
 	// The TenantScoped hook adds the tenant predicate.
-	_, err := db.NewUpdate().
+	_, err := setEditor(ctx, db.NewUpdate().
 		With("_data", db.NewValues(&rows)).
 		Model((*models.Post)(nil)).
 		TableExpr("_data").
 		Set("scheduled_at = _data.to_at").
-		Set("updated_at = ?", now).
+		Set("updated_at = ?", now)).
 		Where("po.id = _data.id").
 		Where("po.scheduled_at IS NOT DISTINCT FROM _data.from_at").
 		Where("po.status IN (?)", bun.List(movable)).
@@ -69,10 +69,10 @@ func (r *postRepository) SetVoiceIf(ctx context.Context, db bun.IDB, c VoiceChan
 		db = r.db
 	}
 	// The TenantScoped hook adds the tenant predicate.
-	res, err := db.NewUpdate().
+	res, err := setEditor(ctx, db.NewUpdate().
 		Model((*models.Post)(nil)).
 		Set("brand_voice_id = ?", c.To).
-		Set("updated_at = ?", now).
+		Set("updated_at = ?", now)).
 		Where("po.id = ?", c.PostID).
 		Where("po.brand_voice_id IS NOT DISTINCT FROM ?", c.From).
 		Where("po.status <> ?", models.PostStatusPublished).
@@ -115,13 +115,13 @@ func (r *postRepository) SetPostTypeIf(ctx context.Context, db bun.IDB, changes 
 	}
 	// Only a post whose content Ogen alone holds changes type: a scheduled
 	// or published one has a copy outside it.
-	_, err := db.NewUpdate().
+	_, err := setEditor(ctx, db.NewUpdate().
 		With("_data", db.NewValues(&rows)).
 		Model((*models.Post)(nil)).
 		TableExpr("_data").
 		Set("platform_post_type = _data.to_type").
 		Set("status = _data.to_status").
-		Set("updated_at = ?", now).
+		Set("updated_at = ?", now)).
 		Where("po.id = _data.id").
 		Where("coalesce(po.platform_post_type, '') = _data.from_type").
 		Where("po.status = _data.from_status").

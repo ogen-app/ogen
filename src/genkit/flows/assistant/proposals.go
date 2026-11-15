@@ -90,8 +90,11 @@ type ProposalResolved struct {
 	// expired when the yes came after its expiry.
 	Status string `json:"status" enums:"confirmed,dismissed,stale,expired"`
 	Chosen string `json:"chosen,omitempty"`
-	// Reasons are what changed, for a stale offer.
-	Reasons []string `json:"reasons,omitempty"`
+	// Reasons are what changed, for a stale offer, in words; Changes are
+	// the same with the facts they are worded from: what happened, to how
+	// many of what, on which day and by whom.
+	Reasons []string              `json:"reasons,omitempty"`
+	Changes []assistantkit.Change `json:"changes,omitempty"`
 	// ReplacedBy is the fresh offer of what still holds, for a stale offer
 	// that has one.
 	ReplacedBy string `json:"replacedBy,omitempty"`
@@ -568,7 +571,7 @@ func answered(p *models.AssistantProposal, confirmed bool, chosen string, result
 	// What the offer was made on changed while it waited: nothing ran, the
 	// offer stays open, and what still holds may wait on a fresh card.
 	if changes, replacedBy, ok := staleResult(result); ok {
-		out := "Nothing ran: " + strings.Join(changes, "; ") + "."
+		out := "Nothing ran: " + strings.Join(assistantkit.Reasons(changes), "; ") + "."
 		if replacedBy != "" {
 			out += " What still holds is offered again."
 		}
@@ -649,14 +652,12 @@ func refusedResult(raw any) (string, bool) {
 // staleResult reports whether a confirmed tool ran nothing because what the
 // offer was made on changed, with what changed and the fresh offer of what
 // still holds, when it made one.
-func staleResult(raw any) (changes []string, replacedBy string, ok bool) {
+func staleResult(raw any) (changes []assistantkit.Change, replacedBy string, ok bool) {
 	m, _ := raw.(map[string]any)
-	list, _ := m["changes"].([]any)
-	for _, c := range list {
-		if s, ok := c.(string); ok {
-			changes = append(changes, s)
-		}
+	if b, err := json.Marshal(m["changes"]); err == nil {
+		_ = json.Unmarshal(b, &changes)
 	}
+	changes = slices.DeleteFunc(changes, func(c assistantkit.Change) bool { return c.Reason == "" })
 	if len(changes) == 0 {
 		return nil, "", false
 	}

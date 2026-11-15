@@ -153,7 +153,7 @@ type assistantTurnRequest struct {
 // @Description  "expiresAt","options","card","replaces","retryOf"} streams once the reply is final; "options" is an array of
 // @Description  {"id","title"} with optional "description", "recommended" and "why" (at most one option is recommended:
 // @Description  the card leads with it, and its "why" says in a line why it's the one to pick) and "input" {"kind": url,"label"}
-// @Description  for an option that asks for a value, sent with its confirm. "proposal_resolved" {"id","status","chosen","reasons","replacedBy"} streams when one is
+// @Description  for an option that asks for a value, sent with its confirm. "proposal_resolved" {"id","status","chosen","reasons","changes","replacedBy","rechecked"} streams when one is
 // @Description  answered in chat; "complete" lists them again as "resolved". Cards answer through POST
 // @Description  /api/assistant/proposals/{id}/confirm or /dismiss. A confirmed offer re-checks first: when what it was made on
 // @Description  changed, nothing runs, the offer stays open and resolves "stale" with "reasons", and what still holds

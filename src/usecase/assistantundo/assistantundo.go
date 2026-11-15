@@ -28,9 +28,11 @@ var (
 )
 
 // ChangedSinceError is ErrChangedSince for a change to several entities,
-// saying how many of them were changed again since: Changed of Of.
+// saying how many of them were changed again since: Changed of Of, and by
+// whom, where a member is known to have made the change.
 type ChangedSinceError struct {
 	Changed, Of int
+	By          []models.ChangedBy
 }
 
 func (e *ChangedSinceError) Error() string {

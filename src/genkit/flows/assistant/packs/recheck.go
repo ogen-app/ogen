@@ -36,8 +36,8 @@ func stillThere(ctx context.Context, d Deps, kind viewcontext.EntityKind, campai
 // recheckIDs is a Gate.Recheck for a call on a list of ids of kind: of reads
 // the call's ids and their campaign, if they must be its, and with narrows
 // the call to the ones still there, saying how many went.
-func recheckIDs[In any](d Deps, kind viewcontext.EntityKind, of func(context.Context, In) (campaignID string, ids []string), with func(In, []string) In) func(context.Context, In) (In, []string, error) {
-	return func(ctx context.Context, in In) (In, []string, error) {
+func recheckIDs[In any](d Deps, kind viewcontext.EntityKind, of func(context.Context, In) (campaignID string, ids []string), with func(In, []string) In) func(context.Context, In) (In, []assistantkit.Change, error) {
+	return func(ctx context.Context, in In) (In, []assistantkit.Change, error) {
 		campaignID, ids := of(ctx, in)
 		keep, err := stillThere(ctx, d, kind, campaignID, ids)
 		if err != nil {
@@ -47,11 +47,13 @@ func recheckIDs[In any](d Deps, kind viewcontext.EntityKind, of func(context.Con
 		if len(keep) == all {
 			return in, nil, nil
 		}
-		gone := fmt.Sprintf("%d of the %d %ss no longer exist", all-len(keep), all, kind)
+		gone := assistantkit.Change{Reason: fmt.Sprintf("%d of the %d %ss no longer exist", all-len(keep), all, kind),
+			Code: assistantkit.ChangeDeleted, Item: string(kind), Count: all - len(keep), Of: all}
 		if campaignID != "" {
-			gone = fmt.Sprintf("%d of the %d %ss are no longer in the campaign", all-len(keep), all, kind)
+			gone.Reason = fmt.Sprintf("%d of the %d %ss are no longer in the campaign", all-len(keep), all, kind)
+			gone.Code = assistantkit.ChangeLeftCampaign
 		}
-		return with(in, keep), []string{gone}, nil
+		return with(in, keep), []assistantkit.Change{gone}, nil
 	}
 }
 

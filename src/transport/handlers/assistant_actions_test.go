@@ -37,7 +37,7 @@ func TestUndoAssistantChange(t *testing.T) {
 		case "edited":
 			return nil, assistantundo.ErrChangedSince
 		case "retagged":
-			return nil, &assistantundo.ChangedSinceError{Changed: 4, Of: 14}
+			return nil, &assistantundo.ChangedSinceError{Changed: 4, Of: 14, By: []models.ChangedBy{{UserID: "u2", Name: "Marta", Count: 4}}}
 		}
 		return &models.AssistantAction{ID: id, Kind: models.AssistantActionCampaignDates, ScopeKind: models.AssistantScopeCampaign, EntityID: "c1"}, nil
 	})
@@ -68,7 +68,7 @@ func TestUndoAssistantChange(t *testing.T) {
 	for id, want := range map[string]string{
 		"twice":    `"reason":"already_undone"`,
 		"edited":   `"reason":"changed_since"`,
-		"retagged": `"reason":"changed_since","changed":4,"of":14`,
+		"retagged": `"reason":"changed_since","changed":4,"of":14,"by":[{"userId":"u2","name":"Marta","count":4}]`,
 	} {
 		resp, err := app.Test(httptest.NewRequest("POST", "/api/assistant/actions/"+id+"/undo", nil), 5000)
 		if err != nil {

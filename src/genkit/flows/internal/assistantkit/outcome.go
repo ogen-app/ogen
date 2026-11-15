@@ -63,10 +63,10 @@ type Outcome[T any] struct {
 	Options    []Option `json:"options,omitempty"`
 	ProposalID string   `json:"proposalId,omitempty"`
 	Summary    string   `json:"summary,omitempty"`
-	// Changes is what changed since a confirmed offer was made, in plain
-	// words, when that is why it ran nothing: it was refused, or what still
-	// holds was offered afresh (ProposalID).
-	Changes []string `json:"changes,omitempty"`
+	// Changes is what changed since a confirmed offer was made, when that
+	// is why it ran nothing: it was refused, or what still holds was offered
+	// afresh (ProposalID).
+	Changes []Change `json:"changes,omitempty"`
 	// Rechecked is set on a confirmed run whose offer was checked again
 	// before it ran and found unchanged.
 	Rechecked bool `json:"rechecked,omitzero"`

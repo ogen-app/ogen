@@ -464,6 +464,7 @@ func (s *Service) checkAccountSelection(ctx context.Context, post *models.Post, 
 // in any of them rolls the whole schedule back — no half-scheduled post,
 // no enqueue without a status change.
 func (s *Service) persist(ctx context.Context, post *models.Post, autoPublish bool, logs []*models.PostLog) error {
+	post.MarkEdited(ctx)
 	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewUpdate().Model(post).WherePK().Exec(ctx); err != nil {
 			return err
