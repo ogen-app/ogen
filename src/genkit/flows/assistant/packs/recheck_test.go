@@ -55,8 +55,12 @@ func TestRecheckIDs(t *testing.T) {
 		changes[0].Code != assistantkit.ChangeDeleted || changes[0].Item != "idea" || changes[0].Count != 1 || changes[0].Of != 3 {
 		t.Fatalf("some gone: %+v, %v, %v", got, changes, err)
 	}
-	_, _, err = recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"gone"}})
+	// None left: refused, and the change still says they were deleted.
+	_, changes, err = recheck(ctx, MoveIdeasInput{IdeaIDs: []string{"gone", "gone too"}})
 	refused(t, err)
+	if len(changes) != 1 || changes[0].Code != assistantkit.ChangeDeleted || changes[0].Count != 2 || changes[0].Of != 2 {
+		t.Fatalf("all gone: changes = %+v", changes)
+	}
 }
 
 // A post fix keeps the posts still in the campaign.
@@ -160,5 +164,16 @@ func TestMoveChanges_WhoAndWhichDay(t *testing.T) {
 	// A publish is the publisher's: no member is named for it.
 	if p := changes[2]; p.By != nil || p.Count != 1 || p.Title != "C" {
 		t.Fatalf("published = %+v", p)
+	}
+
+	// A member who made only some of a group's changes isn't credited with
+	// all of them: the words name no one, the facts count theirs.
+	partial := moveChanges(ctx, d, moves[:2], []failedMove{
+		{code: assistantkit.ChangeScheduled, move: moves[0], post: &models.Post{Title: "A", UpdatedBy: "u2"}},
+		{code: assistantkit.ChangeScheduled, move: moves[1], post: &models.Post{Title: "B"}},
+	})
+	if len(partial) != 1 || partial[0].Reason != "The 2 Thursday posts were scheduled since — scheduled posts stay put" ||
+		!slices.Equal(partial[0].By, []models.ChangedBy{{UserID: "u2", Name: "max@acme.test", Count: 1}}) {
+		t.Fatalf("partly known = %+v", partial)
 	}
 }
