@@ -115,9 +115,12 @@ type assistantTurnRequest struct {
 // @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs","results"}, where
 // @Description  touched names what changed (no id: every entity of the kind) for the client to refresh, and results
 // @Description  (omitted when empty) holds each pack's tools' last successful output, by pack then tool name. The
-// @Description  workspace pack's: activityReport {from,to,tz,published,failed,created,campaigns_created,days};
-// @Description  workspaceSetup {timezone,autoPublish,autoPublishNote,accounts[{id,platform,username,needsReconnect,
-// @Description  health,tokenExpiresAt,autoPublish}],note}; weeklyDigest {from,to,empty,report};
+// @Description  workspace pack's: activityReport {from,to,tz,published,failed,created,deleted,campaigns_created,days,
+// @Description  weeks[{from,to,published,scheduled,failed,deleted,ideas_decided}] (Monday-first, clipped to the range; only
+// @Description  on a range over 14 days)}; workspaceSetup {timezone,campaign{id,name} (when narrowed to a campaign's
+// @Description  platforms),autoPublish,autoPublishNote,accounts[{id,platform,username,needsReconnect,
+// @Description  health,tokenExpiresAt,autoPublish,waitingPosts}],note}; weeklyDigest {from,to,empty,report} (report.publishing
+// @Description  has published_by_platform[{platform,count}], Zernio slugs, largest first);
 // @Description  emailWeeklyDigest {done,from,to}; postHistory {postId,title,entries[{at,kind: version|event,what,version,
 // @Description  by,byId,source}],more,note}; setAutoPublish {done,autoPublish,undoId}; openConnect {done,note}.
 // @Description  The ideas pack's, where an idea is {id,title,verdict,remindAt,origin,campaignId,fitScore,plan,posts} (remindAt: when a

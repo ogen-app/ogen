@@ -1,11 +1,13 @@
 package weeklyreport
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -100,6 +102,21 @@ func posts(w Window, n int) []repository.ReportPost {
 		}
 	}
 	return out
+}
+
+// The Published figure splits by platform slug, largest first and ties by
+// slug; a post on a platform with no slug stays in the total only.
+func TestRenderPublishedByPlatform(t *testing.T) {
+	w := testWindow(t)
+	published := posts(w, 6)
+	for i, slug := range []string{"instagram", "linkedin", "instagram", "x", "", "linkedin"} {
+		published[i].PlatformSlug = slug
+	}
+	p := Render(Facts{Window: w, Published: published}, "https://app.example").Publishing
+	want := []models.WeeklyPlatformCount{{Platform: "instagram", Count: 2}, {Platform: "linkedin", Count: 2}, {Platform: "x", Count: 1}}
+	if p == nil || p.Published.Value != "6" || !slices.Equal(p.PublishedByPlatform, want) {
+		t.Fatalf("publishing = %+v", p)
+	}
 }
 
 func TestHeadline(t *testing.T) {

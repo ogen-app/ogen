@@ -52,18 +52,27 @@ type WeeklyBar struct {
 
 // WeeklyPublishing is the Publishing section.
 type WeeklyPublishing struct {
-	Published    WeeklyFigure    `json:"published"`
-	Failed       string          `json:"failed,omitempty"`
-	FailedNote   string          `json:"failed_note,omitempty"`
-	ChartHeight  int             `json:"chart_height"`
-	Bars         []WeeklyBar     `json:"bars"`
-	Channels     []WeeklyChannel `json:"channels,omitempty"`
-	MoreChannels string          `json:"more_channels,omitempty"`
-	Failures     []WeeklyFailure `json:"failures,omitempty"`
-	MoreFailures string          `json:"more_failures,omitempty"`
-	FailuresURL  string          `json:"failures_url,omitempty"`
-	NextWeek     string          `json:"next_week,omitempty"`
-	CalendarURL  string          `json:"calendar_url"`
+	Published WeeklyFigure `json:"published"`
+	// PublishedByPlatform splits Published by platform (Zernio slugs),
+	// largest first.
+	PublishedByPlatform []WeeklyPlatformCount `json:"published_by_platform,omitempty"`
+	Failed              string                `json:"failed,omitempty"`
+	FailedNote          string                `json:"failed_note,omitempty"`
+	ChartHeight         int                   `json:"chart_height"`
+	Bars                []WeeklyBar           `json:"bars"`
+	Channels            []WeeklyChannel       `json:"channels,omitempty"`
+	MoreChannels        string                `json:"more_channels,omitempty"`
+	Failures            []WeeklyFailure       `json:"failures,omitempty"`
+	MoreFailures        string                `json:"more_failures,omitempty"`
+	FailuresURL         string                `json:"failures_url,omitempty"`
+	NextWeek            string                `json:"next_week,omitempty"`
+	CalendarURL         string                `json:"calendar_url"`
+}
+
+// WeeklyPlatformCount is one platform's published posts.
+type WeeklyPlatformCount struct {
+	Platform string `json:"platform"`
+	Count    int    `json:"count"`
 }
 
 // WeeklyChannel is one row of the By channel table.

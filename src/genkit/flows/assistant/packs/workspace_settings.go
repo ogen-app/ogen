@@ -231,7 +231,7 @@ func openConnect(ctx context.Context, d Deps, in ConnectInput) (*assistant.UIRes
 // connectedAccount is one of the workspace's connected accounts, refusing
 // an id that isn't.
 func connectedAccount(ctx context.Context, d Deps, id string) (*AccountOut, error) {
-	setup, err := workspaceSetup(ctx, d)
+	setup, err := workspaceSetup(ctx, d, "")
 	if err != nil {
 		return nil, err
 	}

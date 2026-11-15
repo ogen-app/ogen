@@ -73,7 +73,7 @@ func platformsKnown(slug string) (string, bool) {
 func TestWorkspaceSetup_AutoPublish(t *testing.T) {
 	ctx, _ := turn(t, workspace, nil)
 	out, err := workspaceSetup(ctx, Deps{Settings: memSettings{}, SocialAccounts: memAccounts{}, AutoPublish: &memAllowlist{list: []string{"linkedin"}},
-		ProfileID: func(context.Context) (string, error) { return "prof", nil }})
+		ProfileID: func(context.Context) (string, error) { return "prof", nil }}, "")
 	if err != nil || !slices.Equal(out.AutoPublish, []string{"linkedin"}) || out.AutoPublishNote == "" || !out.Accounts[0].AutoPublish {
 		t.Fatalf("setup = %+v, %v", out, err)
 	}
@@ -264,7 +264,7 @@ func TestWorkspaceSetup_Waiting(t *testing.T) {
 		{PlatformID: ig, Status: models.PostStatusScheduledForManualPublish, Count: 3},
 	}}
 	out, err := workspaceSetup(ctx, Deps{Settings: memSettings{}, SocialAccounts: twoLinkedIns{}, Posts: posts,
-		ProfileID: func(context.Context) (string, error) { return "prof", nil }})
+		ProfileID: func(context.Context) (string, error) { return "prof", nil }}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,6 +274,34 @@ func TestWorkspaceSetup_Waiting(t *testing.T) {
 	}
 	if !slices.Equal(waiting, []int{3, 0, 3}) || out.Accounts[0].UnhealthySince == nil || out.Accounts[1].UnhealthySince != nil {
 		t.Fatalf("accounts = %+v", out.Accounts)
+	}
+}
+
+// Narrowed to a campaign, the setup names it and keeps only the accounts on
+// its platforms, each still counting what waits on it from every campaign,
+// so the single-account rule sees the whole workspace. An unknown campaign is
+// refused.
+func TestWorkspaceSetup_Campaign(t *testing.T) {
+	ctx, _ := turn(t, workspace, nil)
+	ig := zernio.LookupSqidByZernioID("instagram")
+	posts := &waitingPosts{counts: []repository.ScheduledCount{{PlatformID: ig, Status: models.PostStatusScheduled, Count: 4}}}
+	d := Deps{Settings: memSettings{}, SocialAccounts: twoLinkedIns{}, Posts: posts,
+		Campaigns: &memCampaigns{c: &models.Campaign{ID: "c1", Name: "Spring reopening", TargetPlatforms: models.CampaignPlatforms{{ID: ig}}}},
+		ProfileID: func(context.Context) (string, error) { return "prof", nil }}
+
+	out, err := workspaceSetup(ctx, d, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Campaign == nil || out.Campaign.Name != "Spring reopening" || len(out.Accounts) != 1 ||
+		out.Accounts[0].ID != "sa3" || out.Accounts[0].WaitingPosts != 4 {
+		t.Fatalf("setup = %+v, campaign %+v", out.Accounts, out.Campaign)
+	}
+	if _, err := workspaceSetup(ctx, d, "gone"); err == nil || !strings.Contains(err.Error(), "doesn't exist") {
+		t.Fatalf("unknown campaign = %v", err)
+	}
+	if out, err := workspaceSetup(ctx, d, ""); err != nil || out.Campaign != nil || len(out.Accounts) != 3 {
+		t.Fatalf("no campaign = %+v, %v", out, err)
 	}
 }
 
@@ -519,6 +547,17 @@ func (r *decidedIdeas) CountDecided(_ context.Context, from, to time.Time, campa
 	return 12, nil
 }
 
+// ideasByWindow counts the ideas decided by window, keyed by its first and
+// exclusive last local day.
+type ideasByWindow struct {
+	repository.IdeaRepository
+	counts map[string]int
+}
+
+func (r *ideasByWindow) CountDecided(_ context.Context, from, to time.Time, _ string) (int, error) {
+	return r.counts[from.Format(time.DateOnly)+" – "+to.Format(time.DateOnly)], nil
+}
+
 // waitingPosts is the posts waiting to go out.
 type waitingPosts struct {
 	repository.PostRepository
@@ -566,7 +605,21 @@ func TestActivityExtras(t *testing.T) {
 		t.Fatalf("step = %+v", out.Step)
 	}
 
+	// Each week of a long range counts the ideas decided over its own days.
+	weekly := &ideasByWindow{counts: map[string]int{"2026-04-01 – 2026-04-06": 2, "2026-04-06 – 2026-04-13": 5}}
+	d.IdeaRepo = weekly
+	out = &ActivityOutput{RangeReport: &report.RangeReport{From: "2026-04-01", To: "2026-04-16", TZ: "Europe/Madrid", Weeks: []report.Week{
+		{From: "2026-04-01", To: "2026-04-05"}, {From: "2026-04-06", To: "2026-04-12"}, {From: "2026-04-13", To: "2026-04-16"},
+	}}}
+	if err := activityExtras(t.Context(), d, out, "c1", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := []int{out.Weeks[0].IdeasDecided, out.Weeks[1].IdeasDecided, out.Weeks[2].IdeasDecided}; !slices.Equal(got, []int{2, 5, 0}) {
+		t.Fatalf("weeks' ideas decided = %v", got)
+	}
+
 	// Nothing waiting and no campaign leave those out.
+	d.IdeaRepo = ideas
 	posts.next = nil
 	out = &ActivityOutput{RangeReport: &report.RangeReport{From: "2026-04-21", To: "2026-04-21", TZ: "UTC"}}
 	if err := activityExtras(t.Context(), d, out, "", now); err != nil || out.NextScheduled != nil || out.Campaign != nil || out.Step.Subject != "2026-04-21" {

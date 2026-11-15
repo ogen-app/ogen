@@ -174,23 +174,23 @@ func (memAccounts) ListActive(context.Context, string) ([]models.SocialAccount, 
 func TestWorkspaceSetup(t *testing.T) {
 	ctx, _ := turn(t, workspace, nil)
 	out, err := workspaceSetup(ctx, Deps{Settings: memSettings{}, SocialAccounts: memAccounts{},
-		ProfileID: func(context.Context) (string, error) { return "prof", nil }})
+		ProfileID: func(context.Context) (string, error) { return "prof", nil }}, "")
 	if err != nil || out.Timezone != "Europe/Kyiv" || len(out.Accounts) != 1 || !out.Accounts[0].NeedsReconnect {
 		t.Fatalf("setup = %+v, %v", out, err)
 	}
-	out, err = workspaceSetup(ctx, Deps{Settings: memSettings{}})
+	out, err = workspaceSetup(ctx, Deps{Settings: memSettings{}}, "")
 	if err != nil || out.Note == "" {
 		t.Fatalf("no accounts store = %+v, %v", out, err)
 	}
 	out, err = workspaceSetup(ctx, Deps{Settings: memSettings{}, SocialAccounts: memAccounts{},
-		ProfileID: func(context.Context) (string, error) { return "", nil }})
+		ProfileID: func(context.Context) (string, error) { return "", nil }}, "")
 	if err != nil || out.Note == "" {
 		t.Fatalf("no profile = %+v, %v; want a note", out, err)
 	}
 	// A failed profile read is the failure, not "no profile connected".
 	down := errors.New("settings unavailable")
 	if _, err = workspaceSetup(ctx, Deps{Settings: memSettings{}, SocialAccounts: memAccounts{},
-		ProfileID: func(context.Context) (string, error) { return "", down }}); !errors.Is(err, down) {
+		ProfileID: func(context.Context) (string, error) { return "", down }}, ""); !errors.Is(err, down) {
 		t.Fatalf("profile lookup failure = %v; want it returned", err)
 	}
 }
