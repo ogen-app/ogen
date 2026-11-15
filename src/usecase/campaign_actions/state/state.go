@@ -48,7 +48,17 @@ type KindCount struct {
 
 // Period is the goal period today falls in, against its share of the goal.
 type Period struct {
-	Label   string `json:"label"`
+	// Label is the period's English name ("Week 2", "Apr 2026"); a client
+	// words it from Cadence, Index, Start and End instead.
+	Label string `json:"label"`
+	// Cadence is week or month; Index the period's place in the campaign,
+	// from 1: weeks count from the campaign's start, not the calendar's.
+	Cadence string `json:"cadence" enums:"week,month"`
+	Index   int    `json:"index"`
+	// Start and End are its first and last days, YYYY-MM-DD; a period the
+	// campaign's dates cut short spans only its days in them.
+	Start   string `json:"start"`
+	End     string `json:"end"`
 	Target  int    `json:"target"`
 	Planned int    `json:"planned"`
 	// Left is how many more posts fit in the period; 0 once it is met.
@@ -160,13 +170,14 @@ func Build(c *models.Campaign, posts []models.Post, sources *Sources) Snapshot {
 }
 
 // WithPeriod sets the goal's current period from its share of the goal and
-// the posts dated in it.
-func (s Snapshot) WithPeriod(label string, target, planned int) Snapshot {
+// the posts dated in it; p's Left is worked out from them.
+func (s Snapshot) WithPeriod(p Period) Snapshot {
 	if s.Goal == nil || s.Goal.Unknown {
 		return s
 	}
 	g := *s.Goal
-	g.Period = &Period{Label: label, Target: target, Planned: planned, Left: max(target-planned, 0)}
+	p.Left = max(p.Target-p.Planned, 0)
+	g.Period = &p
 	s.Goal = &g
 	return s
 }

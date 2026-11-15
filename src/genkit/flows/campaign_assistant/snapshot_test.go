@@ -158,8 +158,14 @@ func TestSnapshot_PeriodSourcesCalendar(t *testing.T) {
 	}
 	s := snapshot(t.Context(), repos, c, day("2026-01-02"))
 
-	if p := s.Goal.Period; p == nil || p.Target != 3 || p.Planned != 1 || p.Left != 2 {
+	if p := s.Goal.Period; p == nil || p.Target != 3 || p.Planned != 1 || p.Left != 2 ||
+		p.Cadence != "week" || p.Index != 1 || p.Start != "2026-01-01" || p.End != "2026-01-07" {
 		t.Fatalf("period = %+v", s.Goal.Period)
+	}
+	// The last week is cut short by the campaign's end, and counted from
+	// its start.
+	if p := snapshot(t.Context(), repos, c, day("2026-01-30")).Goal.Period; p == nil || p.Index != 5 || p.Start != "2026-01-29" || p.End != "2026-01-30" {
+		t.Fatalf("last period = %+v", p)
 	}
 	if src := s.Sources; src == nil || src.WholeBank || src.Attached != 3 || src.Ready != 2 || src.Analysed != 1 || lens == nil || *lens != "c1" {
 		t.Fatalf("sources = %+v, lens = %v", s.Sources, lens)
@@ -187,8 +193,13 @@ func TestSnapshot_PeriodSourcesCalendar(t *testing.T) {
 		got[1].Kind != starterDraft || got[2].Kind != starterCalendar {
 		t.Fatalf("starters = %+v", got)
 	}
+	// Each carries the figures a client words it from.
+	if got[0].Count != 2 || got[0].Period == nil || got[0].Period.Index != 1 ||
+		got[1].Count != s.Goal.Room || got[1].Period != nil || got[2].Count != s.Calendar.Total {
+		t.Fatalf("starter figures = %+v", got)
+	}
 	s.Goal, s.Calendar = nil, nil
-	if got := starters(s); len(got) != 1 || got[0].Kind != starterSources || got[0].Label != "2 sources not ready" {
+	if got := starters(s); len(got) != 1 || got[0].Kind != starterSources || got[0].Count != 2 || got[0].Label != "2 sources not ready" {
 		t.Fatalf("sources starter = %+v", got)
 	}
 }

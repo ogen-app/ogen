@@ -15560,6 +15560,9 @@ const docTemplate = `{
         "campaign_assistant.Starter": {
             "type": "object",
             "properties": {
+                "count": {
+                    "type": "integer"
+                },
                 "instruction": {
                     "type": "string"
                 },
@@ -15574,6 +15577,9 @@ const docTemplate = `{
                 },
                 "label": {
                     "type": "string"
+                },
+                "period": {
+                    "$ref": "#/definitions/state.Period"
                 }
             }
         },
@@ -23005,6 +23011,7 @@ const docTemplate = `{
                 "manual",
                 "ready",
                 "version",
+                "drafted",
                 "scheduled",
                 "published"
             ],
@@ -23012,6 +23019,7 @@ const docTemplate = `{
                 "QualityTriggerManual",
                 "QualityTriggerReady",
                 "QualityTriggerVersion",
+                "QualityTriggerDrafted",
                 "QualityTriggerScheduled",
                 "QualityTriggerPublished"
             ]
@@ -24331,7 +24339,22 @@ const docTemplate = `{
         "state.Period": {
             "type": "object",
             "properties": {
+                "cadence": {
+                    "description": "Cadence is week or month; Index the period's place in the campaign,\nfrom 1: weeks count from the campaign's start, not the calendar's.",
+                    "type": "string",
+                    "enum": [
+                        "week",
+                        "month"
+                    ]
+                },
+                "end": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
                 "label": {
+                    "description": "Label is the period's English name (\"Week 2\", \"Apr 2026\"); a client\nwords it from Cadence, Index, Start and End instead.",
                     "type": "string"
                 },
                 "left": {
@@ -24340,6 +24363,10 @@ const docTemplate = `{
                 },
                 "planned": {
                     "type": "integer"
+                },
+                "start": {
+                    "description": "Start and End are its first and last days, YYYY-MM-DD; a period the\ncampaign's dates cut short spans only its days in them.",
+                    "type": "string"
                 },
                 "target": {
                     "type": "integer"

@@ -380,5 +380,15 @@ func currentPeriod(ctx context.Context) *state.Period {
 	if p == nil {
 		return nil
 	}
-	return &state.Period{Label: p.Label, Target: p.Target, Planned: p.Planned, Left: max(p.Target-p.Planned, 0)}
+	out := periodOf(p)
+	out.Left = max(p.Target-p.Planned, 0)
+	return &out
+}
+
+// periodOf is the calendar check's current period as the snapshot sends
+// it, its last day inclusive; Left is the caller's.
+func periodOf(p *calendarcheck.Period) state.Period {
+	return state.Period{Label: p.Label, Cadence: p.Cadence, Index: p.Index,
+		Start: p.Start.Format(time.DateOnly), End: p.End.AddDate(0, 0, -1).Format(time.DateOnly),
+		Target: p.Target, Planned: p.Planned}
 }

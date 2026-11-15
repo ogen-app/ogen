@@ -368,8 +368,14 @@ func (k *calendar) within(from, until time.Time) int {
 // Period is the goal period today falls in: its share of the goal, and the
 // posts dated in it, as the goal_short and goal_over findings count them.
 type Period struct {
-	Label  string
-	Target int
+	Label string
+	// Cadence is the goal's (week or month); Index the period's place in
+	// the campaign, from 1.
+	Cadence string
+	Index   int
+	// Start and End are the period's days, End exclusive, at midnight UTC.
+	Start, End time.Time
+	Target     int
 	// Planned counts the posts dated in the period, published ones too.
 	Planned int
 }
@@ -387,11 +393,12 @@ func CurrentPeriod(c *models.Campaign, posts []models.Post, now time.Time) *Peri
 		return nil
 	}
 	cadence := cmp.Or(c.GoalCadence, campaigngoal.DefaultCadence)
-	for _, w := range campaigngoal.Windows(cadence, &k.start, &k.end, time.UTC) {
+	for i, w := range campaigngoal.Windows(cadence, &k.start, &k.end, time.UTC) {
 		if k.today.Before(w.Start) || !k.today.Before(w.End) {
 			continue
 		}
-		return &Period{Label: w.Label, Target: share(*c.EstimatedPostCount, cadence, w.Start, w.End), Planned: k.within(w.Start, w.End)}
+		return &Period{Label: w.Label, Cadence: cadence, Index: i + 1, Start: w.Start, End: w.End,
+			Target: share(*c.EstimatedPostCount, cadence, w.Start, w.End), Planned: k.within(w.Start, w.End)}
 	}
 	return nil
 }
