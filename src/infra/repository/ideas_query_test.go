@@ -208,6 +208,10 @@ func TestIdeaQueryFilters(t *testing.T) {
 		{"used=used", []string{iqPDF2, iqAnn}},
 		{"used=unused", []string{iqOrphan, iqAudio, iqBob, iqPDF1}},
 		{"used_not=used&origin=manual", []string{iqBob}},
+		{"ids=" + iqPDF1 + "," + iqBob + ",iq-unknown", []string{iqBob, iqPDF1}},
+		{"ids=iq-other", nil},
+		{"ids_not=" + iqPDF1 + "," + iqOrphan, []string{iqAudio, iqBob, iqPDF2, iqAnn}},
+		{"ids=" + iqPDF1 + "," + iqAnn + "&pile=waiting", []string{iqPDF1}},
 	} {
 		res := fx.query(t, tc.query)
 		if got := ideaIDs(res.Ideas); !slices.Equal(got, tc.want) && (len(got) > 0 || len(tc.want) > 0) {
@@ -312,6 +316,29 @@ func TestIdeaQueryFacetsExcludeTheirOwnField(t *testing.T) {
 	}
 	if scoped.Total != 2 || scoped.TotalUnfiltered != 2 {
 		t.Errorf("scoped total %d of %d, want 2 of 2", scoped.Total, scoped.TotalUnfiltered)
+	}
+}
+
+// ids is a filter like any other: the piles and every facet count under it.
+func TestIdeaQueryIDsFilterCounts(t *testing.T) {
+	fx := seedIdeaQueryFixture(t)
+	res := fx.query(t, "ids="+iqPDF1+","+iqPDF2+","+iqAnn+"&pile=waiting&facets=origin,used")
+	if got := ideaIDs(res.Ideas); !slices.Equal(got, []string{iqPDF1}) || res.Total != 1 || res.TotalUnfiltered != len(iqAllByCreated) {
+		t.Errorf("ideas = %v, total %d of %d", got, res.Total, res.TotalUnfiltered)
+	}
+	want := map[string]int{models.IdeaPileWaiting: 1, models.IdeaPileYes: 1, models.IdeaPileNo: 1, models.IdeaPileLater: 0}
+	for k, n := range want {
+		if res.Piles[k] != n {
+			t.Errorf("piles = %v, want %v (the named ideas only)", res.Piles, want)
+			break
+		}
+	}
+	if origin := res.Facets["origin"]; !slices.Contains(origin, models.AssetFacetCount{Value: "asset_analysis", Count: 1}) ||
+		!slices.Contains(origin, models.AssetFacetCount{Value: "manual", Count: 0}) {
+		t.Errorf("origin facet = %v, want the named waiting ideas counted", origin)
+	}
+	if used := res.Facets["used"]; !slices.Equal(used, []models.AssetFacetCount{{Value: "unused", Count: 1}, {Value: "used", Count: 0}}) {
+		t.Errorf("used facet = %v", used)
 	}
 }
 

@@ -18,6 +18,9 @@ const (
 	MaxPageSize  = 200
 	UnpagedLimit = 1000
 	maxTextLen   = 200
+	// MaxIDs is how many ideas ids and ids_not name together: a page's worth,
+	// so every idea a link names fits on one page.
+	MaxIDs = MaxPageSize
 )
 
 // Params lists the parameters of the ideas list's address, each with whether
@@ -29,7 +32,7 @@ var Params = func() map[string]bool {
 		"created": false, "created_after": false, "created_before": false, "asset_id": false,
 	}
 	for _, p := range []string{
-		models.IdeaFacetOrigin, models.IdeaFacetSourceAsset, models.IdeaFacetKind, models.IdeaFacetCampaign,
+		"ids", models.IdeaFacetOrigin, models.IdeaFacetSourceAsset, models.IdeaFacetKind, models.IdeaFacetCampaign,
 		models.IdeaFacetFit, models.IdeaFacetPhase, models.IdeaFacetAuthor, models.IdeaFacetUsed,
 	} {
 		params[p], params[p+listquery.NotSuffix] = true, true
@@ -67,6 +70,7 @@ func parseFilters(v url.Values, q *models.IdeaQuery) (err error) {
 		allowed []string
 	}{
 		{&q.Pile, "pile", models.IdeaPiles},
+		{&q.IDs, "ids", nil},
 		{&q.Origin, models.IdeaFacetOrigin, models.IdeaOriginKeys},
 		{&q.SourceAsset, models.IdeaFacetSourceAsset, nil},
 		{&q.Kind, models.IdeaFacetKind, models.AssetKinds},
@@ -79,6 +83,9 @@ func parseFilters(v url.Values, q *models.IdeaQuery) (err error) {
 		if *f.dst, err = listquery.Filter(v, f.key, f.allowed); err != nil {
 			return err
 		}
+	}
+	if n := len(q.IDs.Any) + len(q.IDs.Not); n > MaxIDs {
+		return listquery.Invalid("ids", "names %d ideas; at most %d", n, MaxIDs)
 	}
 	if id := listquery.Single(v, "asset_id"); id != "" && !slices.Contains(q.SourceAsset.Any, id) {
 		q.SourceAsset.Any = append(q.SourceAsset.Any, id)
