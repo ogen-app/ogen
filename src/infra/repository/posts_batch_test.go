@@ -7,6 +7,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
 // TestPostUpdateScheduledAtBatch verifies the CON-115 batch update writes the
@@ -140,5 +141,69 @@ func TestPostMoveScheduledAt(t *testing.T) {
 
 	if moved, err := repo.MoveScheduledAt(ctx, nil, time.Now()); err != nil || len(moved) != 0 {
 		t.Fatalf("empty batch: %v, %v", moved, err)
+	}
+}
+
+// TestPostWritesRecordTheEditor verifies a member's write records them as
+// the post's last editor, a skipped row keeps its own, and a job's write
+// leaves the last editor as it was.
+func TestPostWritesRecordTheEditor(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewPostRepository(db)
+	at := time.Date(2026, 1, 5, 17, 0, 0, 0, time.UTC)
+	mk := func(status models.PostStatus) *models.Post {
+		id, err := models.NewID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := &models.Post{ID: id, CampaignID: "camp-1", Title: "Draft", MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
+			Status: status, CTAType: models.CTATypeNone, CreatedBy: "user-1", ScheduledAt: &at, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		if err := repo.Create(ctx, p); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		return p
+	}
+	editorOf := func(id string) string {
+		got, err := repo.GetByID(ctx, id)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		return got.UpdatedBy
+	}
+	draft, scheduled := mk(models.PostStatusDraft), mk(models.PostStatusScheduled)
+	if editorOf(draft.ID) != "" {
+		t.Fatalf("a new post's editor = %q; want none", editorOf(draft.ID))
+	}
+
+	marta := logging.WithUserID(ctx, "user-2")
+	to := time.Date(2026, 3, 20, 17, 0, 0, 0, time.UTC)
+	if _, err := repo.MoveScheduledAt(marta, []repository.ScheduleMove{
+		{PostID: draft.ID, From: &at, To: to},
+		{PostID: scheduled.ID, From: &at, To: to},
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if editorOf(draft.ID) != "user-2" || editorOf(scheduled.ID) != "" {
+		t.Fatalf("editors = %q, %q; want the moved post's only", editorOf(draft.ID), editorOf(scheduled.ID))
+	}
+
+	// A job rewriting the whole row keeps the member who last edited it.
+	got, err := repo.GetByID(ctx, draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Title = "Retitled"
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if editorOf(draft.ID) != "user-2" {
+		t.Fatalf("after a job's write the editor = %q; want user-2 kept", editorOf(draft.ID))
+	}
+	if err := repo.Update(logging.WithUserID(ctx, "user-1"), got); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if editorOf(draft.ID) != "user-1" {
+		t.Fatalf("after a member's write the editor = %q; want user-1", editorOf(draft.ID))
 	}
 }
