@@ -24,6 +24,7 @@ const (
 type IdeaDistiller interface {
 	RequestDistill(ctx context.Context, in assetanalysis.DistillInput) (*models.IdeaDistillRun, error)
 	ListDistills(ctx context.Context, tenantID, assetID string, campaignID *string) ([]models.IdeaDistillRun, error)
+	GetDistill(ctx context.Context, tenantID, assetID, runID string) (*models.IdeaDistillRun, []models.Idea, error)
 }
 
 // AssetIdeaDistillHandler serves requests for more ideas from an analysed
@@ -42,6 +43,7 @@ func NewAssetIdeaDistillHandler(assets repository.AssetRepository, distiller Ide
 func (h *AssetIdeaDistillHandler) Register(app *fiber.App) {
 	app.Post("/api/content-bank/assets/:id/ideas/distill", h.auth, h.Request)
 	app.Get("/api/content-bank/assets/:id/ideas/distills", h.auth, h.List)
+	app.Get("/api/content-bank/assets/:id/ideas/distills/:runId", h.auth, h.Get)
 }
 
 // distillRequest is the POST body; both fields are optional.
@@ -59,6 +61,13 @@ type distillRunResponse struct {
 
 type distillRunsResponse struct {
 	Runs []models.IdeaDistillRun `json:"runs"`
+}
+
+type distillRunIdeasResponse struct {
+	Run *models.IdeaDistillRun `json:"run"`
+	// Ideas are the ideas the run added that still exist, oldest first;
+	// empty until the run is ready.
+	Ideas []models.Idea `json:"ideas"`
 }
 
 // Request godoc
@@ -148,6 +157,32 @@ func (h *AssetIdeaDistillHandler) List(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(distillRunsResponse{Runs: runs})
+}
+
+// Get godoc
+// @Summary      Read a distill run with its ideas
+// @Description  One of the asset's distill runs, with the ideas it added that still exist, each with its source asset and passage. The ideas are empty until the run is ready; an asset.ideas.distill.updated event with the run's id says when to read it again.
+// @Tags         assets
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id     path  string  true  "Asset Sqid"
+// @Param        runId  path  string  true  "Distill run Sqid"
+// @Success      200  {object}  distillRunIdeasResponse
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      422  {object}  map[string]string  "the asset type is never analysed"
+// @Router       /api/content-bank/assets/{id}/ideas/distills/{runId} [get]
+func (h *AssetIdeaDistillHandler) Get(c *fiber.Ctx) error {
+	ctx, assetID := reqCtx(c), c.Params("id")
+	if err := h.analysable(ctx, assetID); err != nil {
+		return err
+	}
+	tenantID, _ := tenantctx.From(ctx)
+	run, ideas, err := h.distiller.GetDistill(ctx, tenantID, assetID, c.Params("runId"))
+	if err != nil {
+		return notFound(err, "distill run not found")
+	}
+	return c.JSON(distillRunIdeasResponse{Run: run, Ideas: ideas})
 }
 
 // analysable is 404 for an unknown asset and 422 for a type that is never

@@ -179,6 +179,28 @@ func (s *Service) ListDistills(ctx context.Context, tenantID, assetID string, ca
 	return s.repos.Distills.ListByAnalysis(ctx, lens.ID, DistillListLimit)
 }
 
+// GetDistill returns one of an asset's distill runs with the ideas it added
+// that still exist, oldest first; none until the run is ready. sql.ErrNoRows
+// when the asset has no such run.
+func (s *Service) GetDistill(ctx context.Context, tenantID, assetID, runID string) (*models.IdeaDistillRun, []models.Idea, error) {
+	ctx = tenantctx.With(ctx, tenantID)
+	run, err := s.repos.Distills.Get(ctx, runID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if run.AssetID != assetID {
+		return nil, nil, sql.ErrNoRows
+	}
+	if run.Status != models.IdeaDistillStatusReady {
+		return run, []models.Idea{}, nil
+	}
+	ideas, err := s.repos.Ideas.List(ctx, repository.IdeaListFilter{DistillRunID: run.ID})
+	if err != nil {
+		return nil, nil, err
+	}
+	return run, ideas, nil
+}
+
 // distillTarget is everything a distill run needs, loaded and checked.
 type distillTarget struct {
 	run      *models.IdeaDistillRun

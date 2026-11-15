@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,13 @@ func (f *fakeDistiller) ListDistills(context.Context, string, string, *string) (
 		return []models.IdeaDistillRun{}, nil
 	}
 	return []models.IdeaDistillRun{*f.run}, nil
+}
+
+func (f *fakeDistiller) GetDistill(context.Context, string, string, string) (*models.IdeaDistillRun, []models.Idea, error) {
+	if f.run == nil {
+		return nil, nil, sql.ErrNoRows
+	}
+	return f.run, []models.Idea{}, nil
 }
 
 // distillJobs records queued distill runs; the analysis jobs are no-ops.
@@ -144,6 +152,13 @@ var _ = Describe("AssetIdeaDistillHandler", Ordered, func() {
 	It("requires auth", func() {
 		Expect(request(nil, "POST", "/api/content-bank/assets/x/ideas/distill", nil).StatusCode).To(Equal(401))
 		Expect(request(nil, "GET", "/api/content-bank/assets/x/ideas/distills", nil).StatusCode).To(Equal(401))
+		Expect(request(nil, "GET", "/api/content-bank/assets/x/ideas/distills/run-1", nil).StatusCode).To(Equal(401))
+	})
+
+	It("reads an unknown run as 404", func() {
+		seedAsset("doc-1", models.AssetTypeDocument, "")
+		Expect(request(admin, "GET", "/api/content-bank/assets/doc-1/ideas/distills/run-1", nil).StatusCode).To(Equal(404))
+		Expect(request(admin, "GET", "/api/content-bank/assets/missing/ideas/distills/run-1", nil).StatusCode).To(Equal(404))
 	})
 
 	It("queues a run with the focus, count, lens and requester", func() {
@@ -235,7 +250,54 @@ var _ = Describe("AssetIdeaDistillHandler", Ordered, func() {
 		resp := request(admin, "POST", "/api/content-bank/assets/md-1/ideas/distill", fiber.Map{"focus": "CFOs"})
 		Expect(resp.StatusCode).To(Equal(fiber.StatusAccepted))
 		Expect(jobs.runs).To(HaveLen(1))
+
+		type runRead struct {
+			Run struct {
+				ID         string `json:"id"`
+				Status     string `json:"status"`
+				IdeasCount int    `json:"ideas_count"`
+			} `json:"run"`
+			Ideas []struct {
+				Title        string  `json:"title"`
+				DistillRunID *string `json:"distill_run_id"`
+				SourceAsset  *struct {
+					ID    string `json:"id"`
+					Title string `json:"title"`
+				} `json:"source_asset"`
+			} `json:"ideas"`
+		}
+		readRun := func(assetID string) (int, runRead) {
+			GinkgoHelper()
+			resp := request(admin, "GET", "/api/content-bank/assets/"+assetID+"/ideas/distills/"+jobs.runs[0], nil)
+			var body runRead
+			if resp.StatusCode == 200 {
+				Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+			}
+			return resp.StatusCode, body
+		}
+		// Queued, the run reads back with no ideas yet.
+		code, read := readRun("md-1")
+		Expect(code).To(Equal(200))
+		Expect(read.Run.Status).To(Equal("pending"))
+		Expect(read.Ideas).To(BeEmpty())
+
 		Expect(svc.Distill(tenantCtx(), models.DefaultTenantID, jobs.runs[0])).To(Succeed())
+
+		// Ready, it reads back with the ideas it added and where each came from.
+		code, read = readRun("md-1")
+		Expect(code).To(Equal(200))
+		Expect(read.Run.Status).To(Equal("ready"))
+		Expect(read.Run.IdeasCount).To(Equal(1))
+		Expect(read.Ideas).To(HaveLen(1))
+		Expect(read.Ideas[0].Title).To(Equal("Pricing, from the CFO's side"))
+		Expect(read.Ideas[0].DistillRunID).To(HaveValue(Equal(jobs.runs[0])))
+		Expect(read.Ideas[0].SourceAsset).NotTo(BeNil())
+		Expect(read.Ideas[0].SourceAsset.Title).To(Equal("Asset md-1"))
+
+		// Under another asset, the run isn't found.
+		seedAsset("md-2", models.AssetTypeMarkdown, "Other text.")
+		code, _ = readRun("md-2")
+		Expect(code).To(Equal(404))
 
 		resp = request(admin, "GET", "/api/content-bank/assets/md-1/ideas/distills", nil)
 		Expect(resp.StatusCode).To(Equal(200))
