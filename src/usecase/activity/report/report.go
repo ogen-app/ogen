@@ -163,6 +163,9 @@ type Created struct {
 
 // Deleted is the day's tally of deleted posts.
 type Deleted struct {
+	// Total counts the deletes recorded with their campaign. Days before
+	// deletes were recorded so count none, and with activity collection off
+	// every day counts none, so a zero isn't proof nothing was deleted.
 	Total int `json:"total"`
 }
 
@@ -185,12 +188,13 @@ type Report struct {
 
 // ListItem is one non-empty day's headline totals (CON-285 §7 GET /reports).
 type ListItem struct {
-	Date                  string `json:"date"`
-	PublishedTotal        int    `json:"published_total"`
-	FailedTotal           int    `json:"failed_total"`
-	CreatedTotal          int    `json:"created_total"`
-	DeletedTotal          int    `json:"deleted_total"`
-	CampaignsCreatedTotal int    `json:"campaigns_created_total"`
+	Date           string `json:"date"`
+	PublishedTotal int    `json:"published_total"`
+	FailedTotal    int    `json:"failed_total"`
+	CreatedTotal   int    `json:"created_total"`
+	// DeletedTotal is counted as Deleted.Total is, with its limits.
+	DeletedTotal          int `json:"deleted_total"`
+	CampaignsCreatedTotal int `json:"campaigns_created_total"`
 }
 
 // WeekRowsAfterDays is the longest range listed by day alone; a longer one
@@ -205,7 +209,8 @@ type Week struct {
 	Published int    `json:"published"`
 	Scheduled int    `json:"scheduled"`
 	Failed    int    `json:"failed"`
-	Deleted   int    `json:"deleted"`
+	// Deleted is counted as Deleted.Total is, with its limits.
+	Deleted int `json:"deleted"`
 	// IdeasDecided is the ideas decided in the week, when the caller counted
 	// them; the report leaves it zero.
 	IdeasDecided int `json:"ideas_decided"`

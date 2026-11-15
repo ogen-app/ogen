@@ -13,7 +13,8 @@ import (
 
 // DeletedPostsBetween lists the tenant's post deletes in the window newest
 // first, narrowed to a campaign by the campaign_id its payload names; other
-// tenants' deletes and other event types don't count.
+// tenants' deletes, other event types, and the older deletes recorded
+// without a campaign don't count.
 func TestActivityRepository_DeletedPostsBetween(t *testing.T) {
 	db := openMigratedDB(t)
 	ctx := tenantCtx()
@@ -36,6 +37,13 @@ func TestActivityRepository_DeletedPostsBetween(t *testing.T) {
 	seed(ctx, "a3", repository.ActivityPostDeleted, "p3", "c1", t0.Add(-48*time.Hour)) // before the window
 	seed(ctx, "a4", "post_created", "p4", "c1", t0.Add(2*time.Hour))
 	seed(other, "a5", repository.ActivityPostDeleted, "p5", "c1", t0)
+	legacy := &models.ActivityEvent{
+		ID: "a6", Category: "post", Type: repository.ActivityPostDeleted, EntityType: "post", EntityID: "p6", Source: "api",
+		OccurredAt: t0.Add(30 * time.Minute),
+	}
+	if _, err := db.NewInsert().Model(legacy).Exec(ctx); err != nil {
+		t.Fatalf("seed legacy: %v", err)
+	}
 
 	from, to := t0.Add(-time.Hour), t0.Add(24*time.Hour)
 	ids := func(rows []repository.DeletedPost) []string {

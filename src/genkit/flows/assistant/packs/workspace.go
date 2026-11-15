@@ -123,12 +123,20 @@ func activityExtras(ctx context.Context, d Deps, out *ActivityOutput, campaign s
 	}
 	from, ferr := time.ParseInLocation(time.DateOnly, out.From, loc)
 	to, terr := time.ParseInLocation(time.DateOnly, out.To, loc)
-	if ferr == nil && terr == nil && d.IdeaRepo != nil {
-		if out.IdeasDecided, err = d.IdeaRepo.CountDecided(ctx, from, to.AddDate(0, 0, 1), campaign); err != nil {
-			return fmt.Errorf("count ideas decided: %w", err)
-		}
+	switch {
+	case d.IdeaRepo == nil || ferr != nil || terr != nil:
+	case len(out.Weeks) > 0:
+		// The weeks split the range, so their sum is its count, and it
+		// can't disagree with them.
 		if err := weekIdeasDecided(ctx, d, out.Weeks, campaign, loc); err != nil {
 			return err
+		}
+		for _, w := range out.Weeks {
+			out.IdeasDecided += w.IdeasDecided
+		}
+	default:
+		if out.IdeasDecided, err = d.IdeaRepo.CountDecided(ctx, from, to.AddDate(0, 0, 1), campaign); err != nil {
+			return fmt.Errorf("count ideas decided: %w", err)
 		}
 	}
 	if d.Posts != nil {

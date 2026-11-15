@@ -23975,6 +23975,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "total": {
+                    "description": "Total counts the deletes recorded with their campaign. Days before\ndeletes were recorded so count none, and with activity collection off\nevery day counts none, so a zero isn't proof nothing was deleted.",
                     "type": "integer"
                 }
             }
@@ -24033,6 +24034,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "deleted_total": {
+                    "description": "DeletedTotal is counted as Deleted.Total is, with its limits.",
                     "type": "integer"
                 },
                 "failed_total": {
