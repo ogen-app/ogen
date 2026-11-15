@@ -174,7 +174,7 @@ var evalCases = []evalCase{
 		want: []string{"draftPost", "generatePosts", "updateCampaignPlatforms"}},
 	// A yes to a waiting offer takes it, on the first try.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "yes please", offered: offerThreads, want: []string{"confirmOffer"}},
-	// CON-503: an answer from <campaign_state> says which of it it read.
+	// An answer from <campaign_state> says which of it it read.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "How many more posts fit under our goal?", atGoal: true, not: writes, cites: []string{"goal"}},
 	// CON-483: dropping a platform goes through the platform tool, which
 	// holds it back for a scheduled post; the user's pick is the choice's.

@@ -99,14 +99,14 @@ func TestBuild_PlatformsAndSources(t *testing.T) {
 // The current period's slots: its share of the goal less the posts dated in
 // it; none once the posts are unknown.
 func TestSnapshot_WithPeriod(t *testing.T) {
-	s := Build(campaign(), posts(models.PostStatusDraft), nil).WithPeriod("This week", 3, 4)
+	s := Build(campaign(), posts(models.PostStatusDraft), nil).WithPeriod(Period{Label: "This week", Target: 3, Planned: 4})
 	if p := s.Goal.Period; p == nil || p.Label != "This week" || p.Left != 0 {
 		t.Fatalf("period = %+v", s.Goal.Period)
 	}
-	if p := Build(campaign(), nil, nil).WithPeriod("This week", 3, 1).Goal.Period; p.Left != 2 {
+	if p := Build(campaign(), nil, nil).WithPeriod(Period{Label: "This week", Target: 3, Planned: 1}).Goal.Period; p.Left != 2 {
 		t.Fatalf("period = %+v", p)
 	}
-	if s := Build(campaign(), nil, nil).WithoutPosts().WithPeriod("This week", 3, 1); s.Goal.Period != nil {
+	if s := Build(campaign(), nil, nil).WithoutPosts().WithPeriod(Period{Label: "This week", Target: 3, Planned: 1}); s.Goal.Period != nil {
 		t.Fatalf("unknown posts got a period: %+v", s.Goal.Period)
 	}
 }

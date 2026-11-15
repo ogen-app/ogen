@@ -43,7 +43,7 @@ func snapshot(ctx context.Context, repos CampaignAssistantRepos, c *models.Campa
 		return s.WithoutPosts()
 	}
 	if p := calendarcheck.CurrentPeriod(c, posts, now); p != nil {
-		s = s.WithPeriod(p.Label, p.Target, p.Planned)
+		s = s.WithPeriod(periodOf(p))
 	}
 	s.Calendar = calendar(ctx, repos, c, posts, now)
 	return s

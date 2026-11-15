@@ -29,12 +29,17 @@ type CampaignState struct {
 	Starters []Starter      `json:"starters"`
 }
 
-// Starter is a message the client offers to send: Label on the chip,
-// Instruction as the turn.
+// Starter is a message the client offers to send. Kind and the figures
+// are what a client words it from: Count is the posts to fill or draft,
+// the calendar's problems, or the sources not ready; Period the goal
+// period a fill is for. Label and Instruction are the same in English,
+// for a client that doesn't word it yet.
 type Starter struct {
-	Kind        string `json:"kind" enums:"fill,draft,calendar,sources"`
-	Label       string `json:"label"`
-	Instruction string `json:"instruction"`
+	Kind        string        `json:"kind" enums:"fill,draft,calendar,sources"`
+	Count       int           `json:"count"`
+	Period      *state.Period `json:"period,omitempty"`
+	Label       string        `json:"label"`
+	Instruction string        `json:"instruction"`
 }
 
 // The parts of a snapshot a reply can cite, as <campaign_state> lists them.
@@ -94,21 +99,21 @@ func starters(s state.Snapshot) []Starter {
 	out := []Starter{}
 	if g := s.Goal; g != nil && !g.Unknown {
 		if p := g.Period; p != nil && p.Left > 0 {
-			out = append(out, Starter{Kind: starterFill, Label: "Fill " + p.Label,
+			out = append(out, Starter{Kind: starterFill, Count: p.Left, Period: p, Label: "Fill " + p.Label,
 				Instruction: fmt.Sprintf("Draft %d %s for %s, the slots left in this goal period.", p.Left, plural(p.Left, "post", "posts"), p.Label)})
 		}
 		if g.Room > 0 && (g.Period == nil || g.Room != g.Period.Left) {
-			out = append(out, Starter{Kind: starterDraft, Label: fmt.Sprintf("Draft %d %s", g.Room, plural(g.Room, "post", "posts")),
+			out = append(out, Starter{Kind: starterDraft, Count: g.Room, Label: fmt.Sprintf("Draft %d %s", g.Room, plural(g.Room, "post", "posts")),
 				Instruction: fmt.Sprintf("Draft %d %s to reach the campaign's goal.", g.Room, plural(g.Room, "post", "posts"))})
 		}
 	}
 	if cal := s.Calendar; cal != nil && cal.Total > 0 {
-		out = append(out, Starter{Kind: starterCalendar, Label: fmt.Sprintf("Fix %d calendar %s", cal.Total, plural(cal.Total, "problem", "problems")),
+		out = append(out, Starter{Kind: starterCalendar, Count: cal.Total, Label: fmt.Sprintf("Fix %d calendar %s", cal.Total, plural(cal.Total, "problem", "problems")),
 			Instruction: "Review the campaign's calendar problems and fix them."})
 	}
 	if src := s.Sources; src != nil && !src.WholeBank && src.NotReady > 0 {
 		n := src.NotReady
-		out = append(out, Starter{Kind: starterSources, Label: fmt.Sprintf("%d %s not ready", n, plural(n, "source", "sources")),
+		out = append(out, Starter{Kind: starterSources, Count: n, Label: fmt.Sprintf("%d %s not ready", n, plural(n, "source", "sources")),
 			Instruction: "Which of the campaign's sources aren't ready to write from, and why?"})
 	}
 	return out[:min(len(out), maxStarters)]
