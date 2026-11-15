@@ -159,11 +159,23 @@ func (s *Service) seriesOf(ctx context.Context, ideas []models.Idea) (*postSerie
 	return &postSeries{id: sr.ID, format: sr.ContentFormat}, nil
 }
 
-// publishingDays is the weekdays a post's date may snap to. A series post on
-// its plan's date keeps that date: the series' weekday outranks the
-// campaign's publishing days. A date the call asked for snaps as any other.
-func publishingDays(campaign *models.Campaign, series *postSeries, asked *models.CalendarDate) []string {
-	if series != nil && asked == nil {
+// keepsWeekday reports whether a post's date stays on its weekday rather
+// than snapping to the campaign's publishing days: only a plan date, not one
+// the call asked for, and only one an idea of the post's series set, the
+// first idea that dates the plan as firstPlan reads it. The series' weekday
+// outranks the publishing days; a plain idea's date doesn't.
+func keepsWeekday(ideas []models.Idea, series *postSeries, asked *models.CalendarDate) bool {
+	if series == nil || asked != nil {
+		return false
+	}
+	i := slices.IndexFunc(ideas, func(idea models.Idea) bool { return idea.Plan.TargetDate != nil })
+	return i >= 0 && ideas[i].SeriesID != nil && *ideas[i].SeriesID == series.id
+}
+
+// publishingDays is the weekdays a post's date may snap to: the campaign's,
+// or any day when the date keeps its weekday.
+func publishingDays(campaign *models.Campaign, keepWeekday bool) []string {
+	if keepWeekday {
 		return nil
 	}
 	return campaign.PublishingDays
@@ -389,7 +401,7 @@ func (s *Service) build(in Input, t target, ideas []models.Idea, campaign *model
 	if date != nil {
 		loc, _ := settings.ResolveTimezone(campaign.Timezone)
 		post.ScheduledAt, _, _ = scheduling.ComposeScheduledAt(date.String(), id, loc,
-			campaign.PublishingTime, publishingDays(campaign, series, in.TargetDate), campaign.SpreadMinutes, campaign.StartDate, campaign.EndDate)
+			campaign.PublishingTime, publishingDays(campaign, keepsWeekday(ideas, series, in.TargetDate)), campaign.SpreadMinutes, campaign.StartDate, campaign.EndDate)
 	}
 	return post, nil
 }
