@@ -2,6 +2,7 @@ package campaign_assistant
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
@@ -55,6 +56,39 @@ func SourceOptions(tool string, exploratory any) []assistantkit.Option {
 			Input: &assistantkit.OptionInput{Kind: assistantkit.OptionInputURL, Label: "Page link", Arg: "url"}, Tool: "importPage", Args: struct{}{}},
 		{ID: assistantkit.OptionExploratory, Title: "Go ahead without sources (marked not grounded)", Tool: tool, Args: exploratory},
 	}
+}
+
+// waitingOn is the request the offer ctx answers leaves waiting for a
+// source, in a few facts: how many post ideas a generatePosts call plans, or
+// a content plan, which doesn't say how many. Nil outside an offer, or for
+// one that can't be read or makes something else.
+func waitingOn(ctx context.Context) *assistant.UIWaiting {
+	st := getRequestState(ctx)
+	id := assistantkit.OfferID(ctx)
+	if id == "" || st.repos.Proposals == nil {
+		return nil
+	}
+	p, err := st.repos.Proposals.GetByID(ctx, id)
+	if err != nil {
+		return nil
+	}
+	switch p.Tool {
+	case "generatePosts":
+		var in GeneratePostsInput
+		raw, err := json.Marshal(p.Args)
+		if err != nil || json.Unmarshal(raw, &in) != nil {
+			return nil
+		}
+		n := generateTotal(ctx, in)
+		noun := "post ideas"
+		if n == 1 {
+			noun = "post idea"
+		}
+		return &assistant.UIWaiting{Tool: p.Tool, Count: n, Noun: noun}
+	case "runContentPlan":
+		return &assistant.UIWaiting{Tool: p.Tool, Noun: "content plan"}
+	}
+	return nil
 }
 
 const noSourcesReason = "This campaign has no sources yet, so anything I write would come from general knowledge, not your material."

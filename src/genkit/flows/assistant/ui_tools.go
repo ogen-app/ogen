@@ -68,6 +68,19 @@ type UIAction struct {
 	// Via is the way in an open_add_source opens: upload for the file
 	// upload, page for a page's import; empty offers both.
 	Via AddSourceVia `json:"via,omitempty" enums:"upload,page"`
+	// Waiting is the request an open_add_source leaves waiting for the
+	// source, when it was opened from that request's offer.
+	Waiting *UIWaiting `json:"waiting,omitempty"`
+}
+
+// UIWaiting is a request waiting for a source, in a few facts: the offer
+// answered by going to add one, its tool, and how much it makes of what,
+// e.g. 6 "post ideas". Count is 0 when the request doesn't say how many.
+type UIWaiting struct {
+	ProposalID string `json:"proposalId,omitempty"`
+	Tool       string `json:"tool"`
+	Count      int    `json:"count,omitzero"`
+	Noun       string `json:"noun"`
 }
 
 // AddSourceVia is the way in to adding a source.

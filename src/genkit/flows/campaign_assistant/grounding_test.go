@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
@@ -104,6 +105,39 @@ func TestNoSources_AddDocumentOption(t *testing.T) {
 	confirm(t, st, store, "add_document")
 	if gen.count != 0 || st.generatedPostsResult != nil {
 		t.Fatalf("adding a source generated %d", gen.count)
+	}
+}
+
+// Going to add a source from an offer says what waits on it: the ideas a
+// generatePosts call plans, or a content plan, which doesn't say how many.
+// Outside an offer nothing waits.
+func TestNoSources_WaitingOnTheOffer(t *testing.T) {
+	cases := map[string]struct {
+		tool  string
+		input map[string]any
+		want  assistant.UIWaiting
+	}{
+		"ideas":        {"generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 2}, assistant.UIWaiting{Tool: "generatePosts", Count: 2, Noun: "post ideas"}},
+		"one idea":     {"generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 1}, assistant.UIWaiting{Tool: "generatePosts", Count: 1, Noun: "post idea"}},
+		"content plan": {"runContentPlan", map[string]any{}, assistant.UIWaiting{Tool: "runContentPlan", Noun: "content plan"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := &memProposals{}
+			st := sourcesState(store, &generation{}, 0)
+			runTool(t, st, tc.tool, tc.input)
+			if len(store.rows) != 1 || store.rows[0].ID == "" {
+				t.Fatalf("offers = %+v", store.rows)
+			}
+			ctx := st.bind(t.Context())
+			if w := waitingOn(ctx); w != nil {
+				t.Fatalf("outside an offer, waiting = %+v", w)
+			}
+			w := waitingOn(assistantkit.WithOffer(ctx, store.rows[0].ID))
+			if w == nil || *w != tc.want {
+				t.Fatalf("waiting = %+v, want %+v", w, tc.want)
+			}
+		})
 	}
 }
 

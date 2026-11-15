@@ -111,7 +111,9 @@ type assistantTurnRequest struct {
 // @Description  "connect" {platform,accountId,reconnect}}, every reference already checked; open_connect opens the settings
 // @Description  screen's connect flow (reconnect for an account), which the client runs; open_add_source opens the
 // @Description  campaign's Assets tab ready to upload a document or import a link, by "via" when set: upload opens the
-// @Description  upload, page the import of a page;
+// @Description  upload, page the import of a page; opened from an offer's add-a-source option, its "waiting"
+// @Description  {proposalId,tool,count,noun} is the request that waits until the source is read, e.g. 6 "post ideas"
+// @Description  (count absent when the request doesn't say how many, e.g. a "content plan");
 // @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs","results"}, where
 // @Description  touched names what changed (no id: every entity of the kind) for the client to refresh, and results
 // @Description  (omitted when empty) holds each pack's tools' last successful output, by pack then tool name. The
