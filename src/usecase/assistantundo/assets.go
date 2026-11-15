@@ -2,11 +2,14 @@ package assistantundo
 
 import (
 	"context"
+	"maps"
+	"slices"
 
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/editors"
 )
 
 type assetTagsState struct {
@@ -22,14 +25,16 @@ func AssetTags(tags map[string][]string) models.JSONMap {
 	return toMap(assetTagsState{Assets: tags})
 }
 
-// WithAssets lets s undo tags added to or removed from assets.
-func (s *Service) WithAssets(assets repository.AssetRepository) *Service {
-	s.undoers[models.AssistantActionAssetTags] = assetTags{assets}
+// WithAssets lets s undo tags added to or removed from assets; members name
+// who retagged them since, when that stops an undo.
+func (s *Service) WithAssets(assets repository.AssetRepository, members editors.Members) *Service {
+	s.undoers[models.AssistantActionAssetTags] = assetTags{assets, members}
 	return s
 }
 
 type assetTags struct {
-	assets repository.AssetRepository
+	assets  repository.AssetRepository
+	members editors.Members
 }
 
 // Undo gives every asset its tags back, all or none, while each still has
@@ -47,7 +52,8 @@ func (u assetTags) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantActi
 		return err
 	}
 	if len(moved) > 0 {
-		return &ChangedSinceError{Changed: len(moved), Of: len(after.Assets)}
+		by := editors.Tally(ctx, u.members, slices.Collect(maps.Values(moved)))
+		return &ChangedSinceError{Changed: len(moved), Of: len(after.Assets), By: by}
 	}
 	return nil
 }

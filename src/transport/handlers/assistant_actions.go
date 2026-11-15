@@ -44,6 +44,9 @@ type undoConflict struct {
 	Reason  string `json:"reason" enums:"already_undone,changed_since"`
 	Changed int    `json:"changed,omitzero"`
 	Of      int    `json:"of,omitzero"`
+	// By is who made the changes since, by member, most first; changes no
+	// member is known to have made are counted in Changed only.
+	By []models.ChangedBy `json:"by,omitempty"`
 }
 
 // Undo godoc
@@ -87,7 +90,7 @@ func (h *AssistantActionsHandler) Undo(c *fiber.Ctx) error {
 	case errors.Is(err, assistantundo.ErrChangedSince):
 		body := undoConflict{Error: err.Error(), Reason: "changed_since"}
 		if ce, ok := errors.AsType[*assistantundo.ChangedSinceError](err); ok {
-			body.Changed, body.Of = ce.Changed, ce.Of
+			body.Changed, body.Of, body.By = ce.Changed, ce.Of, ce.By
 		}
 		return c.Status(fiber.StatusConflict).JSON(body)
 	case err != nil:

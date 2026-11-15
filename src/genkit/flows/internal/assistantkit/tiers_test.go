@@ -81,11 +81,12 @@ func idsTool(ran *[]string, gone map[string]bool, refuse *bool) ai.ToolFunc[idsI
 			}
 			return Conflicted("past the goal", Option{ID: "anyway", Title: "Anyway"})
 		},
-		Recheck: func(_ context.Context, in idsIn) (idsIn, []string, error) {
-			var keep, changes []string
+		Recheck: func(_ context.Context, in idsIn) (idsIn, []Change, error) {
+			var keep []string
+			var changes []Change
 			for _, id := range in.IDs {
 				if gone[id] {
-					changes = append(changes, id+" was deleted")
+					changes = append(changes, Change{Reason: id + " was deleted", Code: ChangeDeleted})
 				} else {
 					keep = append(keep, id)
 				}
@@ -125,7 +126,7 @@ func TestGated_ConfirmedRechecks(t *testing.T) {
 	ran, gone["b"] = nil, true
 	out, err := run(ctx, idsIn{IDs: []string{"a", "b"}})
 	if err != nil || out.Status != StatusProposed || len(ran) != 0 || out.Summary != "Touch a" || !strings.HasPrefix(out.Reason, ChangedSince) || out.Rechecked ||
-		!slices.Equal(out.Changes, []string{"b was deleted"}) {
+		!slices.Equal(Reasons(out.Changes), []string{"b was deleted"}) || out.Changes[0].Code != ChangeDeleted {
 		t.Fatalf("narrowed: out = %+v, err = %v, ran = %v", out, err, ran)
 	}
 	if len(sink.got) != 1 || len(sink.got[0].Args.(idsIn).IDs) != 1 || sink.got[0].Replaces != "offer-1" {
@@ -137,14 +138,14 @@ func TestGated_ConfirmedRechecks(t *testing.T) {
 		t.Fatalf("fresh card rows = %+v", rows)
 	}
 	// All went: refused, with what changed and the refusal's code.
-	if out, err := run(ctx, idsIn{IDs: []string{"b"}}); err != nil || out.Status != StatusRefused || out.Code != "ids_gone" || len(ran) != 0 || !slices.Equal(out.Changes, []string{"b was deleted"}) {
+	if out, err := run(ctx, idsIn{IDs: []string{"b"}}); err != nil || out.Status != StatusRefused || out.Code != "ids_gone" || len(ran) != 0 || !slices.Equal(Reasons(out.Changes), []string{"b was deleted"}) {
 		t.Fatalf("all gone: out = %+v, err = %v", out, err)
 	}
 	// The precheck now refuses: nothing runs, its reason is what changed,
 	// and its code stays.
 	refuse = true
 	if out, err := run(ctx, idsIn{IDs: []string{"a"}}); err != nil || out.Status != StatusRefused || out.Reason != ChangedSince+"the campaign was archived" || out.Code != "campaign_archived" ||
-		!slices.Equal(out.Changes, []string{"the campaign was archived"}) || len(ran) != 0 {
+		!slices.Equal(Reasons(out.Changes), []string{"the campaign was archived"}) || out.Changes[0].Code != ChangeOther || len(ran) != 0 {
 		t.Fatalf("refused: out = %+v, err = %v", out, err)
 	}
 }

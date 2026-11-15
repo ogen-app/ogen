@@ -1,0 +1,2 @@
+ALTER TABLE assets DROP COLUMN IF EXISTS updated_by;
+ALTER TABLE posts DROP COLUMN IF EXISTS updated_by;

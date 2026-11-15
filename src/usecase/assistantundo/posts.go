@@ -51,7 +51,8 @@ func (postRewrite) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantActi
 		return ErrChangedSince
 	}
 	p.Content, p.Status, p.UpdatedAt = before.Content, before.Status, time.Now().UTC()
-	if _, err := tx.NewUpdate().Model(&p).Column("content", "status", "updated_at").WherePK().Exec(ctx); err != nil {
+	p.MarkEdited(ctx)
+	if _, err := tx.NewUpdate().Model(&p).Column("content", "status", "updated_at", "updated_by").WherePK().Exec(ctx); err != nil {
 		return err
 	}
 	var latest int

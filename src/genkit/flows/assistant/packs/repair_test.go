@@ -325,7 +325,7 @@ func TestApplyMoves_FreeSlotStillFree(t *testing.T) {
 	in, changes, err := movesThatHold(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: []Move{
 		{PostID: "p2", From: "2027-03-03", FromAt: day("2027-03-03"), To: "2027-03-04", FreeSlot: true}, // p3 is there
 	}})
-	if !isRefusal(err) || len(changes) != 1 || !strings.Contains(changes[0], "another post on its platform") {
+	if !isRefusal(err) || len(changes) != 1 || !strings.Contains(changes[0].Reason, "another post on its platform") || changes[0].Code != assistantkit.ChangeSlotTaken {
 		t.Fatalf("narrowed = %+v, %v, %v", in, changes, err)
 	}
 }

@@ -230,6 +230,7 @@ func (s *Service) appendVersions(ctx context.Context, post *models.Post, preRest
 		}
 		res.versionNumber = nextNum
 
+		post.MarkEdited(ctx)
 		if _, err := tx.NewUpdate().Model(post).WherePK().Exec(ctx); err != nil {
 			return err
 		}

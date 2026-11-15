@@ -59,6 +59,7 @@ func (r *postRepository) SettleFirstComment(ctx context.Context, post *models.Po
 // holds heldID. It backs an edit of a scheduled post, which must not restore
 // the post if a cancel or publish landed while the edit was in flight.
 func (r *postRepository) UpdateWhileScheduled(ctx context.Context, post *models.Post, heldID string, excludeColumns ...string) (bool, error) {
+	post.MarkEdited(ctx)
 	q := r.db.NewUpdate().Model(post).
 		Where("status = ?", models.PostStatusScheduled).
 		Where("COALESCE(publisher_post_id, '') = ?", heldID).
@@ -151,11 +152,11 @@ func (r *postRepository) UnscheduleByCampaignTx(ctx context.Context, db bun.IDB,
 	for i := range posts {
 		ids[i] = posts[i].ID
 	}
-	_, err = db.NewUpdate().Model((*models.Post)(nil)).
+	_, err = setEditor(ctx, db.NewUpdate().Model((*models.Post)(nil)).
 		Set("status = ?", models.PostStatusDraft).
 		Set("publisher_post_id = NULL").
 		Set("publisher_status = ''").
-		Set("updated_at = ?", time.Now().UTC()).
+		Set("updated_at = ?", time.Now().UTC())).
 		Where("id IN (?)", bun.List(ids)).
 		Exec(ctx)
 	if err != nil {

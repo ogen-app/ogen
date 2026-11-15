@@ -137,11 +137,10 @@ type Gate[In any] struct {
 	Card func(context.Context, In) *Card
 	// Recheck runs when the user confirms, after Precheck, and returns the
 	// call narrowed to what still holds, e.g. without the ideas deleted
-	// while the offer waited, with what changed in plain words, e.g. "2 of
-	// the 5 ideas no longer exist". A call that narrowed is offered afresh
-	// instead of run; a *Refusal means nothing holds any more. Nil keeps
-	// the call as stored.
-	Recheck func(context.Context, In) (In, []string, error)
+	// while the offer waited, with what changed, e.g. "2 of the 5 ideas no
+	// longer exist". A call that narrowed is offered afresh instead of run;
+	// a *Refusal means nothing holds any more. Nil keeps the call as stored.
+	Recheck func(context.Context, In) (In, []Change, error)
 }
 
 // Gated holds a proposal-tier tool back until the user confirms it. Unless
@@ -235,7 +234,7 @@ func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], 
 			out.Reason = ChangedSince + "nothing ran, and what still holds is offered again."
 			out.Changes = changes
 			if len(changes) == 0 {
-				out.Changes = []string{"some of what the offer was made on changed"}
+				out.Changes = []Change{{Reason: "some of what the offer was made on changed", Code: ChangeOther}}
 			}
 			return out, err
 		}
@@ -248,12 +247,12 @@ func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], 
 // changedSince is a confirmed call that ran nothing because r now holds;
 // changes say what changed, else r's reason does. r's code stays, as it
 // does before the call is confirmed.
-func changedSince[Out any](r *Refusal, changes []string) Outcome[Out] {
+func changedSince[Out any](r *Refusal, changes []Change) Outcome[Out] {
 	out := Refuse[Out](ChangedSince+r.Reason, r.Alternatives...)
 	out.Code = r.Code
 	out.Changes = changes
 	if len(changes) == 0 {
-		out.Changes = []string{r.Reason}
+		out.Changes = []Change{{Reason: r.Reason, Code: ChangeOther}}
 	}
 	return out
 }

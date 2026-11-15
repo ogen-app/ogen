@@ -370,6 +370,7 @@ func (r *postRepository) GetRowByID(ctx context.Context, id string) (*models.Pos
 // which would clobber a concurrent AddUsedAssetIDs/RemoveUsedAssetID that landed
 // after the caller's GetByID.
 func (r *postRepository) Update(ctx context.Context, post *models.Post, excludeColumns ...string) error {
+	post.MarkEdited(ctx)
 	q := r.db.NewUpdate().Model(post).WherePK()
 	if len(excludeColumns) > 0 {
 		q = q.ExcludeColumn(excludeColumns...)
@@ -457,10 +458,10 @@ func (r *postRepository) mutateUsedAssets(ctx context.Context, id, setExpr strin
 		if changes(current.UsedAssetIDs) && current.Status.IsSubmitted() {
 			return &PostSubmittedError{Status: current.Status}
 		}
-		res, err := tx.NewUpdate().
+		res, err := setEditor(ctx, tx.NewUpdate().
 			Model((*models.Post)(nil)).
 			Set(setExpr, arg).
-			Set("updated_at = ?", time.Now().UTC()).
+			Set("updated_at = ?", time.Now().UTC())).
 			Where("po.id = ?", id).
 			Exec(ctx)
 		if err != nil {
@@ -498,12 +499,12 @@ func (r *postRepository) UpdateScheduledAtBatch(ctx context.Context, posts []*mo
 		// no row, and the row-count check fails the whole transaction rather
 		// than clobbering a schedule that moved out from under us.
 		values := tx.NewValues(&posts).Column("id", "scheduled_at", "updated_at")
-		res, err := tx.NewUpdate().
+		res, err := setEditor(ctx, tx.NewUpdate().
 			With("_data", values).
 			Model((*models.Post)(nil)).
 			TableExpr("_data").
 			Set("scheduled_at = _data.scheduled_at").
-			Set("updated_at = _data.updated_at").
+			Set("updated_at = _data.updated_at")).
 			Where("po.id = _data.id").
 			Where("po.status IN (?)", bun.List([]models.PostStatus{
 				models.PostStatusPlanned, models.PostStatusDraft, models.PostStatusReadyForPublish,
@@ -549,12 +550,12 @@ func (r *postRepository) MoveScheduledAt(ctx context.Context, moves []ScheduleMo
 	}
 	// The TenantScoped hook adds the tenant predicate; the status and
 	// scheduled_at guards skip a post scheduled, published or moved since.
-	_, err := r.db.NewUpdate().
+	_, err := setEditor(ctx, r.db.NewUpdate().
 		With("_data", r.db.NewValues(&rows)).
 		Model((*models.Post)(nil)).
 		TableExpr("_data").
 		Set("scheduled_at = _data.to_at").
-		Set("updated_at = ?", now).
+		Set("updated_at = ?", now)).
 		Where("po.id = _data.id").
 		Where("po.scheduled_at IS NOT DISTINCT FROM _data.from_at").
 		Where("po.status IN (?)", bun.List([]models.PostStatus{

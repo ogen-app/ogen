@@ -197,10 +197,10 @@ func (st *turnState) unresolve(id string) {
 
 // markStale records that the offer id answered this turn ran nothing,
 // because of changes; replacedBy is the fresh offer of what still holds.
-func (st *turnState) markStale(id string, changes []string, replacedBy string) {
+func (st *turnState) markStale(id string, changes []assistantkit.Change, replacedBy string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	r := ProposalResolved{ID: id, Status: resolvedStale, Reasons: changes, ReplacedBy: replacedBy}
+	r := ProposalResolved{ID: id, Status: resolvedStale, Reasons: assistantkit.Reasons(changes), Changes: changes, ReplacedBy: replacedBy}
 	if i := slices.IndexFunc(st.resolved, func(r ProposalResolved) bool { return r.ID == id }); i >= 0 {
 		st.resolved[i] = r
 		return

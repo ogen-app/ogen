@@ -192,13 +192,14 @@ func bulkPack(ran *int) Pack {
 					Card: func(_ context.Context, in bulkIn) *assistantkit.Card {
 						return &assistantkit.Card{Verb: fmt.Sprintf("Do %d", in.N)}
 					},
-					Recheck: func(_ context.Context, in bulkIn) (bulkIn, []string, error) {
+					Recheck: func(_ context.Context, in bulkIn) (bulkIn, []assistantkit.Change, error) {
 						switch in.N {
 						case shrunkBulk:
 							in.N = 5
-							return in, []string{"10 of the things were deleted"}, nil
+							return in, []assistantkit.Change{{Reason: "10 of the things were deleted", Code: assistantkit.ChangeDeleted, Item: "thing", Count: 10, Of: 15,
+								By: []models.ChangedBy{{UserID: "u2", Name: "Marta", Count: 10}}}}, nil
 						case vanishedBulk:
-							return in, []string{"all the things were deleted"}, assistantkit.Refused("none of those things exist any more")
+							return in, []assistantkit.Change{{Reason: "all the things were deleted", Code: assistantkit.ChangeDeleted}}, assistantkit.Refused("none of those things exist any more")
 						}
 						return in, nil, nil
 					},
@@ -545,6 +546,12 @@ func TestProposals_AnswerFromTheCardReoffersWhatStillHolds(t *testing.T) {
 	if len(resolved) != 1 || !slices.Equal(resolved[0].Reasons, want.Reasons) || resolved[0].Status != want.Status || resolved[0].ReplacedBy != fresh ||
 		len(resp.Resolved) != 1 || resp.Resolved[0].ReplacedBy != fresh {
 		t.Fatalf("resolved = %+v, in the response %+v; want %+v", resolved, resp.Resolved, want)
+	}
+	// Beside the words, the facts: what happened, to how many, and who did it,
+	// read back through the run's result.
+	if ch := resolved[0].Changes; len(ch) != 1 || ch[0].Code != assistantkit.ChangeDeleted || ch[0].Count != 10 || ch[0].Of != 15 ||
+		!slices.Equal(ch[0].By, []models.ChangedBy{{UserID: "u2", Name: "Marta", Count: 10}}) {
+		t.Fatalf("changes = %+v", ch)
 	}
 	if !slices.Equal(events, []SSEEventKind{SSEEventProposalCreated, SSEEventProposalResolved, SSEEventComplete}) {
 		t.Fatalf("events = %v", events)

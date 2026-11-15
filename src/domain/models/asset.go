@@ -135,8 +135,11 @@ type Asset struct {
 	// Gist is one sentence of the workspace analysis, hydrated by the handler;
 	// nil unless the workspace lens is ready and has a gist or a usable summary
 	// sentence.
-	Gist      *string   `bun:"-" json:"gist" extensions:"x-nullable"`
-	CreatedBy string    `bun:"created_by,notnull"                           json:"created_by"`
+	Gist      *string `bun:"-" json:"gist" extensions:"x-nullable"`
+	CreatedBy string  `bun:"created_by,notnull"                           json:"created_by"`
+	// UpdatedBy is the member who last changed the asset; empty until one
+	// does. A job's write leaves it as it was.
+	UpdatedBy string    `bun:"updated_by,nullzero"                          json:"updated_by,omitempty"`
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 }
