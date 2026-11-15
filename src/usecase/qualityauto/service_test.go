@@ -66,7 +66,7 @@ func (f fakeTenants) GetStatus(_ context.Context, id string) (string, error) {
 var now = time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 
 func newService(q *fakeQueue, tenants TenantStatusReader, enabled bool) *Service {
-	s := New(q, tenants, Config{Enabled: enabled, ReadyDelay: time.Minute, VersionDelay: 10 * time.Minute})
+	s := New(q, tenants, Config{Enabled: enabled, ReadyDelay: time.Minute, VersionDelay: 10 * time.Minute, DraftedDelay: 30 * time.Second})
 	s.now = func() time.Time { return now }
 	return s
 }
@@ -79,8 +79,9 @@ func TestScheduleDelays(t *testing.T) {
 	s.Schedule(t.Context(), post, models.QualityTriggerReady)
 	s.Schedule(t.Context(), post, models.QualityTriggerVersion)
 	s.Schedule(t.Context(), post, models.QualityTriggerScheduled)
+	s.Schedule(t.Context(), post, models.QualityTriggerDrafted)
 
-	want := []time.Duration{time.Minute, 10 * time.Minute, 0}
+	want := []time.Duration{time.Minute, 10 * time.Minute, 0, 30 * time.Second}
 	if len(q.scheduled) != len(want) {
 		t.Fatalf("scheduled %d, want %d", len(q.scheduled), len(want))
 	}

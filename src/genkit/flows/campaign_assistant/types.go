@@ -16,6 +16,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 	"github.com/ogen-app/ogen/src/usecase/notify"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 // CampaignAssistantResponse is what the campaign pack's tools did in a turn,
@@ -146,7 +147,9 @@ type DraftPostResult struct {
 }
 
 // DraftedRow is one drafted post as its card lists it. Date is its publish
-// day (YYYY-MM-DD), empty for a draft left off the calendar.
+// day (YYYY-MM-DD), empty for a draft left off the calendar. A new draft
+// has no score yet: it is queued for one, which arrives as
+// assessment.completed {postId, overallPct} on entity:post:<id>.
 type DraftedRow struct {
 	ID         string `json:"id"`
 	Title      string `json:"title"`
@@ -273,6 +276,10 @@ type CampaignAssistantFlowConfig struct {
 	// DeletePost deletes a post with its files, for the budget guard's
 	// "replace the weakest drafts"; nil leaves that option out.
 	DeletePost func(ctx context.Context, post *models.Post, actor string) (bool, error)
+	// QualityAuto queues each draft draftPost writes for scoring; the score
+	// reaches the client as assessment.completed on entity:post:<id>. nil
+	// queues none.
+	QualityAuto *qualityauto.Service
 	// CancelPost withdraws a scheduled post from publishing, for a platform
 	// removal that waits on it; nil offers no unschedule.
 	CancelPost func(ctx context.Context, postID, actor string) error

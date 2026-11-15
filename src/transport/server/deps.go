@@ -252,6 +252,7 @@ func (d *deps) initJobs(ctx context.Context) error {
 		Enabled:      d.cfg.QualityAutoEnabled,
 		ReadyDelay:   d.cfg.QualityAutoReadyDelay,
 		VersionDelay: d.cfg.QualityAutoVersionDelay,
+		DraftedDelay: d.cfg.QualityAutoDraftedDelay,
 	})
 	return nil
 }
