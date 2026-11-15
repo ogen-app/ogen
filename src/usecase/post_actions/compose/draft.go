@@ -171,14 +171,6 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 		return nil, fmt.Errorf("%w: %d posts asked for, at most %d", ErrTooManyDrafts, len(groups)*len(platforms), maxPosts)
 	}
 
-	date := in.TargetDate
-	if date == nil {
-		date = plan.TargetDate
-	}
-	var window string
-	if date != nil {
-		window = date.String()
-	}
 	phase := cmp.Or(in.PhaseID, deref(plan.PhaseID))
 	out := &DraftPlan{Ideas: ideas}
 	for _, group := range groups {
@@ -189,6 +181,13 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 		series, err := s.seriesOf(ctx, group)
 		if err != nil {
 			return nil, err
+		}
+		// Each group is dated by its own plan, else by the first plan that
+		// sets a date; a date the call asked for dates them all.
+		planned := cmp.Or(firstPlan(group, campaign.ID).TargetDate, plan.TargetDate)
+		var window string
+		if date := cmp.Or(in.TargetDate, planned); date != nil {
+			window = date.String()
 		}
 		for _, p := range platforms {
 			req := DraftRequest{
@@ -206,9 +205,9 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 			}
 			if series != nil {
 				req.SeriesID, req.ContentFormat = series.id, series.format
-				req.AnyDay = in.TargetDate == nil
+				req.AnyDay = keepsWeekday(group, series, in.TargetDate)
 			}
-			out.Jobs = append(out.Jobs, DraftJob{IdeaIDs: ids, DateFrom: dateFrom(in.TargetDate, plan.TargetDate), Request: req})
+			out.Jobs = append(out.Jobs, DraftJob{IdeaIDs: ids, DateFrom: dateFrom(in.TargetDate, planned), Request: req})
 		}
 	}
 	return out, nil

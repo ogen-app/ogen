@@ -211,3 +211,44 @@ func TestPlanDraft_SeriesIdea(t *testing.T) {
 		t.Fatalf("asked date: %+v, %v", plan.Jobs[0].Request, err)
 	}
 }
+
+// Drafted one by one, each idea is dated by its own plan: two series ideas
+// keep their own Tuesdays, and an undated idea takes the first plan's date
+// without keeping its weekday. A date the call names dates them all.
+func TestPlanDraft_EachIdeaItsOwnDate(t *testing.T) {
+	first, _ := models.ParseCalendarDate("2026-11-03")
+	third, _ := models.ParseCalendarDate("2026-11-17")
+	a := idea("a", "c1", models.IdeaPlan{PlatformID: new("linkedin"), TargetDate: &first})
+	b := idea("b", "c1", models.IdeaPlan{PlatformID: new("linkedin"), TargetDate: &third})
+	a.SeriesID, b.SeriesID = new("s1"), new("s1")
+	undated := idea("u", "c1", models.IdeaPlan{})
+	undated.SeriesID = new("s1")
+	s, _ := draftService(a, b, undated)
+	s.WithSeries(digestSeries())
+
+	plan, err := s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"a", "b", "u"}}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		window string
+		anyDay bool
+	}{{"2026-11-03", true}, {"2026-11-17", true}, {"2026-11-03", false}}
+	for i, w := range want {
+		r := plan.Jobs[i].Request
+		if r.WindowStart != w.window || r.AnyDay != w.anyDay || plan.Jobs[i].DateFrom != DateFromPlan {
+			t.Errorf("job %d: window %s, any day %v, from %q; want %s, %v", i, r.WindowStart, r.AnyDay, plan.Jobs[i].DateFrom, w.window, w.anyDay)
+		}
+	}
+
+	asked, _ := models.ParseCalendarDate("2026-11-20")
+	plan, err = s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"a", "b"}, TargetDate: &asked}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, j := range plan.Jobs {
+		if j.Request.WindowStart != "2026-11-20" || j.Request.AnyDay || j.DateFrom != DateFromAsked {
+			t.Errorf("asked job %d = %+v", i, j)
+		}
+	}
+}

@@ -527,11 +527,17 @@ func (s *postSink) add(ctx context.Context, post DraftPost, pos int) {
 	if !withinCount(len(s.posts), s.expected) {
 		return
 	}
-	// A series post goes on its slot; no other post is of a series, whatever
-	// the model wrote.
+	// A series post goes on the slot at its place in the model's array, the
+	// one it was written for, so a dropped post leaves only its own slot
+	// empty; a post past the last slot has none. No other post is of a
+	// series, whatever the model wrote.
 	post.SeriesID = nil
-	if len(s.posts) < len(s.slots) {
-		s.slots[len(s.posts)].place(&post)
+	if s.slots != nil {
+		if pos >= len(s.slots) {
+			emit(s.onEvent, SSEEventWarning, WarningPayload{Message: fmt.Sprintf("post %q dropped: the series has no slot left for it", post.Title)})
+			return
+		}
+		s.slots[pos].place(&post)
 	}
 	if err := s.gen.validate(post); err != nil {
 		emit(s.onEvent, SSEEventWarning, WarningPayload{Message: fmt.Sprintf("post %q dropped: %s", post.Title, err)})

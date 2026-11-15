@@ -277,6 +277,19 @@ func TestBuild_SeriesIdea(t *testing.T) {
 		t.Fatalf("asked date scheduled on %s; want it snapped to Wednesday", got)
 	}
 
+	// A plain idea's date ahead of the series idea is the plan's date, and it
+	// snaps: only a date the series idea set keeps its weekday.
+	sunday, _ := models.ParseCalendarDate("2026-11-15")
+	dated := idea("d", "c1", models.IdeaPlan{PlatformID: new("linkedin"), TargetDate: &sunday})
+	mixed := []models.Idea{dated, reserved}
+	post, err = s.build(Input{}, targets[0], mixed, c, series)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := post.ScheduledAt.Format(time.DateOnly); got != "2026-11-16" || post.SeriesID == nil {
+		t.Fatalf("plain idea's Sunday scheduled on %s (series %v); want it snapped to Monday", got, post.SeriesID)
+	}
+
 	// A deleted series, or no series idea, stamps nothing.
 	gone := reserved
 	gone.SeriesID = new("deleted")

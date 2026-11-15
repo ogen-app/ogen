@@ -213,18 +213,18 @@ func TestPostSink_PlacesSeriesPosts(t *testing.T) {
 		{SeriesID: "s1", Date: "2026-11-03", PlatformID: "x", PhaseID: "early"},
 		{SeriesID: "s1", Date: "2026-11-17", PlatformID: "linkedin", PhaseID: "late"},
 	}
+	// Each post goes on the slot at its array position: a dropped first post
+	// leaves its slot empty instead of pulling the next post onto it, and a
+	// post past the last slot is dropped.
 	sink := &postSink{gen: gen, expected: 2, slots: slots, persisted: map[int]bool{}}
 	sink.add(t.Context(), DraftPost{Title: "dropped", ContentType: "bad"}, 0)
-	sink.add(t.Context(), DraftPost{Title: "one", PublishDate: "2026-11-05", PlatformID: "linkedin", PhaseID: "late"}, 1)
-	sink.add(t.Context(), DraftPost{Title: "two"}, 2)
-	if len(saved) != 2 {
+	sink.add(t.Context(), DraftPost{Title: "second", PublishDate: "2026-11-05", PlatformID: "x", PhaseID: "early"}, 1)
+	sink.add(t.Context(), DraftPost{Title: "extra"}, 2)
+	if len(saved) != 1 || saved[0].Title != "second" {
 		t.Fatalf("saved = %+v", saved)
 	}
-	for i, p := range saved {
-		s := slots[i]
-		if p.PublishDate != s.Date || p.PlatformID != s.PlatformID || p.PhaseID != s.PhaseID || p.SeriesID == nil || *p.SeriesID != "s1" {
-			t.Errorf("post %d = %+v, want on slot %+v", i, p, s)
-		}
+	if p, s := saved[0], slots[1]; p.PublishDate != s.Date || p.PlatformID != s.PlatformID || p.PhaseID != s.PhaseID || p.SeriesID == nil || *p.SeriesID != "s1" {
+		t.Errorf("post = %+v, want on slot %+v", p, s)
 	}
 
 	saved = nil
