@@ -280,8 +280,12 @@ func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
 		!slices.Equal(resp.Touched, []assistantkit.Touched{{Kind: "thing"}}) {
 		t.Fatalf("ran = %d, status = %s, events = %v, touched = %v", *ran, store.rows[0].Status, events, resp.Touched)
 	}
-	if o := store.rows[0].Outcome; o == nil || o.Text != "Done: Do 5 things" {
+	if o := store.rows[0].Outcome; o == nil || o.Text != "Done: Do 5 things" || !o.Rechecked {
 		t.Fatalf("a chat yes's outcome = %+v", o)
+	}
+	// It was checked again before it ran, and nothing had changed.
+	if len(resp.Resolved) != 1 || resp.Resolved[0].Status != string(models.ProposalConfirmed) || !resp.Resolved[0].Rechecked {
+		t.Fatalf("resolved = %+v", resp.Resolved)
 	}
 
 	// A second yes finds it answered.
@@ -624,7 +628,7 @@ func TestProposals_ConfirmInChatStale(t *testing.T) {
 	if err != nil || *ran != 0 {
 		t.Fatalf("err = %v, ran = %d", err, *ran)
 	}
-	if len(resp.Resolved) != 1 || resp.Resolved[0].Status != resolvedStale || resp.Resolved[0].ReplacedBy == "" || store.rows[0].Status != models.ProposalPending {
+	if len(resp.Resolved) != 1 || resp.Resolved[0].Status != resolvedStale || resp.Resolved[0].ReplacedBy == "" || resp.Resolved[0].Rechecked || store.rows[0].Status != models.ProposalPending {
 		t.Fatalf("resolved = %+v, row = %+v", resp.Resolved, store.rows[0])
 	}
 }

@@ -208,6 +208,16 @@ func (st *turnState) markStale(id string, changes []string, replacedBy string) {
 	st.resolved = append(st.resolved, r)
 }
 
+// markRechecked records that the offer id confirmed this turn was checked
+// again before it ran, and held.
+func (st *turnState) markRechecked(id string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if i := slices.IndexFunc(st.resolved, func(r ProposalResolved) bool { return r.ID == id }); i >= 0 {
+		st.resolved[i].Rechecked = true
+	}
+}
+
 // resolvedAs is how the offer id was answered this turn; "" when it wasn't.
 func (st *turnState) resolvedAs(id string) string {
 	st.mu.Lock()
