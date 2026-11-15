@@ -24,12 +24,21 @@ type Service struct {
 	posts     repository.PostRepository
 	postLogs  repository.PostLogRepository
 	campaigns repository.CampaignRepository
+	deletions Deletions
 	now       func() time.Time
 }
 
-// New builds a Service.
-func New(posts repository.PostRepository, postLogs repository.PostLogRepository, campaigns repository.CampaignRepository) *Service {
-	return &Service{posts: posts, postLogs: postLogs, campaigns: campaigns, now: time.Now}
+// Deletions reads the posts deleted in a span, newest first;
+// repository.ActivityRepository satisfies it. A deleted post's row is gone,
+// so its activity event is the only record of it.
+type Deletions interface {
+	DeletedPostsBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]repository.DeletedPost, error)
+}
+
+// New builds a Service. deletions may be nil, when activity collection is
+// off; every count of deleted posts is then zero.
+func New(posts repository.PostRepository, postLogs repository.PostLogRepository, campaigns repository.CampaignRepository, deletions Deletions) *Service {
+	return &Service{posts: posts, postLogs: postLogs, campaigns: campaigns, deletions: deletions, now: time.Now}
 }
 
 // Report computes the full single-day report for `date` in `tz`, optionally for
@@ -135,21 +144,21 @@ func (s *Service) requireCampaign(ctx context.Context, campaignID string) error 
 	return nil
 }
 
-// loadInputs pulls the four streams for the window [from, to). limit 0 = no cap
+// loadInputs pulls the streams for the window [from, to). limit 0 = no cap
 // (single-day). Used by Report.
 func (s *Service) loadInputs(ctx context.Context, from, to time.Time, campaignID string, limit int) (Inputs, error) {
 	in, _, err := s.load(ctx, from, to, campaignID, limit)
 	return in, err
 }
 
-// loadInputsBefore pulls the four streams for [zero, upper), each capped at
+// loadInputsBefore pulls the streams for [zero, upper), each capped at
 // `cap`, and returns the coverage floor: the newest timestamp below which a
 // capped stream may be missing rows (zero if nothing was truncated).
 func (s *Service) loadInputsBefore(ctx context.Context, upper time.Time, campaignID string, rowCap int) (Inputs, time.Time, error) {
 	return s.load(ctx, time.Time{}, upper, campaignID, rowCap)
 }
 
-// load fetches and maps all four streams. When limit > 0 and a stream returns
+// load fetches and maps the streams. When limit > 0 and a stream returns
 // exactly `limit` rows it may be truncated; its oldest returned timestamp raises
 // the coverage floor accordingly.
 func (s *Service) load(ctx context.Context, from, to time.Time, campaignID string, limit int) (Inputs, time.Time, error) {
@@ -163,11 +172,12 @@ func (s *Service) load(ctx context.Context, from, to time.Time, campaignID strin
 		}
 	}
 
-	// The four streams are independent reads; fetch them concurrently.
+	// The streams are independent reads; fetch them concurrently.
 	var (
 		pub     []models.Post
 		failed  []repository.TerminalTransition
 		created []models.Post
+		deleted []repository.DeletedPost
 		camps   []models.Campaign
 	)
 	g, gctx := errgroup.WithContext(ctx)
@@ -183,6 +193,12 @@ func (s *Service) load(ctx context.Context, from, to time.Time, campaignID strin
 		created, err = s.posts.CreatedProjectionBetween(gctx, from, to, campaignID, limit)
 		return err
 	})
+	if s.deletions != nil {
+		g.Go(func() (err error) {
+			deleted, err = s.deletions.DeletedPostsBetween(gctx, from, to, campaignID, limit)
+			return err
+		})
+	}
 	g.Go(func() (err error) {
 		camps, err = s.campaigns.CreatedBetween(gctx, from, to, campaignID, limit)
 		return err
@@ -226,6 +242,14 @@ func (s *Service) load(ctx context.Context, from, to time.Time, campaignID strin
 	}
 	if len(created) > 0 {
 		raise(len(created), created[len(created)-1].CreatedAt)
+	}
+
+	in.Deleted = make([]DeletedRow, 0, len(deleted))
+	for _, d := range deleted {
+		in.Deleted = append(in.Deleted, DeletedRow{At: d.At, PostID: d.PostID})
+	}
+	if len(deleted) > 0 {
+		raise(len(deleted), deleted[len(deleted)-1].At)
 	}
 
 	in.Campaigns = make([]CampaignRow, 0, len(camps))

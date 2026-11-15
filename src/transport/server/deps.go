@@ -261,7 +261,7 @@ func (d *deps) initServices(context.Context) error {
 	d.svc = services{
 		campaignOverview:  overview.New(r.campaignRepo, r.postRepo, r.platformRepo).WithProblems(r.postIdeaRepo, r.dismissalRepo),
 		campaignSummaries: summaries.New(r.postRepo),
-		activityReport:    activityreport.New(r.postRepo, r.postLogRepo, r.campaignRepo),
+		activityReport:    activityreport.New(r.postRepo, r.postLogRepo, r.campaignRepo, d.activity.events),
 		// Deep-copies attachments in object storage so a clone and its source
 		// have independent blob lifecycles.
 		clone:   clone.New(d.db, r.postRepo, r.postVersionRepo, r.postAttachmentRepo, r.platformRepo, r.postLogRepo, d.store, d.hub),
@@ -282,7 +282,7 @@ func (d *deps) initServices(context.Context) error {
 
 	// Deleting a post or campaign withdraws its Zernio copies in the same
 	// transaction.
-	d.svc.withdraw = withdraw.New(d.db, r.postRepo, r.campaignRepo, r.postLogRepo, d.enqueuer)
+	d.svc.withdraw = withdraw.New(d.db, r.postRepo, r.campaignRepo, r.postLogRepo, d.enqueuer, d.activity.recorder)
 
 	d.analytics = handlers.NewAnalyticsHandler(r.postAnalyticsRepo, r.followerStatsRepo, r.postRepo, r.platformRepo, r.socialAccountRepo, r.campaignRepo, d.zernio.Integration.Client, d.zernioProfileID, d.auth)
 

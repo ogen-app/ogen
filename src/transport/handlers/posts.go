@@ -1471,7 +1471,6 @@ func (h *PostsHandler) Delete(c *fiber.Ctx) error {
 	if !deleted {
 		return fiber.NewError(fiber.StatusNotFound, "post not found")
 	}
-	h.recordActivity(c, "post_deleted", activity.WithEntity("post", post.ID))
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -1488,7 +1487,7 @@ func (h *PostsHandler) deletePost(c *fiber.Ctx, post *models.Post) (bool, error)
 	if h.withdraw == nil {
 		return h.repo.Delete(reqCtx(c), post.ID)
 	}
-	return h.withdraw.DeletePost(reqCtx(c), post, cmp.Or(actorID(c), models.ActorSystem))
+	return h.withdraw.DeletePost(reqCtx(c), post, cmp.Or(actorID(c), models.ActorSystem), activity.SourceAPI)
 }
 
 // ── Versions ─────────────────────────────────────────────────────────────────

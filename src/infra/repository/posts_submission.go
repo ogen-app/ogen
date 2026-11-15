@@ -97,15 +97,15 @@ func (r *postRepository) ListByPublisherPostIDs(ctx context.Context, ids []strin
 }
 
 // DeleteTx hard-deletes one post on db, which may be a transaction, and returns
-// its id, tenant_id, status and publisher_post_id as they were at the moment of
-// the delete, or nil when no such post exists. Callers decide what the delete
-// orphans from this row, not from an earlier read a concurrent schedule or
-// publish may have overtaken.
+// its id, tenant_id, campaign_id, platform_id, status and publisher_post_id as
+// they were at the moment of the delete, or nil when no such post exists.
+// Callers decide what the delete orphans from this row, not from an earlier
+// read a concurrent schedule or publish may have overtaken.
 func (r *postRepository) DeleteTx(ctx context.Context, db bun.IDB, id string) (*models.Post, error) {
 	var deleted []models.Post
 	err := db.NewDelete().Model(&deleted).
 		Where("id = ?", id).
-		Returning("id, tenant_id, status, publisher_post_id").
+		Returning("id, tenant_id, campaign_id, platform_id, status, publisher_post_id").
 		Scan(ctx)
 	if err != nil {
 		return nil, err

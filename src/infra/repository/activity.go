@@ -21,6 +21,20 @@ type ActivityRepository interface {
 	// CountDistinctUsers counts the members of tenantID who did anything in
 	// [from, to). System and background events carry no user and don't count.
 	CountDistinctUsers(ctx context.Context, tenantID string, from, to time.Time) (int, error)
+	// DeletedPostsBetween lists the posts deleted in [from, to), newest
+	// first, at most limit (0 = all), optionally those of one campaign.
+	DeletedPostsBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]DeletedPost, error)
+}
+
+// ActivityPostDeleted is the type of the post-category event a post's
+// delete records. Its payload carries the post's campaign_id, which is how
+// a campaign's deletes are counted once the post row is gone.
+const ActivityPostDeleted = "post_deleted"
+
+// DeletedPost is one post's delete.
+type DeletedPost struct {
+	PostID string    `bun:"entity_id"`
+	At     time.Time `bun:"occurred_at"`
 }
 
 type activityRepository struct {
@@ -50,6 +64,26 @@ func (r *activityRepository) CountDistinctUsers(ctx context.Context, tenantID st
 		Where("user_id IS NOT NULL AND user_id <> ''").
 		Scan(ctx, &n)
 	return n, err
+}
+
+// DeletedPostsBetween reads in the caller's tenant: the model's scoping hook
+// adds its tenant_id.
+func (r *activityRepository) DeletedPostsBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]DeletedPost, error) {
+	out := []DeletedPost{}
+	q := r.db.NewSelect().Model((*models.ActivityEvent)(nil)).
+		Column("entity_id", "occurred_at").
+		Where("type = ?", ActivityPostDeleted).
+		Where("occurred_at >= ?", from).
+		Where("occurred_at < ?", to).
+		Order("occurred_at DESC")
+	if campaignID != "" {
+		q = q.Where("payload->>'campaign_id' = ?", campaignID)
+	}
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	err := q.Scan(ctx, &out)
+	return out, err
 }
 
 // postLogBackfillPrefix marks tenant_activity_events rows that were migrated from

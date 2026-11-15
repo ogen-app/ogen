@@ -2,6 +2,7 @@ package report
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -277,5 +278,45 @@ func TestComputeRange(t *testing.T) {
 	}
 	if len(r.Days) != 2 || r.Days[0].Date != "2026-03-02" || r.Days[1].Date != "2026-03-05" || r.Days[1].FailedTotal != 1 {
 		t.Fatalf("days = %+v", r.Days)
+	}
+}
+
+// A range over 14 days is also listed by Monday-to-Sunday week in its zone,
+// the first and last weeks clipped to it and empty weeks kept; a week counts
+// the posts created with a time as scheduled. A DST day stays in its week.
+func TestComputeRange_Weeks(t *testing.T) {
+	loc := mustLoad(t, "America/New_York")
+	w, err := rangeWindow("2026-03-04", "2026-03-31", loc) // Wednesday to Tuesday; DST starts 8 March
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(day, hour, minute int) time.Time { return time.Date(2026, 3, day, hour, minute, 0, 0, loc) }
+	in := Inputs{
+		Published: []PublishedRow{{At: at(8, 23, 30), PlatformID: "x"}, {At: at(9, 0, 30), PlatformID: "x"}},
+		Failed:    []FailedRow{{At: at(31, 12, 0), PostID: "p1", PlatformID: "x"}},
+		Created:   []CreatedRow{{At: at(16, 9, 0), Scheduled: true}, {At: at(16, 10, 0)}},
+		Deleted:   []DeletedRow{{At: at(10, 9, 0), PostID: "p2"}, {At: at(3, 9, 0), PostID: "p3"}},
+	}
+	r := computeRange(in, "2026-03-04", "2026-03-31", "America/New_York", w, loc)
+	want := []Week{
+		{From: "2026-03-04", To: "2026-03-08", Published: 1},
+		{From: "2026-03-09", To: "2026-03-15", Published: 1, Deleted: 1},
+		{From: "2026-03-16", To: "2026-03-22", Scheduled: 1},
+		{From: "2026-03-23", To: "2026-03-29"},
+		{From: "2026-03-30", To: "2026-03-31", Failed: 1},
+	}
+	if !slices.Equal(r.Weeks, want) {
+		t.Fatalf("weeks = %+v\nwant %+v", r.Weeks, want)
+	}
+	if r.Deleted.Total != 1 {
+		t.Fatalf("deleted = %d, want the one in the range", r.Deleted.Total)
+	}
+	if i := slices.IndexFunc(r.Days, func(d ListItem) bool { return d.Date == "2026-03-10" }); i < 0 || r.Days[i].DeletedTotal != 1 {
+		t.Fatalf("days = %+v, want 10 March with its delete", r.Days)
+	}
+
+	w, _ = rangeWindow("2026-03-02", "2026-03-15", loc)
+	if r := computeRange(in, "2026-03-02", "2026-03-15", "America/New_York", w, loc); r.Weeks != nil {
+		t.Fatalf("14 days has weeks %+v", r.Weeks)
 	}
 }

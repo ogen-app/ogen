@@ -14,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/jobs/queues"
+	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/assets"
@@ -359,7 +360,7 @@ func (r postRemover) Delete(ctx context.Context, post *models.Post, actor string
 	if err := r.blobs(ctx, post.ID); err != nil {
 		return false, err
 	}
-	return r.withdraw.DeletePost(ctx, post, actor)
+	return r.withdraw.DeletePost(ctx, post, actor, activity.SourceAssistant)
 }
 
 func (r postRemover) Cancel(ctx context.Context, postID, actor string) error {

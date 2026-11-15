@@ -15,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs/queues"
+	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 )
 
@@ -29,18 +30,20 @@ type Enqueuer interface {
 }
 
 // Service deletes posts and campaigns. DB and Jobs are required for the
-// Zernio side; Logs is optional (nil skips the audit entries).
+// Zernio side; Logs is optional (nil skips the audit entries), and so is
+// Activity (a nil recorder records nothing).
 type Service struct {
 	db        *bun.DB
 	posts     repository.PostRepository
 	campaigns repository.CampaignRepository
 	logs      repository.PostLogRepository
 	jobs      Enqueuer
+	activity  *activity.Recorder
 }
 
 // New builds the service.
-func New(db *bun.DB, posts repository.PostRepository, campaigns repository.CampaignRepository, postLogs repository.PostLogRepository, jobs Enqueuer) *Service {
-	return &Service{db: db, posts: posts, campaigns: campaigns, logs: postLogs, jobs: jobs}
+func New(db *bun.DB, posts repository.PostRepository, campaigns repository.CampaignRepository, postLogs repository.PostLogRepository, jobs Enqueuer, rec *activity.Recorder) *Service {
+	return &Service{db: db, posts: posts, campaigns: campaigns, logs: postLogs, jobs: jobs, activity: rec}
 }
 
 // DeletePost deletes post and, when it is scheduled with a copy queued in
@@ -56,11 +59,15 @@ func New(db *bun.DB, posts repository.PostRepository, campaigns repository.Campa
 // schedule or publish landing after the caller loaded post would otherwise go
 // unseen, and the delete would leave its Zernio copy queued or drop a live
 // post.
-func (s *Service) DeletePost(ctx context.Context, post *models.Post, actor string) (bool, error) {
+//
+// A delete records a post_deleted activity event, from source (see the
+// activity.Source* constants), naming the post's campaign: with the row gone,
+// it is how the activity report counts the deletes.
+func (s *Service) DeletePost(ctx context.Context, post *models.Post, actor, source string) (bool, error) {
 	if post.Status == models.PostStatusPublished {
 		return false, ErrPublished
 	}
-	var deleted bool
+	var removed *models.Post
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		row, err := s.posts.DeleteTx(ctx, tx, post.ID)
 		if err != nil || row == nil {
@@ -69,7 +76,7 @@ func (s *Service) DeletePost(ctx context.Context, post *models.Post, actor strin
 		if row.Status == models.PostStatusPublished {
 			return ErrPublished // rolls the delete back
 		}
-		deleted = true
+		removed = row
 		if row.Status != models.PostStatusScheduled || row.PublisherPostID == "" {
 			return nil
 		}
@@ -81,10 +88,13 @@ func (s *Service) DeletePost(ctx context.Context, post *models.Post, actor strin
 			Actor:           actor,
 		})
 	})
-	if err != nil {
+	if err != nil || removed == nil {
 		return false, err
 	}
-	return deleted, nil
+	s.activity.Record(ctx, activity.CategoryPost, repository.ActivityPostDeleted,
+		activity.WithSource(source), activity.WithEntity("post", removed.ID), activity.WithStatus(string(removed.Status)),
+		activity.WithPayload(map[string]any{"campaign_id": removed.CampaignID, "platform_id": removed.PlatformID}))
+	return true, nil
 }
 
 // DeleteCampaign soft-deletes the campaign and unschedules its posts: each
