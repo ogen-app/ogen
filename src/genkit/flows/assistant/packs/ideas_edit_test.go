@@ -100,6 +100,38 @@ func TestFindIdeas_PileTotal(t *testing.T) {
 	}
 }
 
+// A filter's source assets, campaigns and authors come back named, the
+// excluded ones marked; none, and an id that is gone, are left out, and a
+// filter naming nothing names nothing.
+func TestFindIdeas_NamesTheFilter(t *testing.T) {
+	d, repo, _ := ideaDeps()
+	d.Ideas = ideas.New(pileRepo{repo}, nil)
+	d.Assets = memAssets{all: []models.Asset{{ID: "a1", Title: "Brochure", Type: new("PDF")}, {ID: "a2", Title: "Press kit"}}}
+	d.Campaigns = &memCampaigns{c: &models.Campaign{ID: "c1", Name: "Spring reopening"}}
+	d.Users = memUsers{}
+	ctx, _ := turn(t, workspace, nil)
+	out, err := findIdeas(ctx, d, FindIdeasInput{Filter: "pile=waiting&source_asset=a1&source_asset=gone&source_asset=none&source_asset_not=a2" +
+		"&campaign_id=c1&campaign_id=none&author=u1&author=u9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := out.Named
+	if n == nil {
+		t.Fatal("a filter naming assets, a campaign and an author names nothing")
+	}
+	if !slices.Equal(n.SourceAssets, []NamedValue{{ID: "a1", Title: "Brochure", Type: "PDF"}, {ID: "a2", Title: "Press kit", Excluded: true}}) {
+		t.Fatalf("assets = %+v", n.SourceAssets)
+	}
+	if !slices.Equal(n.Campaigns, []NamedValue{{ID: "c1", Title: "Spring reopening"}}) || !slices.Equal(n.Authors, []NamedValue{{ID: "u1", Title: "Olena"}}) {
+		t.Fatalf("campaigns = %+v, authors %+v", n.Campaigns, n.Authors)
+	}
+	for _, filter := range []string{"pile=waiting&text=spa", "source_asset=none", "source_asset=gone"} {
+		if out, err = findIdeas(ctx, d, FindIdeasInput{Filter: filter}); err != nil || out.Named != nil {
+			t.Fatalf("%s names %+v, %v", filter, out.Named, err)
+		}
+	}
+}
+
 // pileRepo matches 6 ideas to a text filter and 14 without one.
 type pileRepo struct{ *memIdeaRepo }
 

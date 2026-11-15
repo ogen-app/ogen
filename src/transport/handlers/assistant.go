@@ -122,7 +122,9 @@ type assistantTurnRequest struct {
 // @Description  by,byId,source}],more,note}; setAutoPublish {done,autoPublish,undoId}; openConnect {done,note}.
 // @Description  The ideas pack's, where an idea is {id,title,verdict,remindAt,origin,campaignId,fitScore,plan,posts} (remindAt: when a
 // @Description  later idea comes back; once past, it is woken and counts as undecided though its verdict stays later) and grounding
-// @Description  {mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total,pileTotal (the filter's pile with no other filter; absent without a pile)}; setIdeaVerdict {idea,undoId};
+// @Description  {mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total,pileTotal (the filter's pile with no other filter; absent without a pile),
+// @Description  named{sourceAssets[{id,title,type,excluded}],campaigns[{id,title,excluded}],authors[{id,title,excluded}]} (what the filter's source_asset,
+// @Description  campaign_id and author values are called, kept ones first, excluded (a _not value) after; none and gone ids left out; absent when it names none)}; setIdeaVerdict {idea,undoId};
 // @Description  setIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,ideas,verdict,remindAt,undoId}: ideas are the ideas a
 // @Description  triage or move changed, as they are now (none for a delete); verdict (yes|later|no|none), remindAt and undoId are a triage's;
 // @Description  compileIdeas {postId,title,status,campaignId,platformId,postType,date,dateFrom,posts,ideas,builtFrom,theses,grounding,undoId} (posts: each
@@ -131,7 +133,7 @@ type assistantTurnRequest struct {
 // @Description  ideas the count, builtFrom [{id,title}] the ideas in their theses' order, theses [{title,points}] every post's, one per idea); draftIdeas
 // @Description  {posts[{postId,title,platformId,postType,publishDate (none when unscheduled),dateFrom (asked|plan, none when unscheduled),excerpt,campaignId,ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
 // @Description  rationale,sources,fit{score,lens,campaignId,criteria[{key,question,weight,level,means,why,phase,campaign}],
-// @Description  caps[{cap,meaning}]},sourceAsset{id,title},analysis{id,lens,gist,summary},posts,author,createdAt,explain};
+// @Description  caps[{cap,meaning}]},sourceAsset{id,title,type (PDF|DOC|MD|URL|IMG|AUDIO),chunkId,label,page,pageEnd,slide,startMs,endMs},analysis{id,lens,gist,summary},posts,author,createdAt,explain};
 // @Description  ideasInCommon {ideas[{id,title,angle}],missing,theme,angle,assets,campaigns,origins,lenses,platforms,postTypes,phases,
 // @Description  terms,splits}, each list [{value,label,ideaIds}]; theme (a few words) and angle (a sentence) word the thread they share,
 // @Description  absent when none could be worded; lenses are the analysis lens each idea was read and scored in ("workspace" or a campaign);

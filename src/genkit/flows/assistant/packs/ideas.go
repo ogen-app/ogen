@@ -186,11 +186,33 @@ type IdeaRef struct {
 
 // FindIdeasOutput is one page of matches. PileTotal counts the pile the
 // filter names with no other filter, for "6 of 14 undecided"; it is absent
-// for a filter that names no pile.
+// for a filter that names no pile. Named names the assets, campaigns and
+// authors the filter names, for "6 undecided from the brochure"; it is
+// absent for a filter that names none.
 type FindIdeasOutput struct {
-	Ideas     []IdeaRef `json:"ideas"`
-	Total     int       `json:"total"`
-	PileTotal *int      `json:"pileTotal,omitempty"`
+	Ideas     []IdeaRef    `json:"ideas"`
+	Total     int          `json:"total"`
+	PileTotal *int         `json:"pileTotal,omitempty"`
+	Named     *FilterNames `json:"named,omitempty"`
+}
+
+// FilterNames is what a filter's source_asset, campaign_id and author
+// values are called, each in the filter's order with the excluded ones
+// after. A value that is gone, or none, is left out.
+type FilterNames struct {
+	SourceAssets []NamedValue `json:"sourceAssets,omitempty"`
+	Campaigns    []NamedValue `json:"campaigns,omitempty"`
+	Authors      []NamedValue `json:"authors,omitempty"`
+}
+
+// NamedValue is one value a filter names: its id, its title (an author's
+// name), and an asset's stored type. Excluded marks a value the filter
+// leaves out, as source_asset_not does.
+type NamedValue struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Type     string `json:"type,omitempty"`
+	Excluded bool   `json:"excluded,omitzero"`
 }
 
 func findIdeas(ctx context.Context, d Deps, in FindIdeasInput) (*FindIdeasOutput, error) {
@@ -225,7 +247,68 @@ func findIdeas(ctx context.Context, d Deps, in FindIdeasInput) (*FindIdeasOutput
 		}
 		out.PileTotal = &pile.Total
 	}
+	out.Named = filterNames(ctx, d, q)
 	return out, nil
+}
+
+// filterNames names the values q's source asset, campaign and author
+// filters hold; nil when it names none. A name that can't be read is left
+// out rather than failing the find.
+func filterNames(ctx context.Context, d Deps, q models.IdeaQuery) *FilterNames {
+	var n FilterNames
+	if ids := filterIDs(q.SourceAsset); len(ids) > 0 && d.Assets != nil {
+		if metas, err := d.Assets.ListMeta(ctx, ids); err == nil {
+			names := make(map[string]NamedValue, len(metas))
+			for _, m := range metas {
+				names[m.ID] = NamedValue{ID: m.ID, Title: m.Title, Type: deref(m.Type)}
+			}
+			n.SourceAssets = nameValues(q.SourceAsset, names)
+		}
+	}
+	if ids := filterIDs(q.Campaign); len(ids) > 0 {
+		counts := make([]models.AssetFacetCount, len(ids))
+		for i, id := range ids {
+			counts[i].Value = id
+		}
+		names := map[string]NamedValue{}
+		for id, name := range campaignNames(ctx, d, counts) {
+			names[id] = NamedValue{ID: id, Title: name}
+		}
+		n.Campaigns = nameValues(q.Campaign, names)
+	}
+	if len(filterIDs(q.Author)) > 0 {
+		names := map[string]NamedValue{}
+		for id, name := range memberNames(ctx, d) {
+			names[id] = NamedValue{ID: id, Title: name}
+		}
+		n.Authors = nameValues(q.Author, names)
+	}
+	if n.SourceAssets == nil && n.Campaigns == nil && n.Authors == nil {
+		return nil
+	}
+	return &n
+}
+
+// filterIDs is the ids f holds, kept and excluded, without none.
+func filterIDs(f models.AssetValueFilter) []string {
+	return slices.DeleteFunc(slices.Concat(f.Any, f.Not), func(v string) bool { return v == models.AssetFilterNone })
+}
+
+// nameValues is f's values that names has, the kept ones first.
+func nameValues(f models.AssetValueFilter, names map[string]NamedValue) []NamedValue {
+	var out []NamedValue
+	for _, side := range []struct {
+		ids      []string
+		excluded bool
+	}{{f.Any, false}, {f.Not, true}} {
+		for _, id := range side.ids {
+			if v, ok := names[id]; ok {
+				v.Excluded = side.excluded
+				out = append(out, v)
+			}
+		}
+	}
+	return out
 }
 
 func ideaRef(i models.Idea) IdeaRef {
