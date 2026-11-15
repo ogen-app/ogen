@@ -426,8 +426,11 @@ type DistillMoreInput struct {
 
 // DistillMoreOutput is whether more ideas were asked for, and what they
 // are grounded in: the asset, through the analysis they are distilled from.
+// RunID is the distill run the ideas come from, the one queued or the one
+// already under way, for the client to read its ideas once it is ready.
 type DistillMoreOutput struct {
 	QueuedOutput
+	RunID     string                 `json:"runId,omitempty"`
 	Grounding assistantkit.Grounding `json:"grounding"`
 }
 
@@ -440,11 +443,11 @@ func distillMore(ctx context.Context, d Deps, in DistillMoreInput) (*DistillMore
 	run, err := d.Analysis.RequestDistill(ctx, assetanalysis.DistillInput{
 		TenantID: tenant, AssetID: in.AssetID, CampaignID: lensCampaign(ctx, in.CampaignID), Focus: in.Focus, Count: in.Count, UserID: &by,
 	})
-	src := assistantkit.Source{ID: in.AssetID}
+	src, runID := assistantkit.Source{ID: in.AssetID}, ""
 	if run != nil {
-		src.AnalysisID = run.AnalysisID
+		src.AnalysisID, runID = run.AnalysisID, run.ID
 	}
-	out := &DistillMoreOutput{Grounding: newAssetTitles(d).grounding(ctx, []assistantkit.Source{src})}
+	out := &DistillMoreOutput{RunID: runID, Grounding: newAssetTitles(d).grounding(ctx, []assistantkit.Source{src})}
 	switch {
 	case errors.Is(err, assetanalysis.ErrDistillInProgress):
 		out.QueuedOutput = QueuedOutput{Queued: false, Note: "more ideas are already being distilled from this asset"}

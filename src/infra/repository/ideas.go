@@ -26,6 +26,8 @@ type IdeaListFilter struct {
 	Origin *models.IdeaOrigin
 	// AssetID keeps only ideas an analysis of this asset produced.
 	AssetID string
+	// DistillRunID keeps only the ideas this distill run added.
+	DistillRunID string
 }
 
 // IdeaRepository persists the workspace Ideas backlog. Every query
@@ -147,6 +149,9 @@ func (r *ideaRepository) List(ctx context.Context, filter IdeaListFilter) ([]mod
 	}
 	if filter.AssetID != "" {
 		q = q.Where("i.source_asset_id = ?", filter.AssetID)
+	}
+	if filter.DistillRunID != "" {
+		q = q.Where("i.distill_run_id = ?", filter.DistillRunID)
 	}
 	if err := q.OrderExpr("i.created_at ASC, i.id ASC").Scan(ctx); err != nil {
 		return nil, err
