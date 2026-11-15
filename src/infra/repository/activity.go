@@ -22,7 +22,9 @@ type ActivityRepository interface {
 	// [from, to). System and background events carry no user and don't count.
 	CountDistinctUsers(ctx context.Context, tenantID string, from, to time.Time) (int, error)
 	// DeletedPostsBetween lists the posts deleted in [from, to), newest
-	// first, at most limit (0 = all), optionally those of one campaign.
+	// first, at most limit (0 = all), optionally those of one campaign. Only
+	// deletes recorded with their campaign count: none from before every
+	// delete recorded one.
 	DeletedPostsBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]DeletedPost, error)
 }
 
@@ -73,6 +75,10 @@ func (r *activityRepository) DeletedPostsBetween(ctx context.Context, from, to t
 	q := r.db.NewSelect().Model((*models.ActivityEvent)(nil)).
 		Column("entity_id", "occurred_at").
 		Where("type = ?", ActivityPostDeleted).
+		// Only the deletes that name their campaign: earlier post_deleted
+		// events came from the REST delete alone and name none, so counting
+		// them would mix a partial record into a complete one.
+		Where("payload->>'campaign_id' IS NOT NULL").
 		Where("occurred_at >= ?", from).
 		Where("occurred_at < ?", to).
 		Order("occurred_at DESC")

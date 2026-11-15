@@ -614,8 +614,8 @@ func TestActivityExtras(t *testing.T) {
 	if err := activityExtras(t.Context(), d, out, "c1", now); err != nil {
 		t.Fatal(err)
 	}
-	if got := []int{out.Weeks[0].IdeasDecided, out.Weeks[1].IdeasDecided, out.Weeks[2].IdeasDecided}; !slices.Equal(got, []int{2, 5, 0}) {
-		t.Fatalf("weeks' ideas decided = %v", got)
+	if got := []int{out.Weeks[0].IdeasDecided, out.Weeks[1].IdeasDecided, out.Weeks[2].IdeasDecided}; !slices.Equal(got, []int{2, 5, 0}) || out.IdeasDecided != 7 {
+		t.Fatalf("weeks' ideas decided = %v, range %d; want the range to be their sum", got, out.IdeasDecided)
 	}
 
 	// Nothing waiting and no campaign leave those out.
