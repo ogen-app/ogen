@@ -436,7 +436,7 @@ type OpenAddSourceOutput struct {
 // says where to go instead.
 func toolOpenAddSource(ctx context.Context, in OpenAddSourceInput) (*OpenAddSourceOutput, error) {
 	st := getRequestState(ctx)
-	if err := assistant.OpenAddSource(ctx, st.campaignID, in.Via); err != nil {
+	if err := assistant.OpenAddSource(ctx, st.campaignID, in.Via, waitingOn(ctx)); err != nil {
 		return &OpenAddSourceOutput{Note: "Open the campaign's Assets tab to upload a document or import a link."}, nil
 	}
 	return &OpenAddSourceOutput{Opened: true, Note: "The campaign's Assets tab is open to upload a document or import a link. Once it is read, the request waiting on it is offered again, drawing on it."}, nil

@@ -99,15 +99,23 @@ func OpenConnect(ctx context.Context, c UIConnect) error {
 
 // OpenAddSource asks the client to open the campaign's Assets tab ready to
 // upload a document or import a link, by via when it names one. The user
-// adds the source.
-func OpenAddSource(ctx context.Context, campaignID string, via AddSourceVia) error {
+// adds the source. Opened from an offer's option, waiting is the request
+// that offer leaves waiting for the source; opened otherwise, nothing waits
+// and waiting is dropped.
+func OpenAddSource(ctx context.Context, campaignID string, via AddSourceVia, waiting *UIWaiting) error {
 	st, err := turnStateFrom(ctx)
 	if err != nil {
 		return err
 	}
 	st.planning.Lock()
 	defer st.planning.Unlock()
-	st.addUI(UIAction{Type: UIOpenAddSource, Screen: "campaign.assets", CampaignID: campaignID, Via: via})
+	a := UIAction{Type: UIOpenAddSource, Screen: "campaign.assets", CampaignID: campaignID, Via: via}
+	if id := assistantkit.OfferID(ctx); id != "" && waiting != nil {
+		w := *waiting
+		w.ProposalID = id
+		a.Waiting = &w
+	}
+	st.addUI(a)
 	return nil
 }
 
