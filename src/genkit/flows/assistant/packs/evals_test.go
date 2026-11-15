@@ -496,7 +496,7 @@ func TestPackEvals(t *testing.T) {
 		},
 		CreateCampaign: &create.Service{}, CampaignTypes: evalTypes{},
 		Posts: postRepo{}, Links: linkRepo{}, Analytics: &analytics.Service{},
-		Brand: brandRepo{}, Series: series.New(nil), Distill: &branddistill.Service{}, Activity: report.New(nil, nil, nil),
+		Brand: brandRepo{}, Series: series.New(nil), Distill: &branddistill.Service{}, Activity: report.New(nil, nil, nil, nil),
 		CheckBrief: func(context.Context, string, consistency.OnEventFunc) (*consistency.BriefReview, error) {
 			return nil, nil
 		},

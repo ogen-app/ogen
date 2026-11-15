@@ -125,7 +125,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		postLogRepo := repository.NewPostLogRepository(db)
 		withdrawals = &recordedWithdrawals{}
-		withdrawSvc := withdraw.New(db, postRepo, campaignRepo, postLogRepo, withdrawals)
+		withdrawSvc := withdraw.New(db, postRepo, campaignRepo, postLogRepo, withdrawals, nil)
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{Withdraw: withdrawSvc}).Register(app)
 		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), nil, nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
 		// Wire the audit log so transition tests can read it back.

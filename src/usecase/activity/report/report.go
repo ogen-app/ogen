@@ -1,7 +1,7 @@
 // Package report computes the Activity daily report: deterministic,
 // stateless per-local-day counts of what happened in a workspace — posts
-// published, posts that failed, posts created, and campaigns created. The
-// Activity UI renders it rather than computing the counts in the browser;
+// published, posts that failed, posts created, posts deleted, and campaigns
+// created. The Activity UI renders it rather than computing the counts in the browser;
 // computing it here is why the endpoints require an explicit IANA tz (the
 // server has no other way to know the caller's local midnight).
 //
@@ -75,19 +75,26 @@ type CreatedRow struct {
 	Scheduled bool
 }
 
+// DeletedRow is one post deleted at At.
+type DeletedRow struct {
+	At     time.Time
+	PostID string
+}
+
 // CampaignRow is one campaign created at At.
 type CampaignRow struct {
 	At         time.Time
 	CampaignID string
 }
 
-// Inputs is the raw material for a report: the four event streams for a tenant
+// Inputs is the raw material for a report: the event streams for a tenant
 // (optionally one campaign) over some time span. computeReport filters to a
 // single day; bucketReports groups the whole span by local day.
 type Inputs struct {
 	Published []PublishedRow
 	Failed    []FailedRow
 	Created   []CreatedRow
+	Deleted   []DeletedRow
 	Campaigns []CampaignRow
 }
 
@@ -154,6 +161,11 @@ type Created struct {
 	ByAuthor       []AuthorCount `json:"by_author"`
 }
 
+// Deleted is the day's tally of deleted posts.
+type Deleted struct {
+	Total int `json:"total"`
+}
+
 // CampaignsCreated is the day's new-campaign tally.
 type CampaignsCreated struct {
 	Total       int      `json:"total"`
@@ -167,6 +179,7 @@ type Report struct {
 	Published        Published        `json:"published"`
 	Failed           Failed           `json:"failed"`
 	Created          Created          `json:"created"`
+	Deleted          Deleted          `json:"deleted"`
 	CampaignsCreated CampaignsCreated `json:"campaigns_created"`
 }
 
@@ -176,11 +189,31 @@ type ListItem struct {
 	PublishedTotal        int    `json:"published_total"`
 	FailedTotal           int    `json:"failed_total"`
 	CreatedTotal          int    `json:"created_total"`
+	DeletedTotal          int    `json:"deleted_total"`
 	CampaignsCreatedTotal int    `json:"campaigns_created_total"`
 }
 
+// WeekRowsAfterDays is the longest range listed by day alone; a longer one
+// is also listed by week.
+const WeekRowsAfterDays = 14
+
+// Week is one Monday-to-Sunday week of a range, clipped to it, with its
+// totals. Scheduled counts the posts created with a time, as Created does.
+type Week struct {
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Published int    `json:"published"`
+	Scheduled int    `json:"scheduled"`
+	Failed    int    `json:"failed"`
+	Deleted   int    `json:"deleted"`
+	// IdeasDecided is the ideas decided in the week, when the caller counted
+	// them; the report leaves it zero.
+	IdeasDecided int `json:"ideas_decided"`
+}
+
 // RangeReport is a run of local days rolled up, with each non-empty day's
-// totals oldest first. From and To are inclusive.
+// totals oldest first. From and To are inclusive. A range over
+// WeekRowsAfterDays also lists its weeks oldest first, empty ones included.
 type RangeReport struct {
 	From             string           `json:"from"`
 	To               string           `json:"to"`
@@ -188,8 +221,10 @@ type RangeReport struct {
 	Published        Published        `json:"published"`
 	Failed           Failed           `json:"failed"`
 	Created          Created          `json:"created"`
+	Deleted          Deleted          `json:"deleted"`
 	CampaignsCreated CampaignsCreated `json:"campaigns_created"`
 	Days             []ListItem       `json:"days"`
+	Weeks            []Week           `json:"weeks,omitempty"`
 }
 
 // rangeWindow is the span from local midnight of from to local midnight
@@ -206,10 +241,17 @@ func rangeWindow(from, to string, loc *time.Location) (Window, error) {
 	if hi.Lo.Before(lo.Lo) {
 		return Window{}, ErrInvalidDate
 	}
-	if days := int(hi.Lo.Sub(lo.Lo).Hours()/24+0.5) + 1; days > MaxRangeDays {
+	w := Window{Lo: lo.Lo, Hi: hi.Hi}
+	if w.days() > MaxRangeDays {
 		return Window{}, ErrRangeTooLong
 	}
-	return Window{Lo: lo.Lo, Hi: hi.Hi}, nil
+	return w, nil
+}
+
+// days is how many local days w spans, a 23- or 25-hour DST day counting as
+// one.
+func (w Window) days() int {
+	return int(w.Hi.Sub(w.Lo).Hours()/24 + 0.5)
 }
 
 // computeRange rolls the inputs in w up into one report and lists each
@@ -219,8 +261,52 @@ func computeRange(in Inputs, from, to, tz string, w Window, loc *time.Location) 
 	days := bucketReports(in, loc, MaxRangeDays+1, time.Time{})
 	days = slices.DeleteFunc(days, func(d ListItem) bool { return d.Date < from || d.Date > to })
 	slices.Reverse(days)
-	return RangeReport{From: from, To: to, TZ: tz, Published: r.Published, Failed: r.Failed, Created: r.Created,
-		CampaignsCreated: r.CampaignsCreated, Days: days}
+	out := RangeReport{From: from, To: to, TZ: tz, Published: r.Published, Failed: r.Failed, Created: r.Created,
+		Deleted: r.Deleted, CampaignsCreated: r.CampaignsCreated, Days: days}
+	if w.days() > WeekRowsAfterDays {
+		out.Weeks = computeWeeks(in, w, loc)
+	}
+	return out
+}
+
+// computeWeeks splits w into its Monday-to-Sunday weeks in loc, the first
+// and last clipped to w, and tallies each.
+func computeWeeks(in Inputs, w Window, loc *time.Location) []Week {
+	var weeks []Week
+	for lo := w.Lo; lo.Before(w.Hi); {
+		hi := lo.AddDate(0, 0, 7-(int(lo.Weekday())+6)%7) // next Monday
+		if hi.After(w.Hi) {
+			hi = w.Hi
+		}
+		weeks = append(weeks, tallyWeek(in, Window{Lo: lo, Hi: hi}, loc))
+		lo = hi
+	}
+	return weeks
+}
+
+func tallyWeek(in Inputs, w Window, loc *time.Location) Week {
+	wk := Week{From: w.Lo.In(loc).Format(dateLayout), To: w.Hi.In(loc).AddDate(0, 0, -1).Format(dateLayout)}
+	for _, p := range in.Published {
+		if w.contains(p.At) {
+			wk.Published++
+		}
+	}
+	for _, f := range in.Failed {
+		if w.contains(f.At) {
+			wk.Failed++
+		}
+	}
+	for _, c := range in.Created {
+		if c.Scheduled && w.contains(c.At) {
+			wk.Scheduled++
+		}
+	}
+	for _, d := range in.Deleted {
+		if w.contains(d.At) {
+			wk.Deleted++
+		}
+	}
+	return wk
 }
 
 // ReportList is the day-list response.
@@ -275,6 +361,12 @@ func computeReport(in Inputs, date, tz string, w Window) Report {
 	}
 	r.Created.ByAuthor = authorCounts(byAuthor)
 
+	for _, d := range in.Deleted {
+		if w.contains(d.At) {
+			r.Deleted.Total++
+		}
+	}
+
 	ids := make([]string, 0)
 	for _, cm := range in.Campaigns {
 		if w.contains(cm.At) {
@@ -295,7 +387,7 @@ func computeReport(in Inputs, date, tz string, w Window) Report {
 // and is dropped (the client keeps paging with `before`). A zero floor keeps
 // everything. Days-with-nothing never appear — they are simply never keyed.
 func bucketReports(in Inputs, loc *time.Location, limit int, floor time.Time) []ListItem {
-	type agg struct{ pub, fail, created, camp int }
+	type agg struct{ pub, fail, created, deleted, camp int }
 	days := map[string]*agg{}
 	at := func(t time.Time) *agg {
 		key := t.In(loc).Format(dateLayout)
@@ -314,6 +406,9 @@ func bucketReports(in Inputs, loc *time.Location, limit int, floor time.Time) []
 	}
 	for _, c := range in.Created {
 		at(c.At).created++
+	}
+	for _, d := range in.Deleted {
+		at(d.At).deleted++
 	}
 	for _, cm := range in.Campaigns {
 		at(cm.At).camp++
@@ -358,6 +453,7 @@ func bucketReports(in Inputs, loc *time.Location, limit int, floor time.Time) []
 			PublishedTotal:        a.pub,
 			FailedTotal:           a.fail,
 			CreatedTotal:          a.created,
+			DeletedTotal:          a.deleted,
 			CampaignsCreatedTotal: a.camp,
 		})
 	}

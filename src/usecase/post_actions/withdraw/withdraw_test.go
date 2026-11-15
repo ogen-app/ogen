@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"expvar"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs/queues"
+	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/pgtest"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
@@ -58,7 +61,7 @@ func TestDeletePostDecidesOnTheDeletedRow(t *testing.T) {
 
 	t.Run("scheduled after the caller loaded it", func(t *testing.T) {
 		jobs := &recorder{}
-		svc := withdraw.New(db, posts, nil, nil, jobs)
+		svc := withdraw.New(db, posts, nil, nil, jobs, nil)
 		loaded := seed(t, ctx, posts, models.PostStatusDraft, "")
 		// A submit lands between the caller's read and the delete.
 		live := *loaded
@@ -68,7 +71,7 @@ func TestDeletePostDecidesOnTheDeletedRow(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		deleted, err := svc.DeletePost(ctx, loaded, "user-1")
+		deleted, err := svc.DeletePost(ctx, loaded, "user-1", activity.SourceAPI)
 		if err != nil || !deleted {
 			t.Fatalf("deleted=%v err=%v", deleted, err)
 		}
@@ -79,7 +82,7 @@ func TestDeletePostDecidesOnTheDeletedRow(t *testing.T) {
 
 	t.Run("published after the caller loaded it", func(t *testing.T) {
 		jobs := &recorder{}
-		svc := withdraw.New(db, posts, nil, nil, jobs)
+		svc := withdraw.New(db, posts, nil, nil, jobs, nil)
 		loaded := seed(t, ctx, posts, models.PostStatusScheduled, "z-pub")
 		live := *loaded
 		live.Status = models.PostStatusPublished
@@ -87,7 +90,7 @@ func TestDeletePostDecidesOnTheDeletedRow(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		deleted, err := svc.DeletePost(ctx, loaded, "user-1")
+		deleted, err := svc.DeletePost(ctx, loaded, "user-1", activity.SourceAPI)
 		if !errors.Is(err, withdraw.ErrPublished) || deleted {
 			t.Fatalf("deleted=%v err=%v, want ErrPublished", deleted, err)
 		}
@@ -98,4 +101,49 @@ func TestDeletePostDecidesOnTheDeletedRow(t *testing.T) {
 			t.Fatalf("withdrawals = %+v, want none", jobs.tasks)
 		}
 	})
+
+	t.Run("a delete records its campaign, a refused one nothing", func(t *testing.T) {
+		w := &activityRows{}
+		rec := activity.NewRecorder(w, &activity.Metrics{
+			EventsRecorded: new(expvar.Int), EventsDropped: new(expvar.Int), WriteErrors: new(expvar.Int),
+		}, activity.Config{})
+		svc := withdraw.New(db, posts, nil, nil, &recorder{}, rec)
+		draft := seed(t, ctx, posts, models.PostStatusDraft, "")
+		published := seed(t, ctx, posts, models.PostStatusScheduled, "z-pub2")
+		live := *published
+		live.Status = models.PostStatusPublished
+		if err := posts.Update(ctx, &live); err != nil {
+			t.Fatal(err)
+		}
+
+		if deleted, err := svc.DeletePost(ctx, draft, "user-1", activity.SourceAssistant); err != nil || !deleted {
+			t.Fatalf("deleted=%v err=%v", deleted, err)
+		}
+		if _, err := svc.DeletePost(ctx, published, "user-1", activity.SourceAPI); !errors.Is(err, withdraw.ErrPublished) {
+			t.Fatalf("err = %v, want ErrPublished", err)
+		}
+		if err := rec.Close(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if len(w.events) != 1 {
+			t.Fatalf("events = %+v, want only the delete that happened", w.events)
+		}
+		e := w.events[0]
+		if e.Type != repository.ActivityPostDeleted || e.EntityID != draft.ID || e.Source != activity.SourceAssistant || e.Payload["campaign_id"] != "camp-1" {
+			t.Fatalf("event = %+v", e)
+		}
+	})
+}
+
+// activityRows collects the activity events a recorder writes.
+type activityRows struct {
+	mu     sync.Mutex
+	events []*models.ActivityEvent
+}
+
+func (w *activityRows) Insert(_ context.Context, events []*models.ActivityEvent) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.events = append(w.events, events...)
+	return nil
 }

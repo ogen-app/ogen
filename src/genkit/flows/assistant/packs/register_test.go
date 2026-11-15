@@ -67,7 +67,7 @@ func TestEveryPackRegistersTogether(t *testing.T) {
 		Compose: compose.New(nil, ideaRepo{}, campaignRepo{}, nil, nil, nil),
 		Assets:  assetRepo{}, Campaigns: campaignRepo{},
 		Posts: postRepo{}, Links: linkRepo{}, Analytics: &analytics.Service{},
-		Brand: brandRepo{}, Activity: report.New(nil, nil, nil),
+		Brand: brandRepo{}, Activity: report.New(nil, nil, nil, nil),
 		AutoPublish: evalAllowlist{}, ConnectPlatform: func(string) (string, bool) { return "LinkedIn", true },
 		Digest: evalDigest{}, Versions: evalVersionRepo{}, PostLogs: evalPostLogs{},
 		CheckBrief: func(context.Context, string, consistency.OnEventFunc) (*consistency.BriefReview, error) {

@@ -22,7 +22,7 @@ func TestActivityHandler_Validation(t *testing.T) {
 	app := fiber.New()
 	// report.New with nil repos is safe here: every case below returns before a
 	// repository is consulted.
-	handler := NewActivityHandler(report.New(nil, nil, nil), passThroughAuth)
+	handler := NewActivityHandler(report.New(nil, nil, nil, nil), passThroughAuth)
 	handler.Register(app)
 
 	cases := []struct {

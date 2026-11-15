@@ -33,7 +33,7 @@ func workspacePack(d Deps) assistant.Pack {
 		End:     endResults(workspacePackName),
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			day := genkit.DefineTool(g, "activityReport",
-				"Returns what happened on a day, a week or a range of days in the workspace's timezone: posts published and failed, and posts and campaigns created, with each day's totals.",
+				"Returns what happened on a day, a week or a range of days in the workspace's timezone: posts published, failed and deleted, and posts and campaigns created, with each day's totals, and each week's on a range over 14 days.",
 				assistantkit.Wrap(recorded(workspacePackName, "activityReport", nil, func(ctx context.Context, in ActivityInput) (*ActivityOutput, error) {
 					return activityReport(ctx, d, in)
 				})), ai.WithStrictSchema(false))
@@ -44,7 +44,7 @@ func workspacePack(d Deps) assistant.Pack {
 				})), ai.WithStrictSchema(false))
 			specs := []assistantkit.Spec{
 				spec(workspacePackName, day, assistantkit.TierRead,
-					`Call this when the user asks what happened — "what went out yesterday?", "did anything fail today?", "how was last week?". Pass date (YYYY-MM-DD, default today) for one day, week ("this", "last", or any date in the week) for a Monday-to-Sunday week, or from and to for up to 31 days. campaignId narrows to one campaign (default the thread's). Name a failed post by its title and say why it failed; when nothing went out, say when the next post goes (next_scheduled). For the full weekly report, with performance and campaigns, use weeklyDigest.`),
+					`Call this when the user asks what happened — "what went out yesterday?", "did anything fail today?", "how was last week?". Pass date (YYYY-MM-DD, default today) for one day, week ("this", "last", or any date in the week) for a Monday-to-Sunday week, or from and to for up to 31 days; a range over 14 days also has weeks, which you summarize week by week rather than day by day. campaignId narrows to one campaign (default the thread's). Name a failed post by its title and say why it failed; when nothing went out, say when the next post goes (next_scheduled). For the full weekly report, with performance and campaigns, use weeklyDigest.`),
 				spec(workspacePackName, setup, assistantkit.TierRead,
 					`Call this when the user asks about their setup, auto-publishing or a publishing problem that may be an account — "why didn't my LinkedIn post go out?", "are my accounts connected?", "does Instagram publish on its own?". If an account needs reconnecting, say so, since when, and how many scheduled posts wait on it (waitingPosts), and offer openConnect for it.`),
 			}
@@ -124,6 +124,9 @@ func activityExtras(ctx context.Context, d Deps, out *ActivityOutput, campaign s
 		if out.IdeasDecided, err = d.IdeaRepo.CountDecided(ctx, from, to.AddDate(0, 0, 1), campaign); err != nil {
 			return fmt.Errorf("count ideas decided: %w", err)
 		}
+		if err := weekIdeasDecided(ctx, d, out.Weeks, campaign, loc); err != nil {
+			return err
+		}
 	}
 	if d.Posts != nil {
 		next, err := d.Posts.NextScheduled(ctx, now, campaign)
@@ -140,6 +143,24 @@ func activityExtras(ctx context.Context, d Deps, out *ActivityOutput, campaign s
 		}
 	}
 	out.Step = &assistantkit.Step{Subject: activitySubject(out.From, out.To)}
+	return nil
+}
+
+// weekIdeasDecided counts each week's decided ideas, one read a week: a
+// range has at most five.
+func weekIdeasDecided(ctx context.Context, d Deps, weeks []report.Week, campaign string, loc *time.Location) error {
+	for i := range weeks {
+		from, ferr := time.ParseInLocation(time.DateOnly, weeks[i].From, loc)
+		to, terr := time.ParseInLocation(time.DateOnly, weeks[i].To, loc)
+		if ferr != nil || terr != nil {
+			continue
+		}
+		n, err := d.IdeaRepo.CountDecided(ctx, from, to.AddDate(0, 0, 1), campaign)
+		if err != nil {
+			return fmt.Errorf("count the week's ideas decided: %w", err)
+		}
+		weeks[i].IdeasDecided = n
+	}
 	return nil
 }
 
