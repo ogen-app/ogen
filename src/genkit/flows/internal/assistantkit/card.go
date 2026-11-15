@@ -67,6 +67,9 @@ const (
 	// CardActionEditBrand makes Count brand changes of more than one kind;
 	// its change rows say which.
 	CardActionEditBrand = "edit_brand"
+	// CardActionMove moves Count posts to new dates; its move rows say
+	// which days.
+	CardActionMove = "move"
 )
 
 // The things a card or a row counts.
@@ -137,6 +140,9 @@ const (
 	// CardRowKept is something the work leaves alone on purpose, with why in
 	// Note.
 	CardRowKept = "kept"
+	// CardRowMove is Count posts moving from the day Start to the day End;
+	// Start is empty for posts with no date yet.
+	CardRowMove = "move"
 )
 
 // CardRow is one detail of an offer. Kind lets the client label and lay it
@@ -173,6 +179,37 @@ type CardRow struct {
 	Action string   `json:"action,omitempty"`
 	Count  int      `json:"count,omitzero"`
 	Names  []string `json:"names,omitempty"`
+	// Was is the row's Count on the offer this card replaces, on a card
+	// made afresh because what that one was made on changed; nil on any
+	// other card, and on a row the replaced card didn't have.
+	Was *int `json:"was,omitempty"`
+}
+
+// markWas gives each of c's counted rows its count on old, the card c
+// replaces. Rows match by what they are about, not by their words, which
+// carry the count.
+func (c *Card) markWas(old *Card) {
+	if c == nil || old == nil {
+		return
+	}
+	counts := make(map[rowKey]int, len(old.Rows))
+	for _, r := range old.Rows {
+		counts[r.key()] = r.Count
+	}
+	for i := range c.Rows {
+		if n, ok := counts[c.Rows[i].key()]; ok && (n > 0 || c.Rows[i].Count > 0) {
+			c.Rows[i].Was = new(n)
+		}
+	}
+}
+
+// rowKey is what a row is about, the same on a card and its replacement.
+type rowKey struct {
+	kind, label, start, end, item, action, campaign string
+}
+
+func (r CardRow) key() rowKey {
+	return rowKey{r.Kind, r.Label, r.Start, r.End, r.Item, r.Action, r.Campaign}
 }
 
 // CardSource is one asset an offer draws on. Type is the asset's kind, for

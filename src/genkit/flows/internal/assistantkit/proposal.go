@@ -228,6 +228,9 @@ func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], 
 		if !same {
 			p := gate.proposal(ctx, tool, fresh)
 			p.Replaces = OfferID(ctx)
+			if g := gate.Card; g != nil {
+				p.Card.markWas(g(ctx, in))
+			}
 			out, err := propose[Out](ctx, p, StatusProposed)
 			out.Reason = ChangedSince + "nothing ran, and what still holds is offered again."
 			out.Changes = changes

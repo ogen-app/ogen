@@ -7,6 +7,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -85,6 +86,25 @@ func TestMovesThatHold(t *testing.T) {
 	}
 	_, _, err = movesThatHold(ctx, d, ApplyMovesInput{CampaignID: "c1", Moves: in.Moves[1:]})
 	refused(t, err)
+}
+
+// A moves card has a row per day pair, earliest first, with how many.
+func TestMovesCard(t *testing.T) {
+	card := movesCard(ApplyMovesInput{Moves: []Move{
+		{PostID: "p1", From: "2026-12-24", To: "2026-12-25"},
+		{PostID: "p2", To: "2026-12-28"},
+		{PostID: "p3", From: "2026-12-24", To: "2026-12-25"},
+	}})
+	if card.Action != assistantkit.CardActionMove || card.Count != 3 || card.Verb != "Move 3 posts" || len(card.Rows) != 2 {
+		t.Fatalf("card = %+v", card)
+	}
+	undated, thu := card.Rows[0], card.Rows[1]
+	if undated.Value != "No date → Mon 28 · 1 post" || undated.Start != "" || undated.End != "2026-12-28" || undated.Count != 1 {
+		t.Fatalf("undated row = %+v", undated)
+	}
+	if thu.Kind != assistantkit.CardRowMove || thu.Value != "Thu 24 → Fri 25 · 2 posts" || thu.Start != "2026-12-24" || thu.End != "2026-12-25" || thu.Count != 2 {
+		t.Fatalf("Thursday row = %+v", thu)
+	}
 }
 
 // A move that no longer holds says why, by its post's title.

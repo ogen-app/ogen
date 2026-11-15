@@ -96,6 +96,12 @@ func idsTool(ran *[]string, gone map[string]bool, refuse *bool) ai.ToolFunc[idsI
 			return idsIn{IDs: keep}, changes, nil
 		},
 		Summary: func(in idsIn) string { return "Touch " + strings.Join(in.IDs, ",") },
+		Card: func(_ context.Context, in idsIn) *Card {
+			return &Card{Rows: []CardRow{
+				{Kind: CardRowChange, Item: "id", Action: CardActionUpdate, Count: len(in.IDs)},
+				{Kind: CardRowKept, Value: "the rest"},
+			}}
+		},
 	}, Wrap(func(_ context.Context, in idsIn) (int, error) {
 		*ran = append(*ran, in.IDs...)
 		return len(in.IDs), nil
@@ -124,6 +130,11 @@ func TestGated_ConfirmedRechecks(t *testing.T) {
 	}
 	if len(sink.got) != 1 || len(sink.got[0].Args.(idsIn).IDs) != 1 || sink.got[0].Replaces != "offer-1" {
 		t.Fatalf("fresh offer = %+v", sink.got)
+	}
+	// Its counted row says what the offer it replaces had; a row that
+	// counts nothing says nothing.
+	if rows := sink.got[0].Card.Rows; rows[0].Count != 1 || rows[0].Was == nil || *rows[0].Was != 2 || rows[1].Was != nil {
+		t.Fatalf("fresh card rows = %+v", rows)
 	}
 	// All went: refused, with what changed and the refusal's code.
 	if out, err := run(ctx, idsIn{IDs: []string{"b"}}); err != nil || out.Status != StatusRefused || out.Code != "ids_gone" || len(ran) != 0 || !slices.Equal(out.Changes, []string{"b was deleted"}) {

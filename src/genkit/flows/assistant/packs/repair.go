@@ -65,6 +65,7 @@ func repairPack(d Deps) assistant.Pack {
 						return movesThatHold(ctx, d, in)
 					},
 					Summary: func(in ApplyMovesInput) string { return fmt.Sprintf("Move %s", plural(len(in.Moves), "post", "posts")) },
+					Card:    func(_ context.Context, in ApplyMovesInput) *assistantkit.Card { return movesCard(in) },
 				}, assistantkit.Wrap(recorded(repairPackName, "applyCalendarMoves", nil, func(ctx context.Context, in ApplyMovesInput) (*ApplyMovesOutput, error) {
 					return applyMoves(ctx, d, in)
 				}))), ai.WithStrictSchema(false))
@@ -513,10 +514,44 @@ func offerMoves(ctx context.Context, c *models.Campaign, posts []models.Post) (s
 	if len(ms) == 0 {
 		return "", nil
 	}
+	in := ApplyMovesInput{CampaignID: c.ID, Moves: ms}
 	return assistantkit.Offer(ctx, assistantkit.Proposal{
-		Tool: "applyCalendarMoves", Args: ApplyMovesInput{CampaignID: c.ID, Moves: ms},
+		Tool: "applyCalendarMoves", Args: in, Card: movesCard(in),
 		Summary: fmt.Sprintf("Move %s to even out %q", plural(len(ms), "post", "posts"), c.Name),
 	})
+}
+
+// movesCard is a moves offer's card: a row for each day posts leave and the
+// day they land on, with how many, earliest first.
+func movesCard(in ApplyMovesInput) *assistantkit.Card {
+	type days struct{ from, to string }
+	counts := map[days]int{}
+	var order []days
+	for _, m := range in.Moves {
+		k := days{m.From, m.To}
+		if counts[k] == 0 {
+			order = append(order, k)
+		}
+		counts[k]++
+	}
+	slices.SortFunc(order, func(a, b days) int { return cmp.Or(cmp.Compare(a.from, b.from), cmp.Compare(a.to, b.to)) })
+	n := len(in.Moves)
+	card := &assistantkit.Card{Verb: "Move " + plural(n, "post", "posts"), Action: assistantkit.CardActionMove, Count: n}
+	for _, k := range order {
+		card.Rows = append(card.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowMove, Start: k.from, End: k.to, Count: counts[k],
+			Value: moveDay(k.from) + " → " + moveDay(k.to) + " · " + plural(counts[k], "post", "posts")})
+	}
+	return card
+}
+
+// moveDay is a move row's day as "Thu 24"; a post with no date yet reads
+// "No date".
+func moveDay(day string) string {
+	t, err := time.Parse(time.DateOnly, day)
+	if err != nil {
+		return cmp.Or(day, "No date")
+	}
+	return t.Format("Mon 2")
 }
 
 // OptimiseOutput is the offered moves, and the scheduled posts they leave
