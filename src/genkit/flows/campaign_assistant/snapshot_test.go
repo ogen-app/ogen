@@ -242,3 +242,17 @@ func TestStarters_NoneWhenNothingIsLeft(t *testing.T) {
 		t.Fatalf("starters = %+v", got)
 	}
 }
+
+// A reply cites only the parts the snapshot has, each once, in the order it
+// named them; a name that isn't a part, or a part the snapshot lacks, is
+// left out.
+func TestCited_KeepsThePartsTheSnapshotHas(t *testing.T) {
+	s := state.Snapshot{Goal: &state.Goal{Target: 20}, Sources: &state.Sources{}, PostsUnknown: true}
+	got := cited([]string{"Sources", "goal", "period", "posts", "calendar", "brief", "goal"}, s)
+	if !slices.Equal(got, []string{"sources", "goal"}) {
+		t.Fatalf("cited = %v", got)
+	}
+	if got := cited(nil, s); got == nil || len(got) != 0 {
+		t.Fatalf("cited none = %#v, want []", got)
+	}
+}

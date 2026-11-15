@@ -110,6 +110,10 @@ func run(
 	preliminary := *result
 	if reply.exhausted {
 		result.Explanation = ""
+	} else {
+		st.mu.Lock()
+		st.cites = replyCites(scanner)
+		st.mu.Unlock()
 	}
 	tools.finish(st, result)
 	finished = true
@@ -340,6 +344,33 @@ func assemble(ctx context.Context, scanner *jsonstream.Scanner) *Response {
 		r.Action = actionAnswered
 	}
 	return r
+}
+
+// replyCites reads the envelope's "cites": a list of names, or one string
+// of them split by commas, each trimmed and once. The streaming scanner
+// skips arrays, so the list is read from the whole reply.
+func replyCites(scanner *jsonstream.Scanner) []string {
+	var names []string
+	if s, ok := scanner.Values()["cites"].(string); ok {
+		names = strings.Split(s, ",")
+	} else {
+		var env struct {
+			Cites []string `json:"cites"`
+		}
+		raw := scanner.FullText()
+		i, j := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
+		if i < 0 || j < i || json.Unmarshal([]byte(raw[i:j+1]), &env) != nil {
+			return nil
+		}
+		names = env.Cites
+	}
+	var out []string
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // unusableReply logs a turn that left neither a reply nor work to report,

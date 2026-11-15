@@ -192,7 +192,7 @@ func subjectPack(ran *[]string) Pack {
 			return context.WithValue(ctx, subjectKey{}, id), "<campaign>" + id + "</campaign>\n\n", nil
 		},
 		End: func(ctx context.Context) (*PackResult, error) {
-			return &PackResult{Value: map[string]any{"campaign": ctx.Value(subjectKey{}), "ran": len(*ran)}, Fallback: "Worked on the campaign."}, nil
+			return &PackResult{Value: map[string]any{"campaign": ctx.Value(subjectKey{}), "ran": len(*ran), "cites": ReplyCites(ctx)}, Fallback: "Worked on the campaign."}, nil
 		},
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			tool := genkit.DefineTool(g, "workOnSubject", "Works on the campaign.",
@@ -329,9 +329,40 @@ func TestRun_RestartKeepsTheToolRoundsDone(t *testing.T) {
 // Out of tool rounds, the packs' account of the work replaces what the
 // model wrote before its last tool calls; with no text at all it stands in
 // as the reply.
+// A pack's End reads what the final reply cites, given as a list or as one
+// comma-separated string, each name once; a reply cut short by the tool
+// rounds cites nothing.
+func TestRun_PackReadsTheReplysCites(t *testing.T) {
+	campaign := `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`
+	for name, tc := range map[string]struct {
+		reply string
+		want  []string
+	}{
+		"list":     {`{"explanation":"April is 14 of 20.","action":"answered","cites":["goal","calendar","goal"]}`, []string{"goal", "calendar"}},
+		"string":   {`{"explanation":"April is 14 of 20.","cites":"goal, sources","action":"answered"}`, []string{"goal", "sources"}},
+		"preamble": {"Here you go:\n" + `{"explanation":"April is 14 of 20.","cites":["period"]}`, []string{"period"}},
+		"none":     {`{"explanation":"Done.","action":"answered"}`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var ran []string
+			h := newHarness(t, subjectPack(&ran))
+			resp, _, _, err := h.turn(viewOf(t, campaign), "how is it going?",
+				fakemodel.Tools(fakemodel.Call{Name: "workOnSubject", Input: map[string]any{}}),
+				fakemodel.Answer(tc.reply))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := resp.Results["subject"].(map[string]any)
+			if cites, _ := got["cites"].([]string); !slices.Equal(cites, tc.want) {
+				t.Fatalf("cites = %v, want %v", got["cites"], tc.want)
+			}
+		})
+	}
+}
+
 func TestRun_ToolRoundsExhausted(t *testing.T) {
 	for name, first := range map[string]fakemodel.Turn{
-		"preliminary text": {Text: `{"explanation":"I'll get started."}`, Calls: []fakemodel.Call{{Name: "workOnSubject", Input: map[string]any{}}}},
+		"preliminary text": {Text: `{"explanation":"I'll get started.","cites":["goal"]}`, Calls: []fakemodel.Call{{Name: "workOnSubject", Input: map[string]any{}}}},
 		"no text":          fakemodel.Tools(fakemodel.Call{Name: "workOnSubject", Input: map[string]any{}}),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -346,7 +377,7 @@ func TestRun_ToolRoundsExhausted(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, _ := resp.Results["subject"].(map[string]any)
-			if resp.Explanation != "Worked on the campaign." || got["ran"] != 4 {
+			if cites, _ := got["cites"].([]string); resp.Explanation != "Worked on the campaign." || got["ran"] != 4 || len(cites) > 0 {
 				t.Fatalf("explanation = %q, results = %v", resp.Explanation, resp.Results)
 			}
 		})

@@ -68,6 +68,10 @@ type CampaignAssistantResponse struct {
 	State *state.Snapshot `json:"state,omitempty" jsonschema:"-"`
 	// Starters lead with the state's numbers, for the client's chips.
 	Starters []Starter `json:"starters,omitempty" jsonschema:"-"`
+	// Cites are the parts of State the reply relied on, each once: goal,
+	// period, posts, platforms, sources, calendar. [] when it relied on
+	// none; a part State lacks is left out.
+	Cites []string `json:"cites" enums:"goal,period,posts,platforms,sources,calendar" jsonschema:"-"`
 }
 
 // What an askCampaignAssets answer searched: the asset open on screen, the

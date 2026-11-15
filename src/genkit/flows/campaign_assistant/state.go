@@ -3,6 +3,8 @@ package campaign_assistant
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
@@ -33,6 +35,45 @@ type Starter struct {
 	Kind        string `json:"kind" enums:"fill,draft,calendar,sources"`
 	Label       string `json:"label"`
 	Instruction string `json:"instruction"`
+}
+
+// The parts of a snapshot a reply can cite, as <campaign_state> lists them.
+const (
+	citeGoal      = "goal"
+	citePeriod    = "period"
+	citePosts     = "posts"
+	citePlatforms = "platforms"
+	citeSources   = "sources"
+	citeCalendar  = "calendar"
+)
+
+// cited keeps the parts the reply named that the snapshot has, in the
+// order named; [] when none.
+func cited(names []string, s state.Snapshot) []string {
+	has := func(n string) bool {
+		switch n {
+		case citeGoal:
+			return s.Goal != nil
+		case citePeriod:
+			return s.Goal != nil && s.Goal.Period != nil
+		case citePosts:
+			return !s.PostsUnknown
+		case citePlatforms:
+			return len(s.Platforms) > 0
+		case citeSources:
+			return s.Sources != nil
+		case citeCalendar:
+			return s.Calendar != nil
+		}
+		return false
+	}
+	out := []string{}
+	for _, n := range names {
+		if n = strings.ToLower(n); has(n) && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // ReadState reads the campaign's state as a turn would, with its starters.
