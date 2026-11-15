@@ -1,7 +1,9 @@
 package packs
 
 import (
+	"cmp"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -38,15 +40,15 @@ func workspacePack(d Deps) assistant.Pack {
 					return activityReport(ctx, d, in)
 				})), ai.WithStrictSchema(false))
 			setup := genkit.DefineTool(g, "workspaceSetup",
-				"Returns the workspace's timezone, the platforms it auto-publishes to, and its connected social accounts with their health: valid, expiring, or needing a reconnect.",
-				assistantkit.Wrap(recorded(workspacePackName, "workspaceSetup", nil, func(ctx context.Context, _ struct{}) (*SetupOut, error) {
-					return workspaceSetup(ctx, d)
+				"Returns the workspace's timezone, the platforms it auto-publishes to, and its connected social accounts with their health: valid, expiring, or needing a reconnect. Narrowed to a campaign, only the accounts it posts to.",
+				assistantkit.Wrap(recorded(workspacePackName, "workspaceSetup", nil, func(ctx context.Context, in SetupInput) (*SetupOut, error) {
+					return workspaceSetup(ctx, d, cmp.Or(in.CampaignID, assistant.CampaignID(ctx)))
 				})), ai.WithStrictSchema(false))
 			specs := []assistantkit.Spec{
 				spec(workspacePackName, day, assistantkit.TierRead,
 					`Call this when the user asks what happened — "what went out yesterday?", "did anything fail today?", "how was last week?". Pass date (YYYY-MM-DD, default today) for one day, week ("this", "last", or any date in the week) for a Monday-to-Sunday week, or from and to for up to 31 days; a range over 14 days also has weeks, which you summarize week by week rather than day by day. campaignId narrows to one campaign (default the thread's). Name a failed post by its title and say why it failed; when nothing went out, say when the next post goes (next_scheduled). For the full weekly report, with performance and campaigns, use weeklyDigest.`),
 				spec(workspacePackName, setup, assistantkit.TierRead,
-					`Call this when the user asks about their setup, auto-publishing or a publishing problem that may be an account — "why didn't my LinkedIn post go out?", "are my accounts connected?", "does Instagram publish on its own?". If an account needs reconnecting, say so, since when, and how many scheduled posts wait on it (waitingPosts), and offer openConnect for it.`),
+					`Call this when the user asks about their setup, auto-publishing or a publishing problem that may be an account — "why didn't my LinkedIn post go out?", "are my accounts connected?", "does Instagram publish on its own?". campaignId narrows the accounts to those the campaign posts to (default the thread's campaign); say which campaign. If an account needs reconnecting, say so, since when, and how many scheduled posts wait on it (waitingPosts), and offer openConnect for it.`),
 			}
 			specs = append(specs, digestSpecs(g, d)...)
 			specs = append(specs, historySpecs(g, d)...)
@@ -250,9 +252,16 @@ func activityDays(in ActivityInput, today time.Time) (from, to string, err error
 	return today.Format(time.DateOnly), today.Format(time.DateOnly), nil
 }
 
+// SetupInput narrows the setup to a campaign.
+type SetupInput struct {
+	CampaignID string `json:"campaignId,omitempty" jsonschema:"description=Only the accounts this campaign posts to; defaults to the thread's campaign"`
+}
+
 // SetupOut is the workspace's setup.
 type SetupOut struct {
 	Timezone string `json:"timezone"`
+	// Campaign is the campaign the accounts were narrowed to.
+	Campaign *CampaignName `json:"campaign,omitempty"`
 	// AutoPublish is the platforms whose scheduled posts go out on their
 	// own; nil when it can't be read here.
 	AutoPublish     []string     `json:"autoPublish"`
@@ -275,15 +284,22 @@ type AccountOut struct {
 	UnhealthySince *time.Time `json:"unhealthySince,omitempty"`
 	// WaitingPosts counts the scheduled posts that go out through it: the
 	// ones that name it, and those that name no account when it is its
-	// platform's only one.
+	// platform's only one. It is every campaign's, even narrowed to one, as
+	// a reconnect lets them all go out.
 	WaitingPosts int `json:"waitingPosts"`
 }
 
 const autoPublishNote = "A post scheduled on an auto-publish platform goes out on its own at its time; on any other platform it waits for someone to publish it by hand."
 
-func workspaceSetup(ctx context.Context, d Deps) (*SetupOut, error) {
+// workspaceSetup is the workspace's setup, its accounts narrowed to those
+// campaignID posts to when it is set.
+func workspaceSetup(ctx context.Context, d Deps, campaignID string) (*SetupOut, error) {
 	_, tz := settings.WorkspaceTimezone(ctx, d.Settings)
 	out := &SetupOut{Timezone: tz, Accounts: []AccountOut{}}
+	targets, err := setupCampaign(ctx, d, campaignID, out)
+	if err != nil {
+		return nil, err
+	}
 	if d.AutoPublish != nil {
 		list, err := d.AutoPublish.List(ctx)
 		if err != nil {
@@ -317,7 +333,33 @@ func workspaceSetup(ctx context.Context, d Deps) (*SetupOut, error) {
 	if err := countWaiting(ctx, d, out.Accounts); err != nil {
 		return nil, err
 	}
+	if targets != nil {
+		out.Accounts = slices.DeleteFunc(out.Accounts, func(a AccountOut) bool { return !targets[a.Platform] })
+	}
 	return out, nil
+}
+
+// setupCampaign names the campaign on out and returns the platforms it posts
+// to, by Zernio slug; nil when there is no campaign to narrow to.
+func setupCampaign(ctx context.Context, d Deps, id string, out *SetupOut) (map[string]bool, error) {
+	if id == "" || d.Campaigns == nil {
+		return nil, nil
+	}
+	c, err := d.Campaigns.GetByID(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && c == nil) {
+		return nil, assistantkit.Refused("that campaign doesn't exist")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the campaign: %w", err)
+	}
+	out.Campaign = &CampaignName{ID: c.ID, Name: c.Name}
+	targets := map[string]bool{}
+	for _, p := range c.TargetPlatforms {
+		if s := platformSlug(p.ID); s != "" {
+			targets[s] = true
+		}
+	}
+	return targets, nil
 }
 
 // countWaiting sets each account's waiting posts: those naming it, and

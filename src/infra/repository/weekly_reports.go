@@ -85,6 +85,7 @@ type ReportPost struct {
 	Title           string    `bun:"title"`
 	Content         string    `bun:"content"`
 	Platform        string    `bun:"platform"`
+	PlatformSlug    string    `bun:"platform_slug"`
 	SocialAccountID string    `bun:"social_account_id"`
 	AccountName     string    `bun:"account_name"`
 	PublishedAt     time.Time `bun:"published_at"`
@@ -240,6 +241,7 @@ func (r *weeklyReportRepository) PublishedPosts(ctx context.Context, tenantID st
 	err := r.db.NewRaw(`
 SELECT po.id, COALESCE(po.campaign_id, '') AS campaign_id, COALESCE(po.title, '') AS title,
        left(po.content, 200) AS content, COALESCE(pl.name, '') AS platform,
+       COALESCE(pl.zernio_id, '') AS platform_slug,
        COALESCE(po.social_account_id, '') AS social_account_id,
        COALESCE(NULLIF(sa.display_name, ''), sa.username, '') AS account_name,
        po.published_at

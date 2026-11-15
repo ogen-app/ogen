@@ -96,6 +96,7 @@ func renderPublishing(f Facts, l links) *models.WeeklyPublishing {
 	}
 	p := &models.WeeklyPublishing{ChartHeight: publishingChartPx, CalendarURL: l.to("/calendar")}
 	p.Published = models.WeeklyFigure{Value: grouped(len(f.Published))}
+	p.PublishedByPlatform = publishedByPlatform(f.Published)
 	if d, up, ok := percentDelta(float64(len(f.Published)), float64(c.PrevPublished)); ok {
 		p.Published.Delta, p.Published.Good = d+" vs last week", up
 	}
@@ -120,6 +121,25 @@ func renderPublishing(f Facts, l links) *models.WeeklyPublishing {
 	}
 	p.NextWeek = nextWeek(c)
 	return p
+}
+
+// publishedByPlatform counts the posts by platform slug, largest first, ties
+// by slug; a post whose platform has no slug isn't split out.
+func publishedByPlatform(posts []repository.ReportPost) []models.WeeklyPlatformCount {
+	counts := map[string]int{}
+	for _, p := range posts {
+		if p.PlatformSlug != "" {
+			counts[p.PlatformSlug]++
+		}
+	}
+	out := make([]models.WeeklyPlatformCount, 0, len(counts))
+	for slug, n := range counts {
+		out = append(out, models.WeeklyPlatformCount{Platform: slug, Count: n})
+	}
+	slices.SortFunc(out, func(a, b models.WeeklyPlatformCount) int {
+		return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.Platform, b.Platform))
+	})
+	return out
 }
 
 func failedNote(cur, prev int) string {
