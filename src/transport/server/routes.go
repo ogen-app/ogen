@@ -232,7 +232,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 // and attachments and notes after it.
 func registerPostRoutes(app *fiber.App, d *deps) {
 	r, gk, rec := d.r, d.genkit, d.activity.recorder
-	handlers.NewPlatformsHandler(r.platformRepo, d.publishers(), r.autoPublishAllowlistRepo, d.auth).Register(app)
+	handlers.NewPlatformsHandler(r.platformRepo, d.publishers(), r.autoPublishAllowlistRepo, r.postRepo, d.auth).Register(app)
 	handlers.NewTagsHandler(r.tagRepo, d.auth).Register(app)
 
 	handlers.NewPostActionsHandler(r.postRepo, d.svc.clone, d.svc.restore, rec, d.auth).Register(app)

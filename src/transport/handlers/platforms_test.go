@@ -49,7 +49,7 @@ var _ = Describe("PlatformsHandler", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		handlers.NewPlatformsHandler(platformRepo, nil, nil, auth).Register(app)
+		handlers.NewPlatformsHandler(platformRepo, nil, nil, nil, auth).Register(app)
 
 		// Seed an auth user and log in
 		seedTenantUser(db, "Admin", "admin@example.com", "admin-password")

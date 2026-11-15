@@ -16,6 +16,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/usecase/activity/report"
 	"github.com/ogen-app/ogen/src/usecase/settings"
 )
@@ -373,17 +374,13 @@ func countWaiting(ctx context.Context, d Deps, accounts []AccountOut) error {
 	if err != nil {
 		return fmt.Errorf("count scheduled posts: %w", err)
 	}
-	perPlatform := map[string]int{}
+	platformOf := make(map[string]string, len(accounts))
 	for _, a := range accounts {
-		perPlatform[a.Platform]++
+		platformOf[a.ID] = a.Platform
 	}
+	waiting := zernio.WaitingByAccount(counts, platformOf)
 	for i := range accounts {
-		a := &accounts[i]
-		for _, c := range counts {
-			if c.AccountID == a.ID || (c.AccountID == "" && perPlatform[a.Platform] == 1 && platformSlug(c.PlatformID) == a.Platform) {
-				a.WaitingPosts += c.Count
-			}
-		}
+		accounts[i].WaitingPosts = waiting[accounts[i].ID]
 	}
 	return nil
 }

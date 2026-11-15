@@ -11,6 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/publishers"
+	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
@@ -19,7 +20,14 @@ type PlatformsHandler struct {
 	repo       repository.PlatformRepository
 	publishers []publishers.Publisher
 	allowlist  repository.AutoPublishAllowlistRepository
+	scheduled  ScheduledCounter
 	auth       fiber.Handler
+}
+
+// ScheduledCounter counts the posts waiting to go out by platform and
+// account; repository.PostRepository satisfies it.
+type ScheduledCounter interface {
+	ScheduledCounts(ctx context.Context) ([]repository.ScheduledCount, error)
 }
 
 // NewPlatformsHandler wires the handler. The publishers slice may be
@@ -29,13 +37,15 @@ type PlatformsHandler struct {
 // allowlist is the auto-publish allowlist. It may be nil in
 // callers that don't care to surface auto_publish_allowed (legacy
 // tests); when nil, the field falls back to false on every view.
+// scheduled may be nil too; the accounts then leave out waiting_posts.
 func NewPlatformsHandler(
 	repo repository.PlatformRepository,
 	pubs []publishers.Publisher,
 	allowlist repository.AutoPublishAllowlistRepository,
+	scheduled ScheduledCounter,
 	auth fiber.Handler,
 ) *PlatformsHandler {
-	return &PlatformsHandler{repo: repo, publishers: pubs, allowlist: allowlist, auth: auth}
+	return &PlatformsHandler{repo: repo, publishers: pubs, allowlist: allowlist, scheduled: scheduled, auth: auth}
 }
 
 func (h *PlatformsHandler) Register(app *fiber.App) {
@@ -70,6 +80,13 @@ type accountView struct {
 	AvatarURL   string    `json:"avatar_url"`
 	IsActive    bool      `json:"is_active"`
 	ConnectedAt time.Time `json:"connected_at"`
+	// TokenExpiresAt is when the account's token lapses; absent when the
+	// publisher refreshes it itself or hasn't checked it yet.
+	TokenExpiresAt *time.Time `json:"token_expires_at,omitempty"`
+	// WaitingPosts counts the scheduled posts that go out through the
+	// account: those naming it, and those naming none when it is its
+	// platform's only account. Absent when it can't be counted.
+	WaitingPosts *int `json:"waiting_posts,omitempty"`
 }
 
 // platformResponse is the wire shape returned by List / Get. Embedding
@@ -87,7 +104,9 @@ type platformResponse struct {
 // @Description  platform carries a `publishers` array describing
 // @Description  whether it's connected via any of the configured
 // @Description  publisher backends (e.g. Zernio) and which post
-// @Description  types each publisher can post in.
+// @Description  types each publisher can post in. Each connected account
+// @Description  carries token_expires_at when its token lapses, and
+// @Description  waiting_posts: the scheduled posts that go out through it.
 // @Tags         platforms
 // @Produce      json
 // @Security     CookieAuth
@@ -209,18 +228,23 @@ func (h *PlatformsHandler) collectPublisherViews(ctx context.Context, platforms 
 
 	idx := newPlatformIndex(platforms)
 	allowSet := h.autoPublishAllowSet(ctx)
-	for _, pub := range h.publishers {
+	byPub := make([][]publishers.PlatformView, len(h.publishers))
+	for i, pub := range h.publishers {
 		views, err := pub.PlatformViews(ctx)
 		if err != nil {
 			return nil, err
 		}
-		for _, v := range views {
+		byPub[i] = views
+	}
+	waiting := h.waitingPosts(ctx, byPub)
+	for i, pub := range h.publishers {
+		for _, v := range byPub[i] {
 			matchID, ok := idx.match(v)
 			if !ok {
 				continue
 			}
 			_, autoPublish := allowSet[v.PublisherPlatformID]
-			accounts := toAccountViews(v.Accounts)
+			accounts := toAccountViews(v.Accounts, waiting)
 			out[matchID] = append(out[matchID], publisherView{
 				ID:                 pub.ID(),
 				Name:               pub.Name(),
@@ -290,19 +314,51 @@ func (h *PlatformsHandler) autoPublishAllowSet(ctx context.Context) map[string]s
 	return set
 }
 
-// toAccountViews projects publisher accounts onto the wire shape; the result
-// is never nil.
-func toAccountViews(in []publishers.Account) []accountView {
+// waitingPosts counts what waits on each connected account, as the
+// assistant's workspaceSetup does; nil when it can't be counted. A failed
+// count is logged and leaves the counts out rather than failing the read.
+func (h *PlatformsHandler) waitingPosts(ctx context.Context, byPub [][]publishers.PlatformView) map[string]int {
+	if h.scheduled == nil {
+		return nil
+	}
+	platformOf := map[string]string{}
+	for _, views := range byPub {
+		for _, v := range views {
+			for _, a := range v.Accounts {
+				platformOf[a.ID] = v.PublisherPlatformID
+			}
+		}
+	}
+	if len(platformOf) == 0 {
+		return nil
+	}
+	counts, err := h.scheduled.ScheduledCounts(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "scheduled post counts unavailable; leaving waiting_posts out",
+			logging.AttrComponent, "platforms", logging.AttrError, err)
+		return nil
+	}
+	return zernio.WaitingByAccount(counts, platformOf)
+}
+
+// toAccountViews projects publisher accounts onto the wire shape, with the
+// posts waiting on each when waiting has them; the result is never nil.
+func toAccountViews(in []publishers.Account, waiting map[string]int) []accountView {
 	out := make([]accountView, 0, len(in))
 	for _, a := range in {
-		out = append(out, accountView{
-			ID:          a.ID,
-			Username:    a.Username,
-			DisplayName: a.DisplayName,
-			AvatarURL:   a.AvatarURL,
-			IsActive:    a.IsActive,
-			ConnectedAt: a.ConnectedAt,
-		})
+		v := accountView{
+			ID:             a.ID,
+			Username:       a.Username,
+			DisplayName:    a.DisplayName,
+			AvatarURL:      a.AvatarURL,
+			IsActive:       a.IsActive,
+			ConnectedAt:    a.ConnectedAt,
+			TokenExpiresAt: a.TokenExpiresAt,
+		}
+		if n, ok := waiting[a.ID]; ok {
+			v.WaitingPosts = new(n)
+		}
+		out = append(out, v)
 	}
 	return out
 }
