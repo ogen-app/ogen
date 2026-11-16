@@ -1084,18 +1084,20 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 			return err
 		})
 	}
-	if err := g.Wait(); err != nil {
+	err = g.Wait()
+	rows, allDates, allWarn := tallyDrafts(resps, platformNames)
+	// The drafts the other platforms saved are scored even when one failed.
+	st.scoreDrafts(ctx, rows)
+	if err != nil {
 		return assistantkit.Outcome[DraftPostOutput]{}, err
 	}
 
-	rows, allDates, allWarn := tallyDrafts(resps, platformNames)
 	total := len(rows)
 	refused := slices.DeleteFunc(refusals, func(r string) bool { return r == "" })
 	if total == 0 && len(refused) > 0 {
 		return assistantkit.Refuse[DraftPostOutput](strings.Join(refused, "; ")), nil
 	}
 	allWarn = append(allWarn, refused...)
-	st.scoreDrafts(ctx, rows)
 
 	st.draftPostResult = &DraftPostResult{
 		PostCount:   total,

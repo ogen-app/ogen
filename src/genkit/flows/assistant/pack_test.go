@@ -342,6 +342,8 @@ func TestRun_PackReadsTheReplysCites(t *testing.T) {
 		"string":   {`{"explanation":"April is 14 of 20.","cites":"goal, sources","action":"answered"}`, []string{"goal", "sources"}},
 		"preamble": {"Here you go:\n" + `{"explanation":"April is 14 of 20.","cites":["period"]}`, []string{"period"}},
 		"none":     {`{"explanation":"Done.","action":"answered"}`, nil},
+		"cut off":  {`{"explanation":"April is 14 of 20.","cites":["goal"],"act`, []string{"goal"}},
+		"quoted":   {`{"explanation":"It \"cites\": [\"x\"] nothing.","cites":["calendar"]}`, []string{"calendar"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var ran []string

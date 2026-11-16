@@ -2,6 +2,7 @@ package campaign_assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -285,6 +286,34 @@ func TestToolDraftPost_QueuesTheDraftsForScoring(t *testing.T) {
 	slices.Sort(want)
 	if len(want) != 2 || !slices.Equal(q.got, want) {
 		t.Fatalf("queued %v, want %v", q.got, want)
+	}
+}
+
+// A platform whose draft fails fails the call, but the drafts the others
+// saved are queued for scoring all the same.
+func TestToolDraftPost_FailedPlatformStillScoresTheOthers(t *testing.T) {
+	var calls []draft_post.DraftPostRequest
+	st := newDraftState([]models.AssistantMessage{
+		modelMsg(`{"action":"answered","explanation":"the research"}`),
+	}, &calls)
+	saved := st.draftPost
+	st.draftPost = func(ctx context.Context, req draft_post.DraftPostRequest, on draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error) {
+		if req.PlatformID == "pl2" {
+			return nil, errors.New("engine down")
+		}
+		return saved(ctx, req, on)
+	}
+	st.campaign.TenantID = "t1"
+	q := &queuedScores{}
+	st.qualityAuto = qualityauto.New(q, nil, qualityauto.Config{Enabled: true})
+	ctx := withRequestState(t.Context(), st)
+
+	if _, err := toolDraftPost(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 1}); err == nil {
+		t.Fatal("want the platform's error")
+	}
+	want := "t1/pl1-0/drafted"
+	if !slices.Equal(q.got, []string{want}) {
+		t.Fatalf("queued %v, want [%s]", q.got, want)
 	}
 }
 
