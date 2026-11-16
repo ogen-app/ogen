@@ -7947,7 +7947,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns the ideas planned for days from ` + "`" + `from` + "`" + ` to ` + "`" + `to` + "`" + ` (both YYYY-MM-DD, inclusive, at most 93\ndays), ordered by day, for the calendar to draw beside the posts. Each item is ` + "`" + `kind: \"idea\"` + "`" + `:\na day an idea plans to land on, never a post, so it doesn't count toward goals. Only open ideas\nare slots: one with a post made from it is that post now, and one turned down (\"no\") is gone.\nWith ` + "`" + `campaign_id` + "`" + ` the slots are that campaign's; without, every campaign's but the archived ones.\n` + "`" + `series_id` + "`" + ` is the series a content plan reserved the idea for, null for every other idea; its name\ncomes from ` + "`" + `GET /api/series` + "`" + `.",
+                "description": "Returns the ideas planned for days from ` + "`" + `from` + "`" + ` to ` + "`" + `to` + "`" + ` (both YYYY-MM-DD, inclusive, at most 93\ndays), ordered by day, for the calendar to draw beside the posts. Each item is ` + "`" + `kind: \"idea\"` + "`" + `:\na day an idea plans to land on, never a post, so it doesn't count toward goals. Only open ideas\nare slots: one with a post made from it is that post now, and one turned down (\"no\") is gone.\nWith ` + "`" + `campaign_id` + "`" + ` the slots are that campaign's; without, every campaign's but the archived ones.\n` + "`" + `series_id` + "`" + ` is the series a content plan reserved the idea for, null for every other idea; its name\ncomes from ` + "`" + `GET /api/series` + "`" + `. A deleted series keeps its id here but leaves that list, so an id the\nlist doesn't hold is a series that is gone: show the slot without a series name.",
                 "produces": [
                     "application/json"
                 ],
@@ -21901,7 +21901,7 @@ const docTemplate = `{
                     "x-nullable": true
                 },
                 "series_id": {
-                    "description": "SeriesID is the series a content plan reserved the idea for; nil for\nevery other idea. The client names it from GET /api/series.",
+                    "description": "SeriesID is the series a content plan reserved the idea for; nil for\nevery other idea. The client names it from GET /api/series; it outlives\na deleted series, which that list leaves out.",
                     "type": "string",
                     "x-nullable": true
                 },

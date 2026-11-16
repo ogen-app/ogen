@@ -295,7 +295,8 @@ const maxSlotDays = 93
 // @Description  are slots: one with a post made from it is that post now, and one turned down ("no") is gone.
 // @Description  With `campaign_id` the slots are that campaign's; without, every campaign's but the archived ones.
 // @Description  `series_id` is the series a content plan reserved the idea for, null for every other idea; its name
-// @Description  comes from `GET /api/series`.
+// @Description  comes from `GET /api/series`. A deleted series keeps its id here but leaves that list, so an id the
+// @Description  list doesn't hold is a series that is gone: show the slot without a series name.
 // @Tags         ideas
 // @Produce      json
 // @Security     CookieAuth
