@@ -212,7 +212,7 @@ func TestDraftIdeas(t *testing.T) {
 func TestIdeaSlots(t *testing.T) {
 	app := ideaPostsApp(nil)
 	status, body := call(t, app, "GET", "/api/ideas/slots?from=2026-12-01&to=2026-12-31&campaign_id=c1", "")
-	if status != 200 || !strings.Contains(body, `"kind":"idea"`) || !strings.Contains(body, `"date":"2026-12-01"`) || !strings.Contains(body, `"campaign_name":"c1"`) {
+	if status != 200 || !strings.Contains(body, `"kind":"idea"`) || !strings.Contains(body, `"date":"2026-12-01"`) || !strings.Contains(body, `"campaign_name":"c1"`) || !strings.Contains(body, `"series_id":null`) {
 		t.Fatalf("slots = %d %s", status, body)
 	}
 	for _, q := range []string{

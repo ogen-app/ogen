@@ -484,7 +484,7 @@ func (r *ideaRepository) Slots(ctx context.Context, from, to models.CalendarDate
 		ColumnExpr("? AS kind", models.IdeaSlotKind).
 		ColumnExpr("i.id, i.title, i.plan_target_date AS date").
 		ColumnExpr("c.id AS campaign_id, coalesce(c.name, '') AS campaign_name").
-		ColumnExpr("i.plan_platform_id AS platform_id, i.plan_post_type AS post_type, i.plan_phase_id AS phase_id").
+		ColumnExpr("i.plan_platform_id AS platform_id, i.plan_post_type AS post_type, i.plan_phase_id AS phase_id, i.series_id").
 		ColumnExpr("i.origin, i.verdict").
 		Join("LEFT JOIN campaigns AS c ON c.id = i.campaign_id AND c.deleted_at IS NULL").
 		Where("i.plan_target_date BETWEEN ? AND ?", from, to).

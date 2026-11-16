@@ -294,6 +294,8 @@ const maxSlotDays = 93
 // @Description  a day an idea plans to land on, never a post, so it doesn't count toward goals. Only open ideas
 // @Description  are slots: one with a post made from it is that post now, and one turned down ("no") is gone.
 // @Description  With `campaign_id` the slots are that campaign's; without, every campaign's but the archived ones.
+// @Description  `series_id` is the series a content plan reserved the idea for, null for every other idea; its name
+// @Description  comes from `GET /api/series`.
 // @Tags         ideas
 // @Produce      json
 // @Security     CookieAuth

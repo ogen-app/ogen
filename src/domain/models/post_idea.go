@@ -46,7 +46,10 @@ type IdeaSlot struct {
 	PlatformID   *string      `json:"platform_id" extensions:"x-nullable"`
 	PostType     *string      `json:"platform_post_type" extensions:"x-nullable"`
 	PhaseID      *string      `json:"phase_id" extensions:"x-nullable"`
-	Origin       IdeaOrigin   `json:"origin" swaggertype:"string" enums:",asset_analysis,content_plan,assistant"`
+	// SeriesID is the series a content plan reserved the idea for; nil for
+	// every other idea. The client names it from GET /api/series.
+	SeriesID *string    `json:"series_id" extensions:"x-nullable"`
+	Origin   IdeaOrigin `json:"origin" swaggertype:"string" enums:",asset_analysis,content_plan,assistant"`
 	// Verdict is nil while the idea waits for triage.
 	Verdict *IdeaVerdict `json:"verdict" swaggertype:"string" enums:"yes,later" extensions:"x-nullable"`
 }
