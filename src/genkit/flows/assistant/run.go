@@ -348,21 +348,14 @@ func assemble(ctx context.Context, scanner *jsonstream.Scanner) *Response {
 
 // replyCites reads the envelope's "cites": a list of names, or one string
 // of them split by commas, each trimmed and once. The streaming scanner
-// skips arrays, so the list is read from the whole reply.
+// skips arrays, so the list is decoded from its key in the whole reply: a
+// reply cut off after it still cites.
 func replyCites(scanner *jsonstream.Scanner) []string {
 	var names []string
 	if s, ok := scanner.Values()["cites"].(string); ok {
 		names = strings.Split(s, ",")
-	} else {
-		var env struct {
-			Cites []string `json:"cites"`
-		}
-		raw := scanner.FullText()
-		i, j := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
-		if i < 0 || j < i || json.Unmarshal([]byte(raw[i:j+1]), &env) != nil {
-			return nil
-		}
-		names = env.Cites
+	} else if names = citesArray(scanner.FullText()); names == nil {
+		return nil
 	}
 	var out []string
 	for _, n := range names {
@@ -371,6 +364,26 @@ func replyCites(scanner *jsonstream.Scanner) []string {
 		}
 	}
 	return out
+}
+
+// citesArray decodes the list after the reply's last "cites" key; nil when
+// there is none, or it isn't a whole list of strings. A "cites" quoted in
+// the explanation is escaped, so it never matches the key.
+func citesArray(raw string) []string {
+	i := strings.LastIndex(raw, `"cites"`)
+	if i < 0 {
+		return nil
+	}
+	rest := strings.TrimLeft(raw[i+len(`"cites"`):], " \t\r\n")
+	rest, ok := strings.CutPrefix(rest, ":")
+	if !ok {
+		return nil
+	}
+	var names []string
+	if json.NewDecoder(strings.NewReader(rest)).Decode(&names) != nil {
+		return nil
+	}
+	return names
 }
 
 // unusableReply logs a turn that left neither a reply nor work to report,

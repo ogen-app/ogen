@@ -582,16 +582,28 @@ func (c evalCase) judge(r *assistant.Routing) (bool, string) {
 		return false, fmt.Sprintf("first call isn't one of %v", c.want)
 	}
 	if len(c.cites) > 0 {
+		// The reply may cite as a list or as one comma-separated string.
 		var env struct {
-			Cites []string `json:"cites"`
+			Cites any `json:"cites"`
 		}
 		i, j := strings.Index(r.Reply, "{"), strings.LastIndex(r.Reply, "}")
 		if i < 0 || j < i || json.Unmarshal([]byte(r.Reply[i:j+1]), &env) != nil {
 			return false, "reply has no cites"
 		}
+		var cites []string
+		switch v := env.Cites.(type) {
+		case []any:
+			for _, s := range v {
+				cites = append(cites, fmt.Sprint(s))
+			}
+		case string:
+			for s := range strings.SplitSeq(v, ",") {
+				cites = append(cites, strings.TrimSpace(s))
+			}
+		}
 		for _, want := range c.cites {
-			if !slices.Contains(env.Cites, want) {
-				return false, fmt.Sprintf("cites %v, want %v", env.Cites, c.cites)
+			if !slices.Contains(cites, want) {
+				return false, fmt.Sprintf("cites %v, want %v", cites, c.cites)
 			}
 		}
 	}
