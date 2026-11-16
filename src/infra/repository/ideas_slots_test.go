@@ -37,10 +37,13 @@ func TestIdeas_Slots(t *testing.T) {
 		}
 		return &d
 	}
+	if err := repository.NewSeriesRepository(db).Create(ctx, &models.Series{ID: "slot-series", Name: "Tuesday tips", Supply: models.SeriesSupplySelf}); err != nil {
+		t.Fatal(err)
+	}
 	no, yes := models.IdeaVerdictNo, models.IdeaVerdictYes
 	live, archived := "slot-live", "slot-archived"
 	for _, i := range []*models.Idea{
-		{ID: "s-late", Title: "late", CampaignID: &live, Plan: models.IdeaPlan{TargetDate: day("2026-12-20"), PlatformID: new("linkedin")}},
+		{ID: "s-late", Title: "late", CampaignID: &live, SeriesID: new("slot-series"), Plan: models.IdeaPlan{TargetDate: day("2026-12-20"), PlatformID: new("linkedin")}},
 		{ID: "s-early", Title: "early", CampaignID: &live, Verdict: &yes, DecidedAt: &now, DecidedBy: new("u1"), Plan: models.IdeaPlan{TargetDate: day("2026-12-02")}},
 		{ID: "s-workspace", Title: "workspace", Plan: models.IdeaPlan{TargetDate: day("2026-12-05")}},
 		{ID: "s-no", Title: "turned down", CampaignID: &live, Verdict: &no, DecidedAt: &now, DecidedBy: new("u1"), Plan: models.IdeaPlan{TargetDate: day("2026-12-03")}},
@@ -76,6 +79,9 @@ func TestIdeas_Slots(t *testing.T) {
 	late := all[2]
 	if late.Kind != "idea" || late.Date.String() != "2026-12-20" || late.CampaignName != "Live" || *late.PlatformID != "linkedin" || late.Verdict != nil {
 		t.Fatalf("slot = %+v", late)
+	}
+	if late.SeriesID == nil || *late.SeriesID != "slot-series" || all[0].SeriesID != nil {
+		t.Fatalf("series of slots = %v, %v", late.SeriesID, all[0].SeriesID)
 	}
 
 	// Asked for by campaign, an archived campaign's ideas are its slots.
