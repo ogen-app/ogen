@@ -157,12 +157,12 @@ jobs:
 
       # Blacksmith keeps the layer cache on a sticky disk keyed by cache-key.
       - name: Set up Docker builder
-        uses: useblacksmith/setup-docker-builder@v2
+        uses: useblacksmith/setup-docker-builder@9657a6e02ca6445e6d6ce5ffaf370f4828dea50d # v2.4.0
         with:
           cache-key: Dockerfile
 
       - name: Build
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
           context: .
           push: false
@@ -199,21 +199,21 @@ jobs:
         run: echo "number=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker builder
-        uses: useblacksmith/setup-docker-builder@v2
+        uses: useblacksmith/setup-docker-builder@9657a6e02ca6445e6d6ce5ffaf370f4828dea50d # v2.4.0
         with:
           cache-key: Dockerfile
 
       # The source label links the package to this repo, which is what lets
       # GITHUB_TOKEN push to it.
       - name: Build and push
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
           context: .
           push: true
