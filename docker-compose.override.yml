@@ -3,8 +3,8 @@
 # (Dockerfile.dev + air) that recompiles the Go server on any .go change.
 # The production docker-compose.yml and Dockerfile are left untouched.
 #
-#   docker compose up                         # dev: live-reload (this override applies)
-#   docker compose -f docker-compose.yml up   # prod-like: Dockerfile build, no reload
+#   docker compose up                                 # dev: live-reload (this override applies)
+#   docker compose -f docker-compose.yml up --build   # prod-like: Dockerfile build, no reload
 services:
   api:
     build:
