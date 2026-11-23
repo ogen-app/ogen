@@ -1,10 +1,10 @@
-# Dev-only override, auto-loaded by `docker compose up`. Replaces the prebuilt
-# `ogen` image on the `api` service with a live-reloading dev container
+# Dev-only override, auto-loaded by `docker compose up`. Replaces the
+# Dockerfile build of the `api` service with a live-reloading dev container
 # (Dockerfile.dev + air) that recompiles the Go server on any .go change.
 # The production docker-compose.yml and Dockerfile are left untouched.
 #
 #   docker compose up                         # dev: live-reload (this override applies)
-#   docker compose -f docker-compose.yml up   # prod-like: prebuilt image, no reload
+#   docker compose -f docker-compose.yml up   # prod-like: Dockerfile build, no reload
 services:
   api:
     build:
