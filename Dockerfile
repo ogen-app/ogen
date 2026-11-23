@@ -22,8 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -p 4 -trimpath -ldflags="-s -w" -o /server
 # ─── Stage 2: GeoIP database ─────────────────────────────────────────────────
 # DB-IP "IP to City Lite" (CC BY 4.0, no licence key) for the location line in
 # new-device login alerts. Built into the image so every environment built from
-# this Dockerfile — Railway staging from source, the published production image,
-# local `docker build` — has it. DB-IP publishes one file per month, and the
+# this Dockerfile — Railway staging from source, the ghcr.io/ogen-app/ogen
+# image CI publishes, local `docker build` — has it. DB-IP publishes one file per month, and the
 # current month's file can lag its first days, so the previous month is the
 # fallback. Pin a month with --build-arg GEOIP_MONTH=YYYY-MM (on Railway, a
 # service variable of that name); a changed value also refreshes a cached layer.

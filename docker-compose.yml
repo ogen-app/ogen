@@ -1,6 +1,6 @@
 services:
     api:
-        image: alephbetai/ogen:latest
+        build: .
         platform: linux/amd64
         # All configuration (incl. secrets) lives in .env, which is gitignored.
         # Copy .env.example -> .env and fill it in before `docker compose up`.
