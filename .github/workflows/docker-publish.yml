@@ -176,10 +176,12 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: testing
     # Back-to-back merges publish one at a time, so build numbers reach the
-    # registry and ogen-release in order.
+    # registry and ogen-release in order. queue: max keeps every waiting run;
+    # by default a newer one would cancel the run already waiting.
     concurrency:
       group: build-and-push
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       packages: write
