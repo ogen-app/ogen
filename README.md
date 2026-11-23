@@ -342,6 +342,14 @@ and serves their steps on the job RPC listener (`JOB_RPC_ADDR`). Schema
 migrations take a Postgres advisory lock, so replicas booting together migrate
 one at a time.
 
+**How a change ships.** Railway never builds this repo. Every green push to
+`main` publishes `ghcr.io/ogen-app/ogen:<build>`, where the build is the commit
+count on `main`, and sends a bump to
+[`ogen-app/ogen-release`](https://github.com/ogen-app/ogen-release). Its
+`release.yaml` pins the build each environment runs: a bump commit there deploys
+development and smoke-tests it. Production runs images pinned separately and
+changes only with a release.
+
 **Repository family**
 
 | Repo | Role |
