@@ -52,7 +52,7 @@ func TestConnectErrorCodeForStatus(t *testing.T) {
 // undefined": the userProfile callback param arrives (double-)URL-encoded, and
 // the old code dropped it whenever a single decode left it non-JSON. It must now
 // decode until the object parses, and forward the fully-decoded original.
-func TestRawUserProfile(t *testing.T) {
+func TestRawJSONParam(t *testing.T) {
 	const obj = `{"id":"123","username":"mybrand","displayName":"My Brand Page"}`
 	once := url.QueryEscape(obj)     // arrives single-encoded
 	twice := url.QueryEscape(once)   // arrives double-encoded
@@ -78,16 +78,16 @@ func TestRawUserProfile(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := rawUserProfile(tc.in)
+			got := rawJSONParam(tc.in)
 			if (len(got) > 0) != tc.recovered {
-				t.Fatalf("rawUserProfile(%q) recovered=%v (got %q), want recovered=%v",
+				t.Fatalf("rawJSONParam(%q) recovered=%v (got %q), want recovered=%v",
 					tc.in, len(got) > 0, string(got), tc.recovered)
 			}
 			if !tc.recovered {
 				return
 			}
 			if !json.Valid(got) {
-				t.Fatalf("rawUserProfile(%q) returned invalid JSON: %q", tc.in, string(got))
+				t.Fatalf("rawJSONParam(%q) returned invalid JSON: %q", tc.in, string(got))
 			}
 			// Must be fully decoded back to the original object, not a
 			// half-decoded string still carrying %XX escapes.

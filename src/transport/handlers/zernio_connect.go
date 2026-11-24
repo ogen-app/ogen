@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,12 +113,17 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 
 	// Selection platform: list the targets and drive the pick ourselves so no
 	// Zernio screen ever appears.
-	tempToken := c.Query("tempToken")
 	connectToken := c.Query("connect_token")
 	rawUserProfileParam := c.Query("userProfile")
-	userProfile := rawUserProfile(rawUserProfileParam)
+	cb := zernio.ConnectCallback{
+		TempToken:        c.Query("tempToken"),
+		ConnectToken:     connectToken,
+		UserProfile:      rawJSONParam(rawUserProfileParam),
+		PendingDataToken: c.Query("pendingDataToken"),
+		Organizations:    rawJSONParam(c.Query("organizations")),
+	}
 
-	targets, err := h.integ.Client.ListConnectTargets(ctx, sess.Platform, sess.ProfileID, tempToken, connectToken)
+	sel, err := h.integ.Client.ListConnectTargets(ctx, sess.Platform, sess.ProfileID, cb)
 	if err != nil {
 		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
 			code := connectErrorCodeForStatus(apiErr.Status)
@@ -128,6 +134,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 		}
 		return err
 	}
+	tempToken, userProfile, targets := sel.TempToken, sel.UserProfile, sel.Targets
 
 	switch {
 	case len(targets) == 0:
@@ -135,7 +142,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 		return h.redirectConnectError(c, sess.Platform, "no_targets")
 
 	case len(targets) == 1:
-		if err := h.integ.Client.SelectConnectTarget(ctx, sess.Platform, sess.ProfileID, tempToken, connectToken, targets[0].ID, userProfile); err != nil {
+		if err := h.integ.Client.SelectConnectTarget(ctx, sess.Platform, sess.ProfileID, tempToken, connectToken, targets[0], userProfile); err != nil {
 			jobs.ZernioConnectSelectFailed.Add(1)
 			if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
 				code := connectErrorCodeForStatus(apiErr.Status)
@@ -260,7 +267,8 @@ func (h *ZernioHandler) SelectPendingConnection(c *fiber.Ctx) error {
 			return err
 		}
 	}
-	if !containsTargetID(opts, req.TargetID) {
+	i := slices.IndexFunc(opts, func(o zernio.ConnectTarget) bool { return o.ID == req.TargetID })
+	if i < 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid_target")
 	}
 
@@ -268,7 +276,7 @@ func (h *ZernioHandler) SelectPendingConnection(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := h.integ.Client.SelectConnectTarget(reqCtx(c), sess.Platform, sess.ProfileID, secrets.TempToken, secrets.ConnectToken, req.TargetID, secrets.UserProfile); err != nil {
+	if err := h.integ.Client.SelectConnectTarget(reqCtx(c), sess.Platform, sess.ProfileID, secrets.TempToken, secrets.ConnectToken, opts[i], secrets.UserProfile); err != nil {
 		jobs.ZernioConnectSelectFailed.Add(1)
 		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
 			slog.WarnContext(reqCtx(c), "connect select target failed (picker)",
@@ -408,8 +416,9 @@ func newConnectSessionID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// rawUserProfile normalizes Zernio's userProfile callback param into the JSON
-// object its select-page POST requires. Zernio rejects a missing object with
+// rawJSONParam normalizes a JSON-valued callback param — userProfile, or
+// LinkedIn's inline organizations — into raw JSON. userProfile is the object
+// Zernio's select POST requires. Zernio rejects a missing object with
 // "Invalid input: expected object, received undefined", so dropping this field
 // (as an earlier over-strict version did) breaks every single-target Facebook /
 // LinkedIn connect.
@@ -421,7 +430,7 @@ func newConnectSessionID() (string, error) {
 // extra encoding unchanged, which is exactly why the list call works while this
 // field alone arrives broken. Decode again (bounded) until it parses; return nil
 // only when the param is absent or unrecoverable.
-func rawUserProfile(s string) json.RawMessage {
+func rawJSONParam(s string) json.RawMessage {
 	s = strings.TrimSpace(s)
 	// Validate the value as-is, then after each of up to 4 URL-decode passes.
 	// The check sits at the TOP of the loop so the result of the LAST decode is
@@ -445,13 +454,4 @@ func rawUserProfile(s string) json.RawMessage {
 		}
 		s = strings.TrimSpace(dec)
 	}
-}
-
-func containsTargetID(opts []zernio.ConnectTarget, id string) bool {
-	for _, o := range opts {
-		if o.ID == id {
-			return true
-		}
-	}
-	return false
 }

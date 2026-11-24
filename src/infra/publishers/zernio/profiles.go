@@ -113,6 +113,8 @@ func (c *Client) DeleteProfile(ctx context.Context, id string) error {
 // none of its own hosted selection screens. After OAuth it redirects the
 // browser back to redirectURL with tempToken / connect_token / step so Ogen
 // drives any secondary target selection (LinkedIn org, Facebook page) itself.
+// For LinkedIn the redirect URL also gets pendingDataOnly=true, so the
+// redirect carries a pendingDataToken instead of the OAuth token and org list.
 // redirectURL must be an absolute URL Ogen controls (the backend callback
 // carrying the connect-session id); when empty it falls back to the Client's
 // configured RedirectURL.
@@ -126,6 +128,16 @@ func (c *Client) CreateConnectLink(ctx context.Context, profileID, platform, red
 	q := url.Values{"profileId": {profileID}, "headless": {"true"}}
 	if redirectURL == "" {
 		redirectURL = c.redirectURL
+	}
+	if redirectURL != "" && usesPendingData(platform) {
+		u, err := url.Parse(redirectURL)
+		if err != nil {
+			return "", fmt.Errorf("zernio: parse redirect url: %w", err)
+		}
+		rq := u.Query()
+		rq.Set("pendingDataOnly", "true")
+		u.RawQuery = rq.Encode()
+		redirectURL = u.String()
 	}
 	if redirectURL != "" {
 		q.Set("redirect_url", redirectURL)

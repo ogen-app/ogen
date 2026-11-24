@@ -216,10 +216,10 @@ func TestCreateConnectLinkForwardsRedirectURL(t *testing.T) {
 	stub := newStubServer()
 	defer stub.Close()
 	var sawRedirect, sawProfileID string
-	stub.handle("GET", "/connect/linkedin", func(w http.ResponseWriter, r *http.Request) {
+	stub.handle("GET", "/connect/facebook", func(w http.ResponseWriter, r *http.Request) {
 		sawRedirect = r.URL.Query().Get("redirect_url")
 		sawProfileID = r.URL.Query().Get("profileId")
-		jsonResponse(http.StatusOK, map[string]string{"authUrl": "https://zernio.com/oauth/linkedin?token=t"})(w, r)
+		jsonResponse(http.StatusOK, map[string]string{"authUrl": "https://zernio.com/oauth/facebook?token=t"})(w, r)
 	})
 
 	c := NewClient(StaticKey("test-key"), stub.URL, ClientOpts{
@@ -227,7 +227,7 @@ func TestCreateConnectLinkForwardsRedirectURL(t *testing.T) {
 		RedirectURL: "https://app.example.com/oauth/done",
 	})
 	// Empty per-call redirect falls back to the Client's configured RedirectURL.
-	got, err := c.CreateConnectLink(t.Context(), "p_test", "linkedin", "")
+	got, err := c.CreateConnectLink(t.Context(), "p_test", "facebook", "")
 	if err != nil {
 		t.Fatalf("CreateConnectLink: %v", err)
 	}
