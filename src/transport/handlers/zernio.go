@@ -371,7 +371,8 @@ func (h *ZernioHandler) ListAccounts(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	var rows []accountInfo
+	// Never nil: a workspace with no Zernio profile yet reads `"accounts": []`.
+	rows := []accountInfo{}
 	if profileID != "" {
 		fetched, err := h.accounts.ListActive(reqCtx(c), profileID)
 		if err != nil {

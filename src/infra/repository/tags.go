@@ -36,7 +36,8 @@ func NewTagRepository(db *bun.DB) TagRepository {
 }
 
 func (r *tagRepository) List(ctx context.Context) ([]models.Tag, error) {
-	var tags []models.Tag
+	// Never nil, so a workspace with no tags reads as `[]`, not `null`.
+	tags := []models.Tag{}
 	if err := r.db.NewSelect().Model(&tags).OrderExpr("created_at ASC").Scan(ctx); err != nil {
 		return nil, err
 	}
