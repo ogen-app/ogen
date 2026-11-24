@@ -345,7 +345,7 @@ func (h *BrandHandler) PutPositioning(c *fiber.Ctx) error {
 	} else {
 		p.ID, p.CreatedAt = existing.ID, existing.CreatedAt
 	}
-	if err := h.repo.UpsertPositioning(reqCtx(c), nil, &p); err != nil {
+	if err := h.repo.UpsertPositioning(reqCtx(c), &p); err != nil {
 		return err
 	}
 	h.recordActivity(c, "brand_positioning_updated")

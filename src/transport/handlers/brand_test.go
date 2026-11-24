@@ -432,5 +432,21 @@ var _ = Describe("BrandHandler", Ordered, func() {
 			Expect(do("DELETE", "/api/brand/positioning", nil).StatusCode).To(Equal(204))
 			Expect(getBrand().Positioning).To(BeNil())
 		})
+
+		It("refuses a positioning write without a session or with a malformed body", func() {
+			for _, method := range []string{"PUT", "DELETE"} {
+				req := httptest.NewRequest(method, "/api/brand/positioning", bytes.NewReader([]byte(`{"statement":"x"}`)))
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(401), method)
+			}
+			req := httptest.NewRequest("PUT", "/api/brand/positioning", bytes.NewReader([]byte(`{"statement":`)))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(400))
+		})
 	})
 })

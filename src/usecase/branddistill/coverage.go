@@ -58,6 +58,9 @@ func countCoverage(reads []models.BrandDistillRun) map[string]models.DistillCove
 	for _, q := range starterQuestions {
 		sectionOf[q.ID] = q.Section
 	}
+	// A later answer to a question replaces the earlier one when the run
+	// composes, so each question counts once.
+	answered := map[string]bool{}
 	for _, r := range reads {
 		for _, c := range r.Candidates {
 			if section, ok := sectionOfKind[c.Kind]; ok {
@@ -67,7 +70,8 @@ func countCoverage(reads []models.BrandDistillRun) map[string]models.DistillCove
 			}
 		}
 		for _, a := range r.Answers {
-			if section, ok := sectionOf[a.QuestionID]; ok {
+			if section, ok := sectionOf[a.QuestionID]; ok && !answered[a.QuestionID] {
+				answered[a.QuestionID] = true
 				at(section).answers++
 			}
 		}

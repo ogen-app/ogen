@@ -21,13 +21,15 @@ import (
 
 // fakeBrandDistiller answers with what each test sets and records what it got.
 type fakeBrandDistiller struct {
-	run     *models.BrandDistillRun
-	err     error
-	request branddistill.RequestInput
-	commit  branddistill.CommitInput
-	result  *branddistill.CommitResult
-	read    branddistill.ReadInput
-	reads   []models.BrandDistillRun
+	run      *models.BrandDistillRun
+	err      error
+	request  branddistill.RequestInput
+	commit   branddistill.CommitInput
+	result   *branddistill.CommitResult
+	read     branddistill.ReadInput
+	reads    []models.BrandDistillRun
+	stopped  [2]string
+	composed string
 }
 
 func (f *fakeBrandDistiller) Request(_ context.Context, in branddistill.RequestInput) (*models.BrandDistillRun, error) {
@@ -64,7 +66,8 @@ func (f *fakeBrandDistiller) AddRead(_ context.Context, in branddistill.ReadInpu
 	return f.run, f.err
 }
 
-func (f *fakeBrandDistiller) StopRead(context.Context, string, string, string) (*models.BrandDistillRun, error) {
+func (f *fakeBrandDistiller) StopRead(_ context.Context, _, runID, readID string) (*models.BrandDistillRun, error) {
+	f.stopped = [2]string{runID, readID}
 	return f.run, f.err
 }
 
@@ -72,7 +75,8 @@ func (f *fakeBrandDistiller) Reads(context.Context, string, string) ([]models.Br
 	return f.reads, nil
 }
 
-func (f *fakeBrandDistiller) Compose(context.Context, string, string) (*models.BrandDistillRun, error) {
+func (f *fakeBrandDistiller) Compose(_ context.Context, _, runID string) (*models.BrandDistillRun, error) {
+	f.composed = runID
 	return f.run, f.err
 }
 
@@ -298,6 +302,28 @@ var _ = Describe("Brand distillation", Ordered, Serial, func() {
 			fake.run = &r
 			resp, _ := do("DELETE", "/api/brand/distills/"+runID+"/reads/r1", nil)
 			Expect(resp.StatusCode).To(Equal(fiber.StatusNoContent))
+			Expect(fake.stopped).To(Equal([2]string{runID, "r1"}))
+		})
+
+		It("composes and answers 202 with the run", func() {
+			fake.run = &models.BrandDistillRun{ID: runID, Incremental: true, Status: models.BrandDistillStatusPending}
+			resp, body := do("POST", "/api/brand/distills/"+runID+"/compose", nil)
+			Expect(resp.StatusCode).To(Equal(fiber.StatusAccepted))
+			Expect(body["status"]).To(Equal("pending"))
+			Expect(fake.composed).To(Equal(runID))
+		})
+
+		It("needs a session for every read route", func() {
+			for _, route := range [][2]string{
+				{"POST", "/api/brand/distills/" + runID + "/reads"},
+				{"DELETE", "/api/brand/distills/" + runID + "/reads/r1"},
+				{"POST", "/api/brand/distills/" + runID + "/compose"},
+			} {
+				req := httptest.NewRequest(route[0], route[1], nil)
+				resp, err := app.Test(req, -1)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(fiber.StatusUnauthorized), route[1])
+			}
 		})
 
 		It("refuses to compose while a read is open", func() {

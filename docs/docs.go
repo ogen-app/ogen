@@ -2232,7 +2232,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Adds the kept items, edits included, to the Brand in one transaction: voices (the workspace default only when it has none), audiences, guardrail lines merged into the existing lists, ledger facts, and the disclaimer only when sent. Nothing existing is changed or removed. Repeats and items over a cap come back in skipped. The run becomes committed.",
+                "description": "Adds the kept items, edits included, to the Brand in one transaction: voices (the workspace default only when it has none), audiences, guardrail lines merged into the existing lists, ledger facts, positioning differentiators merged into the existing list, and the disclaimer and the positioning statement only when sent, each replacing the workspace's own. Nothing else existing is changed or removed. Repeats and items over a cap come back in skipped. The run becomes committed.",
                 "consumes": [
                     "application/json"
                 ],
@@ -14630,7 +14630,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns the authenticated caller's tenant.",
+                "description": "Returns the authenticated caller's tenant, with billing_required and its setup state (setup, null for a workspace made before setup existed).",
                 "produces": [
                     "application/json"
                 ],
@@ -14642,7 +14642,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/models.Tenant"
+                            "$ref": "#/definitions/handlers.currentTenantResponse"
                         }
                     },
                     "401": {
@@ -17958,6 +17958,41 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 100,
                     "minLength": 1
+                }
+            }
+        },
+        "handlers.currentTenantResponse": {
+            "type": "object",
+            "properties": {
+                "billing_required": {
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "description": "DeletedAt marks a soft-deleted workspace. Membership\nresolution filters it out, so a deleted workspace can't be listed, switched\nto, or entered — but the row survives for support-side recovery. Plain\ntimestamp, NOT a bun ` + "`" + `,soft_delete` + "`" + ` column: see the migration comment.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "setup": {
+                    "description": "Setup is where the workspace is in setup after signup; null for a\nworkspace made before setup existed, which is never sent through it.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.TenantSetup"
+                        }
+                    ]
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
                 }
             }
         },

@@ -45,8 +45,9 @@ type BrandDistillRepository interface {
 	SaveOpen(ctx context.Context, run *models.BrandDistillRun, columns ...string) error
 	// ExpireReadyBefore marks every tenant's ready runs finished before cutoff
 	// expired and drops their working state, and expires the incremental runs
-	// still collecting that were last touched before cutoff. It returns how
-	// many it expired.
+	// still collecting that were last touched before cutoff. A ready read
+	// expires only once its run no longer collects. It returns how many it
+	// expired.
 	ExpireReadyBefore(ctx context.Context, cutoff time.Time) (int64, error)
 	// StampSourceRun records runID on the brand-source assets among ids that
 	// have none yet.
@@ -225,7 +226,7 @@ func update(db bun.IDB, run *models.BrandDistillRun, columns []string) *bun.Upda
 func (r *brandDistillRepository) ExpireReadyBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	res, err := r.db.NewRaw(`UPDATE brand_distill_runs
 		SET status = ?, candidates = NULL, proposal = NULL, updated_at = now()
-		WHERE status = ? AND finished_at < ?`,
+		WHERE read_of IS NULL AND status = ? AND finished_at < ?`,
 		models.BrandDistillStatusExpired, models.BrandDistillStatusReady, cutoff,
 	).Exec(ctx)
 	if err != nil {
@@ -243,7 +244,20 @@ func (r *brandDistillRepository) ExpireReadyBefore(ctx context.Context, cutoff t
 		return n, err
 	}
 	idle, _ := res.RowsAffected()
-	return n + idle, nil
+	// A finished read is kept while its run collects, however long that
+	// takes, since composing reads it. Once the run no longer collects, its
+	// reads' passages are spent and expire with the usual wait.
+	res, err = r.db.NewRaw(`UPDATE brand_distill_runs AS rd
+		SET status = ?, candidates = NULL, updated_at = now()
+		FROM brand_distill_runs AS run
+		WHERE rd.read_of = run.id AND rd.status = ? AND rd.finished_at < ? AND run.status <> ?`,
+		models.BrandDistillStatusExpired, models.BrandDistillStatusReady, cutoff, models.BrandDistillStatusCollecting,
+	).Exec(ctx)
+	if err != nil {
+		return n + idle, err
+	}
+	reads, _ := res.RowsAffected()
+	return n + idle + reads, nil
 }
 
 func (r *brandDistillRepository) StampSourceRun(ctx context.Context, runID string, assetIDs []string) error {

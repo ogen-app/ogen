@@ -43,7 +43,9 @@ type ReadInput struct {
 }
 
 // startIncremental opens an incremental run and starts a read for each source
-// given. The run takes more sources until it is composed.
+// given. The run takes more sources until it is composed. A source that could
+// not be started is returned as an error with the run; the reads started
+// before it stay.
 func (s *Service) startIncremental(ctx context.Context, in RequestInput) (*models.BrandDistillRun, error) {
 	run := &models.BrandDistillRun{Status: models.BrandDistillStatusCollecting, Incremental: true, CreatedBy: in.UserID}
 	if err := s.repos.Runs.Create(ctx, s.db, run); err != nil {
@@ -60,14 +62,21 @@ func (s *Service) startIncremental(ctx context.Context, in RequestInput) (*model
 	if len(in.Answers) > 0 {
 		reads = append(reads, ReadInput{Answers: in.Answers})
 	}
+	var failed error
 	for _, r := range reads {
 		r.TenantID, r.RunID, r.UserID = in.TenantID, run.ID, in.UserID
 		if _, err := s.AddRead(ctx, r); err != nil {
-			s.warn(ctx, "start a read of a new run", run.ID, err)
+			failed = fmt.Errorf("start a read of run %s: %w", run.ID, err)
+			break
 		}
 	}
+	// Answers settle at once and count into the run's coverage, so the run
+	// is read again before it is returned.
+	if fresh, err := s.repos.Runs.Get(ctx, run.ID); err == nil {
+		run = fresh
+	}
 	s.publish(ctx, run)
-	return run, nil
+	return run, failed
 }
 
 // AddRead starts reading one more source of an incremental run. A website or
