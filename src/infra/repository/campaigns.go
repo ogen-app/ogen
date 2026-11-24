@@ -158,9 +158,12 @@ func (r *campaignRepository) ListArchived(ctx context.Context) ([]models.Campaig
 }
 
 // listFiltered runs the shared list query + hydration, always excluding
-// soft-deleted rows and applying the caller's archived-state predicate.
+// soft-deleted rows and applying the caller's archived-state predicate. The
+// result is never nil: bun leaves a nil slice nil when no row matches, and a
+// workspace with no campaigns must read as `[]` on the wire, not `null`
+// (CON-521).
 func (r *campaignRepository) listFiltered(ctx context.Context, extra func(*bun.SelectQuery) *bun.SelectQuery) ([]models.Campaign, error) {
-	var campaigns []models.Campaign
+	campaigns := []models.Campaign{}
 	q := extra(r.db.NewSelect().Model(&campaigns).Where("c.deleted_at IS NULL"))
 	if err := q.OrderExpr("created_at ASC").Scan(ctx); err != nil {
 		return nil, err

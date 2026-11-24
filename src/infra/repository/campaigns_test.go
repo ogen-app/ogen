@@ -63,6 +63,27 @@ func readArchivedAt(t *testing.T, db *bun.DB, ctx context.Context, id string) *t
 	return c.ArchivedAt
 }
 
+// TestListIsEmptyNotNil is the regression for CON-521: a workspace with no
+// campaigns was answered `null`, and the SPA's shell read its length.
+func TestListIsEmptyNotNil(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewCampaignRepository(db, nil, nil, nil)
+
+	for name, list := range map[string]func(context.Context) ([]models.Campaign, error){
+		"active":   repo.List,
+		"archived": repo.ListArchived,
+	} {
+		got, err := list(ctx)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got == nil || len(got) != 0 {
+			t.Fatalf("%s: want an empty non-nil slice, got %#v", name, got)
+		}
+	}
+}
+
 // TestArchivePreservesTimestampOnReArchive is the regression for the re-archive
 // overwrite: archiving an already archived campaign must keep the original
 // archived_at rather than re-stamping it to the current time.
