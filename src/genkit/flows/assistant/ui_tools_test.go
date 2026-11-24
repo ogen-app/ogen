@@ -410,7 +410,7 @@ func TestSetWindowFromCampaignTab(t *testing.T) {
 	if a := st.uiActions()[0]; a.CampaignID != "c2" || !slices.Equal(a.Changed, []string{viewcontext.WindowCampaign}) || a.Window.From != "2026-10-01" {
 		t.Fatalf("to c2 = %+v", a)
 	}
-	if id, ok := AnalyticsCampaign(ctx); !ok || id != "c2" || st.currentCampaign() != "c2" {
+	if w, id, ok := AnalyticsView(ctx); !ok || id != "c2" || w.CampaignID != "c2" || st.currentCampaign() != "c2" {
 		t.Fatalf("after c2 the turn is on %q (%v)", id, ok)
 	}
 
@@ -420,7 +420,7 @@ func TestSetWindowFromCampaignTab(t *testing.T) {
 	if a := st.uiActions()[1]; a.Screen != "analytics" || a.CampaignID != "" || a.Before.CampaignID != "c2" {
 		t.Fatalf("to the workspace = %+v", a)
 	}
-	if id, ok := AnalyticsCampaign(ctx); !ok || id != "" || st.currentScreen() != "analytics" {
+	if w, id, ok := AnalyticsView(ctx); !ok || id != "" || w.CampaignID != "" || st.currentScreen() != "analytics" {
 		t.Fatalf("after the workspace the turn is on %q (%v)", id, ok)
 	}
 	// On the workspace's dashboard a campaign stays a filter of it.
@@ -429,7 +429,7 @@ func TestSetWindowFromCampaignTab(t *testing.T) {
 	}
 
 	st.addUI(UIAction{Type: UINavigate, Screen: "campaign.ideas", CampaignID: "c1"})
-	if _, ok := AnalyticsCampaign(ctx); ok {
+	if w, id, ok := AnalyticsView(ctx); ok || id != "" || w != nil {
 		t.Fatal("off the dashboards there is no analytics campaign")
 	}
 }

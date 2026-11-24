@@ -359,6 +359,19 @@ func (st *turnState) calendarOnScreen() *viewcontext.ViewContext {
 func (st *turnState) currentWindow() *viewcontext.Window {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	return st.windowLocked()
+}
+
+// analyticsView is currentWindow with the campaign of the screen the turn
+// is on and whether that screen is an analytics dashboard, read at once.
+func (st *turnState) analyticsView() (*viewcontext.Window, string, bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.windowLocked(), st.campaign, st.screen.Analytics()
+}
+
+// windowLocked is currentWindow; st.mu is held.
+func (st *turnState) windowLocked() *viewcontext.Window {
 	if st.window != nil || st.moved {
 		return st.window
 	}
