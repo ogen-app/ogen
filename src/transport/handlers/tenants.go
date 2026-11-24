@@ -213,11 +213,11 @@ func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 
 // Current godoc
 // @Summary      Get current tenant
-// @Description  Returns the authenticated caller's tenant.
+// @Description  Returns the authenticated caller's tenant, with billing_required and its setup state (setup, null for a workspace made before setup existed).
 // @Tags         tenants
 // @Produce      json
 // @Security     CookieAuth
-// @Success      200  {object}  models.Tenant
+// @Success      200  {object}  currentTenantResponse
 // @Failure      401  {object}  map[string]string
 // @Router       /api/tenants/current [get]
 func (h *TenantsHandler) Current(c *fiber.Ctx) error {

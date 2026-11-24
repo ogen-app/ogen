@@ -11,18 +11,19 @@ import (
 
 func TestSiteMetaOnlyForASiteRoot(t *testing.T) {
 	cases := []struct {
-		page, siteName, title, favicon string
-		wantName, wantIcon             string
-		none                           bool
+		page, final, siteName, title, favicon string
+		wantName, wantIcon                    string
+		none                                  bool
 	}{
 		{page: "https://acme.com/", siteName: "Acme", favicon: "https://cdn.acme.com/i.png", wantName: "Acme", wantIcon: "https://cdn.acme.com/i.png"},
 		{page: "https://acme.com", title: "Home | Acme", favicon: "/static/icon.ico", wantName: "Acme", wantIcon: "https://acme.com/static/icon.ico"},
 		{page: "https://acme.com/", title: "Acme Roasters – Light coffee, roasted to order", wantName: "Acme Roasters", wantIcon: "https://acme.com/favicon.ico"},
 		{page: "https://acme.com/about", siteName: "Acme", none: true},
 		{page: "https://acme.com/", favicon: "data:image/png;base64,AAAA", wantIcon: ""},
+		{page: "https://acme.com/", final: "https://www.acme.com/en/", siteName: "Acme", favicon: "icon.png", wantName: "Acme", wantIcon: "https://www.acme.com/en/icon.png"},
 	}
 	for _, tc := range cases {
-		meta := siteMeta(tc.page, &firecrawl.ScrapeResult{SiteName: tc.siteName, Title: tc.title, Favicon: tc.favicon})
+		meta := siteMeta(tc.page, &firecrawl.ScrapeResult{SiteName: tc.siteName, Title: tc.title, Favicon: tc.favicon, SourceURL: tc.final})
 		if tc.none {
 			if meta != nil {
 				t.Errorf("%s: meta = %+v, want none", tc.page, meta)

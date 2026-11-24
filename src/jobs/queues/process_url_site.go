@@ -19,11 +19,16 @@ import (
 const maxFaviconBytes = 1 << 20
 
 // siteMeta is what a site root's page says about the site: its name and where
-// its icon is. Any other page says nothing about the site, so it is nil.
+// its icon is. Any other page says nothing about the site, so it is nil. The
+// root is the page asked for; the icon resolves against where the page landed
+// (a homepage may redirect to /en/).
 func siteMeta(pageURL string, res *firecrawl.ScrapeResult) *models.AssetSiteMeta {
 	u, err := url.Parse(pageURL)
 	if err != nil || (u.Path != "" && u.Path != "/") || u.Host == "" {
 		return nil
+	}
+	if final, err := url.Parse(res.SourceURL); err == nil && final.Host != "" {
+		u = final
 	}
 	meta := &models.AssetSiteMeta{Name: siteNameOf(res.SiteName, res.Title)}
 	icon := res.Favicon

@@ -615,7 +615,7 @@ func commitInput(body brandDistillCommitRequest) (branddistill.CommitInput, erro
 
 // Commit godoc
 // @Summary      Save what you keep of a proposal
-// @Description  Adds the kept items, edits included, to the Brand in one transaction: voices (the workspace default only when it has none), audiences, guardrail lines merged into the existing lists, ledger facts, and the disclaimer only when sent. Nothing existing is changed or removed. Repeats and items over a cap come back in skipped. The run becomes committed.
+// @Description  Adds the kept items, edits included, to the Brand in one transaction: voices (the workspace default only when it has none), audiences, guardrail lines merged into the existing lists, ledger facts, positioning differentiators merged into the existing list, and the disclaimer and the positioning statement only when sent, each replacing the workspace's own. Nothing else existing is changed or removed. Repeats and items over a cap come back in skipped. The run becomes committed.
 // @Tags         brand
 // @Accept       json
 // @Produce      json

@@ -36,6 +36,9 @@ func TestIncrementalRunReadsEachSourceOnItsOwn(t *testing.T) {
 	if run.Status != models.BrandDistillStatusCollecting || !run.Incremental {
 		t.Fatalf("run = %s incremental=%v", run.Status, run.Incremental)
 	}
+	if run.Coverage[branddistill.SectionVoices].Level != branddistill.LevelThin {
+		t.Fatalf("the run returned = %+v, want the answers' coverage counted in", run.Coverage)
+	}
 	reads := readsOf(t, f, run.ID)
 	if len(reads) != 2 || reads[0].ReadKind() != models.DistillReadAsset || reads[1].ReadKind() != models.DistillReadAnswers {
 		t.Fatalf("reads = %+v", reads)

@@ -68,6 +68,50 @@ func TestBrandDistillOneOpenRunAndItsLifecycle(t *testing.T) {
 	})
 }
 
+func TestBrandDistillReadsExpireOnlyOnceTheirRunStopsCollecting(t *testing.T) {
+	f := newAnalysisFixture(t)
+	runs := repository.NewBrandDistillRepository(f.db)
+	run := &models.BrandDistillRun{Status: models.BrandDistillStatusCollecting, Incremental: true}
+	if err := runs.Create(f.ctx, f.db, run); err != nil {
+		t.Fatal(err)
+	}
+	read := &models.BrandDistillRun{Status: models.BrandDistillStatusReady, ReadOf: &run.ID,
+		Candidates: []models.DistillCandidate{{Kind: "voice_passage", Ref: "s1.1", Quote: "We roast light."}}}
+	if err := runs.Create(f.ctx, f.db, read); err != nil {
+		t.Fatalf("a read beside its open run: %v", err)
+	}
+	if err := runs.Save(f.ctx, f.db, read, "status"); err != nil {
+		t.Fatal(err)
+	}
+	if reads, err := runs.ListReads(f.ctx, nil, run.ID); err != nil || len(reads) != 1 {
+		t.Fatalf("reads = %+v, %v", reads, err)
+	}
+	// The read finished long ago; its run was touched just now.
+	if _, err := f.db.NewUpdate().Model((*models.BrandDistillRun)(nil)).Set("finished_at = now() - interval '2 hours'").
+		Where("id = ?", read.ID).Exec(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now().Add(-time.Hour)
+
+	if _, err := runs.ExpireReadyBefore(f.ctx, cutoff); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := runs.Get(f.ctx, read.ID); got.Status != models.BrandDistillStatusReady || len(got.Candidates) != 1 {
+		t.Fatalf("a read of a collecting run = %s, candidates %d", got.Status, len(got.Candidates))
+	}
+
+	run.Status = models.BrandDistillStatusReady
+	if err := runs.Save(f.ctx, f.db, run, "status"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runs.ExpireReadyBefore(f.ctx, cutoff); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := runs.Get(f.ctx, read.ID); got.Status != models.BrandDistillStatusExpired || got.Candidates != nil {
+		t.Fatalf("a read of a composed run = %s, candidates %v", got.Status, got.Candidates)
+	}
+}
+
 func TestBrandDistillCharges(t *testing.T) {
 	f := newAnalysisFixture(t)
 	runs := repository.NewBrandDistillRepository(f.db)

@@ -18,6 +18,8 @@ func TestCountCoverage(t *testing.T) {
 		}},
 		{Candidates: []models.DistillCandidate{{Kind: brand_distill.KindVoice, AssetID: "a2"}}},
 		{Answers: []models.DistillAnswer{{QuestionID: "q_legal", Answer: "No health claims."}, {QuestionID: "r0_q1", Answer: "x"}}},
+		// A second answer to the same question replaces the first; it adds nothing.
+		{Answers: []models.DistillAnswer{{QuestionID: "q_legal", Answer: "No health or medical claims."}}},
 	}
 	got := countCoverage(reads)
 	want := map[string]models.DistillCoverage{

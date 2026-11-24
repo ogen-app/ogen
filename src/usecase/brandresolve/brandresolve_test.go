@@ -116,7 +116,7 @@ func (f *fakeBrandRepo) DeleteLook(context.Context) (bool, error)            { r
 func (f *fakeBrandRepo) GetPositioning(context.Context) (*models.BrandPositioning, error) {
 	return nil, nil
 }
-func (f *fakeBrandRepo) UpsertPositioning(context.Context, bun.IDB, *models.BrandPositioning) error {
+func (f *fakeBrandRepo) UpsertPositioning(context.Context, *models.BrandPositioning) error {
 	return nil
 }
 func (f *fakeBrandRepo) DeletePositioning(context.Context) (bool, error)             { return false, nil }

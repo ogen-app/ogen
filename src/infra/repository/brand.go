@@ -76,7 +76,7 @@ type BrandRepository interface {
 	DeleteLook(ctx context.Context) (bool, error)
 
 	GetPositioning(ctx context.Context) (*models.BrandPositioning, error) // nil when unset
-	UpsertPositioning(ctx context.Context, db bun.IDB, p *models.BrandPositioning) error
+	UpsertPositioning(ctx context.Context, p *models.BrandPositioning) error
 	DeletePositioning(ctx context.Context) (bool, error)
 
 	// ApplyDistilled adds a committed brand distillation in one transaction:
@@ -453,19 +453,22 @@ func getPositioning(ctx context.Context, db bun.IDB) (*models.BrandPositioning, 
 	return p, nil
 }
 
-// UpsertPositioning is UpsertLook for the positioning singleton, on db (nil
-// is the repository's own).
-func (r *brandRepository) UpsertPositioning(ctx context.Context, db bun.IDB, p *models.BrandPositioning) error {
-	if db == nil {
-		db = r.db
-	}
-	_, err := db.NewInsert().Model(p).
-		On("CONFLICT (tenant_id) DO UPDATE").
-		Set("statement = EXCLUDED.statement").
-		Set("differentiators = EXCLUDED.differentiators").
-		Set("updated_at = EXCLUDED.updated_at").
-		Exec(ctx)
-	return err
+// UpsertPositioning is UpsertLook for the positioning singleton. It holds the
+// brand lock ApplyDistilled takes, so a commit adding to the positioning
+// never overwrites a write made while it ran.
+func (r *brandRepository) UpsertPositioning(ctx context.Context, p *models.BrandPositioning) error {
+	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := lockGuardrails(ctx, tx); err != nil {
+			return err
+		}
+		_, err := tx.NewInsert().Model(p).
+			On("CONFLICT (tenant_id) DO UPDATE").
+			Set("statement = EXCLUDED.statement").
+			Set("differentiators = EXCLUDED.differentiators").
+			Set("updated_at = EXCLUDED.updated_at").
+			Exec(ctx)
+		return err
+	})
 }
 
 func (r *brandRepository) DeletePositioning(ctx context.Context) (bool, error) {

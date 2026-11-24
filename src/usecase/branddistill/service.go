@@ -354,7 +354,9 @@ func (s *Service) fail(ctx context.Context, run *models.BrandDistillRun, code, r
 		return
 	}
 	s.unlinkParent(ctx, run)
-	if run.Charged {
+	// An incremental run's reads used the model already, so its charge is
+	// spent even when composing fails.
+	if run.Charged && !run.Incremental {
 		if err := s.repos.Runs.ReleaseCharge(ctx, run.ID); err != nil {
 			slog.WarnContext(ctx, "could not release the charge", logging.AttrComponent, logComponent, "run_id", run.ID, logging.AttrError, err)
 		}
