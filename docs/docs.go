@@ -2017,7 +2017,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Seven fixed questions with stable ids; answer any of them in POST /api/brand/distills.",
+                "description": "Eight fixed questions with stable ids; answer any of them in POST /api/brand/distills.",
                 "produces": [
                     "application/json"
                 ],
@@ -2303,6 +2303,224 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/brand/distills/{id}/compose": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Composes the proposal from every finished read, as one run: the run is charged once however many sources it read. Every read must be done; stop the ones still in progress first. The run then moves like any other, to ready.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Write an incremental run's proposal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillRun"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "run_not_collecting or reads_in_progress",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "422": {
+                        "description": "nothing_read",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "distill_unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/brand/distills/{id}/reads": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Starts reading one source at once, on its own: a website (its homepage and up to nine pages), an asset, or answers to starter questions, exactly one. A website or an asset takes about a minute; answers are read at once. Each read's progress, and the run's coverage as each one finishes, arrive as brand.distill.updated events on the run's topic entity:brand_distill:\u003cid\u003e.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Read one more source of an incremental run",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "One source",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillReadRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillRead"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "run_not_collecting or scraping_unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "422": {
+                        "description": "empty_request, one_source, invalid_url, unknown_asset, asset_failed, already_read, too_many or invalid_answer",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "distill_unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/brand/distills/{id}/reads/{readId}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Stops a source still being read, or takes a finished one out of the run; either way its coverage leaves the run's.",
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Stop a read",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Read id",
+                        "name": "readId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "run_not_collecting",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/brand/facts": {
             "post": {
                 "security": [
@@ -2540,6 +2758,97 @@ const docTemplate = `{
                     },
                     "422": {
                         "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/brand/positioning": {
+            "put": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Replaces the positioning: one statement and the differences that back it (at most 10, each at most 1 KB). Both empty is a 422; DELETE clears it.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Set what sets the brand apart",
+                "parameters": [
+                    {
+                        "description": "Positioning",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.positioningRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.BrandPositioning"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Clear what sets the brand apart",
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -8696,7 +9005,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "invalid_platform",
+                        "description": "invalid_platform or invalid_return_to",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -14348,6 +14657,79 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/tenants/current/setup": {
+            "put": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Owners only. Replaces the setup state: status pending, done or skipped, the step to open on, the furthest step reached, the role (own or client) and the brand read setup started. Finishing or skipping records who and when; going back to pending clears that. Setup is the workspace's, not a person's.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Write the workspace's setup state",
+                "parameters": [
+                    {
+                        "description": "Setup state",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.updateSetupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.TenantSetup"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "owner role required",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "invalid_setup",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/tenants/{id}": {
             "get": {
                 "security": [
@@ -16419,6 +16801,13 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "positioning": {
+                    "description": "Positioning are the positioning proposal ids saved.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "voices": {
                     "type": "array",
                     "items": {
@@ -16444,6 +16833,14 @@ const docTemplate = `{
                 },
                 "guardrails": {
                     "$ref": "#/definitions/handlers.commitGuardrailsBody"
+                },
+                "positioning": {
+                    "description": "Positioning is what sets the brand apart: the statement replaces the\nworkspace's own only when sent; differentiators are added.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.commitPositioningBody"
+                        }
+                    ]
                 },
                 "voices": {
                     "type": "array",
@@ -16481,6 +16878,82 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.brandDistillRead": {
+            "type": "object",
+            "properties": {
+                "answers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillAnswer"
+                    }
+                },
+                "coverage": {
+                    "description": "Coverage is what this source adds to each section.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/models.DistillCoverage"
+                    }
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "failure": {
+                    "$ref": "#/definitions/branddistill.Failure"
+                },
+                "finishedAt": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "website",
+                        "asset",
+                        "answers"
+                    ]
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillSource"
+                    }
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "collecting",
+                        "reading",
+                        "ready",
+                        "discarded",
+                        "failed"
+                    ]
+                },
+                "website": {
+                    "$ref": "#/definitions/handlers.distillWebsite"
+                }
+            }
+        },
+        "handlers.brandDistillReadRequest": {
+            "type": "object",
+            "properties": {
+                "answers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.distillAnswerBody"
+                    }
+                },
+                "assetId": {
+                    "type": "string"
+                },
+                "websiteUrl": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.brandDistillRequest": {
             "type": "object",
             "properties": {
@@ -16497,6 +16970,10 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "incremental": {
+                    "description": "Incremental reads each source on its own: the run stays collecting,\nsources are added with POST /{id}/reads, and the proposal is written\nwith POST /{id}/compose. Sources given here are its first reads; none\nis needed.",
+                    "type": "boolean"
                 },
                 "websiteUrl": {
                     "description": "WebsiteURL is read: its homepage and up to nine more of its pages,\nimported as URL assets tagged \"Brand source\".",
@@ -16521,6 +16998,13 @@ const docTemplate = `{
                     "type": "string",
                     "x-nullable": true
                 },
+                "coverage": {
+                    "description": "Coverage is what the sources read so far give each section: on a read,\nwhat it added; on an incremental run, every finished read together.\nThe proposal's own coverage is the composed verdict.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/models.DistillCoverage"
+                    }
+                },
                 "createdAt": {
                     "type": "string"
                 },
@@ -16538,12 +17022,27 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "incremental": {
+                    "description": "Incremental runs are read a source at a time: each source is a read\n(ReadOf names this run), and the run composes once they are done.",
+                    "type": "boolean"
+                },
                 "parentRunId": {
                     "type": "string",
                     "x-nullable": true
                 },
                 "proposal": {
                     "$ref": "#/definitions/models.BrandProposal"
+                },
+                "readOf": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "reads": {
+                    "description": "Reads are an incremental run's sources, oldest first; left out of the\nlist and of runs that are not incremental.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.brandDistillRead"
+                    }
                 },
                 "sources": {
                     "type": "array",
@@ -16570,7 +17069,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "website": {
-                    "$ref": "#/definitions/models.DistillWebsite"
+                    "description": "Website replaces the stored one: the icon linked, its storage key left out.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.distillWebsite"
+                        }
+                    ]
                 }
             }
         },
@@ -17079,6 +17583,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.commitPositioningBody": {
+            "type": "object",
+            "properties": {
+                "differentiators": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.commitLineBody"
+                    }
+                },
+                "statement": {
+                    "$ref": "#/definitions/handlers.commitLineBody"
+                }
+            }
+        },
         "handlers.commitVoiceBody": {
             "type": "object",
             "properties": {
@@ -17242,6 +17760,14 @@ const docTemplate = `{
             "properties": {
                 "platform": {
                     "type": "string"
+                },
+                "returnTo": {
+                    "description": "ReturnTo is where the browser comes back to after the platform's\nconsent: \"\" (Settings) or \"onboarding\" (setup after signup).",
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "onboarding"
+                    ]
                 }
             }
         },
@@ -17493,6 +18019,29 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/models.IdeaDistillRun"
                     }
+                }
+            }
+        },
+        "handlers.distillWebsite": {
+            "type": "object",
+            "properties": {
+                "faviconUrl": {
+                    "description": "FaviconURL is the site's icon, copied into our storage: a link that\nexpires, so refetch the run for a fresh one. Null when the site has no\nicon we could copy.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "mapped": {
+                    "type": "boolean"
+                },
+                "pagesFound": {
+                    "type": "integer"
+                },
+                "siteName": {
+                    "description": "SiteName is the business's name as its homepage states it; empty until\nthe homepage is read or when it states none.",
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
                 }
             }
         },
@@ -18101,6 +18650,14 @@ const docTemplate = `{
                 },
                 "platform": {
                     "type": "string"
+                },
+                "returnTo": {
+                    "description": "ReturnTo is where to go once an account is picked: \"\" for Settings,\n\"onboarding\" for setup after signup.",
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "onboarding"
+                    ]
                 }
             }
         },
@@ -18758,6 +19315,22 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.positioningRequest": {
+            "type": "object",
+            "properties": {
+                "differentiators": {
+                    "description": "Differentiators are the differences that back it; at most 10.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "statement": {
+                    "description": "Statement is what sets the brand apart, in a sentence.",
                     "type": "string"
                 }
             }
@@ -19568,6 +20141,37 @@ const docTemplate = `{
                 },
                 "shared": {
                     "type": "boolean"
+                }
+            }
+        },
+        "handlers.updateSetupRequest": {
+            "type": "object",
+            "properties": {
+                "reached": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "own",
+                        "client"
+                    ]
+                },
+                "runId": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "done",
+                        "skipped"
+                    ]
+                },
+                "step": {
+                    "type": "string"
                 }
             }
         },
@@ -20669,6 +21273,14 @@ const docTemplate = `{
                 "look": {
                     "$ref": "#/definitions/models.BrandLook"
                 },
+                "positioning": {
+                    "description": "Positioning is what sets the brand apart; null until set.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.BrandPositioning"
+                        }
+                    ]
+                },
                 "templates": {
                     "type": "array",
                     "items": {
@@ -20854,6 +21466,23 @@ const docTemplate = `{
                 }
             }
         },
+        "models.BrandPositioning": {
+            "type": "object",
+            "properties": {
+                "differentiators": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "statement": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
         "models.BrandProposal": {
             "type": "object",
             "properties": {
@@ -20880,6 +21509,14 @@ const docTemplate = `{
                 },
                 "guardrails": {
                     "$ref": "#/definitions/models.ProposedGuardrails"
+                },
+                "positioning": {
+                    "description": "Positioning is what sets the brand apart: a statement replaces the\nworkspace's only when committed, differentiators are added.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.ProposedPositioning"
+                        }
+                    ]
                 },
                 "questions": {
                     "type": "array",
@@ -21403,6 +22040,10 @@ const docTemplate = `{
                 },
                 "pagesFound": {
                     "type": "integer"
+                },
+                "siteName": {
+                    "description": "SiteName and FaviconKey are what the homepage says about the site,\nonce it is read: its name and its icon in our storage.",
+                    "type": "string"
                 },
                 "url": {
                     "type": "string"
@@ -23028,11 +23669,45 @@ const docTemplate = `{
                 }
             }
         },
+        "models.ProposedPositioning": {
+            "type": "object",
+            "properties": {
+                "differentiators": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProposedLine"
+                    }
+                },
+                "statement": {
+                    "$ref": "#/definitions/models.ProposedStatement"
+                }
+            }
+        },
         "models.ProposedSample": {
             "type": "object",
             "properties": {
                 "evidence": {
                     "$ref": "#/definitions/models.DistillEvidence"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ProposedStatement": {
+            "type": "object",
+            "properties": {
+                "current": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillEvidence"
+                    }
+                },
+                "proposalId": {
+                    "type": "string"
                 },
                 "text": {
                     "type": "string"
@@ -23466,6 +24141,52 @@ const docTemplate = `{
                 },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "models.TenantSetup": {
+            "type": "object",
+            "properties": {
+                "finishedAt": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "finishedBy": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "reached": {
+                    "type": "string"
+                },
+                "role": {
+                    "description": "Role is own or client; empty until chosen.",
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "own",
+                        "client"
+                    ]
+                },
+                "runId": {
+                    "description": "RunID is the brand read setup started, so a reload finds it again.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "done",
+                        "skipped"
+                    ]
+                },
+                "step": {
+                    "description": "Step is the step to open on; Reached is the furthest one reached. The\nclient names its steps.",
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string",
+                    "x-nullable": true
                 }
             }
         },
