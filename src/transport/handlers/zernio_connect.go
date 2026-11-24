@@ -64,14 +64,14 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 
 	cn := c.Query("ogen_cn")
 	if cn == "" {
-		return h.redirectConnectError(c, "", "missing_session")
+		return h.redirectConnectError(c, models.ZernioConnectReturnSettings, "", "missing_session")
 	}
 	now := time.Now().UTC()
 	sess, err := h.connectSessions.GetLive(reqCtx(c), cn, now)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			jobs.ZernioConnectSessionExpired.Add(1)
-			return h.redirectConnectError(c, "", "expired")
+			return h.redirectConnectError(c, models.ZernioConnectReturnSettings, "", "expired")
 		}
 		return err
 	}
@@ -85,7 +85,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 		slog.WarnContext(ctx, "connect callback profile mismatch",
 			logging.AttrComponent, "zernio", "connectionId", cn, "platform", sess.Platform)
 		_ = h.connectSessions.Delete(ctx, cn)
-		return h.redirectConnectError(c, sess.Platform, "mismatch")
+		return h.redirectConnectError(c, sess.ReturnTo, sess.Platform, "mismatch")
 	}
 
 	// Already consumed (double redirect / retry). If the session is still
@@ -94,10 +94,10 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 	// lie and would strand them away from the selection. Any other non-pending
 	// status is a replayed finished step → idempotent success landing.
 	if sess.Status == models.ZernioConnectStatusAwaitingSelection {
-		return h.redirectPicker(c, cn)
+		return h.redirectPicker(c, sess.ReturnTo, cn)
 	}
 	if sess.Status != models.ZernioConnectStatusPendingAuth {
-		return h.redirectConnectSuccess(c, sess.Platform)
+		return h.redirectConnectSuccess(c, sess.ReturnTo, sess.Platform)
 	}
 
 	step := c.Query("step")
@@ -108,7 +108,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 		jobs.ZernioConnectAutoFinalized.Add(1)
 		slog.InfoContext(ctx, "connect finalized (no selection)",
 			logging.AttrComponent, "zernio", "platform", sess.Platform, "profile", sess.ProfileID)
-		return h.redirectConnectSuccess(c, sess.Platform)
+		return h.redirectConnectSuccess(c, sess.ReturnTo, sess.Platform)
 	}
 
 	// Selection platform: list the targets and drive the pick ourselves so no
@@ -130,7 +130,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 			slog.WarnContext(ctx, "connect list targets failed",
 				logging.AttrComponent, "zernio", "platform", sess.Platform,
 				"status", apiErr.Status, "reason", apiErr.Message, "code", code)
-			return h.redirectConnectError(c, sess.Platform, code)
+			return h.redirectConnectError(c, sess.ReturnTo, sess.Platform, code)
 		}
 		return err
 	}
@@ -139,7 +139,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 	switch {
 	case len(targets) == 0:
 		_ = h.connectSessions.Delete(ctx, cn)
-		return h.redirectConnectError(c, sess.Platform, "no_targets")
+		return h.redirectConnectError(c, sess.ReturnTo, sess.Platform, "no_targets")
 
 	case len(targets) == 1:
 		if err := h.integ.Client.SelectConnectTarget(ctx, sess.Platform, sess.ProfileID, tempToken, connectToken, targets[0], userProfile); err != nil {
@@ -150,7 +150,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 					logging.AttrComponent, "zernio", "platform", sess.Platform,
 					"status", apiErr.Status, "reason", apiErr.Message, "code", code,
 					"userProfileParamPresent", rawUserProfileParam != "", "userProfileSent", len(userProfile) > 0)
-				return h.redirectConnectError(c, sess.Platform, code)
+				return h.redirectConnectError(c, sess.ReturnTo, sess.Platform, code)
 			}
 			return err
 		}
@@ -160,7 +160,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 		jobs.ZernioConnectSelectSucceeded.Add(1)
 		slog.InfoContext(ctx, "connect finalized (single target)",
 			logging.AttrComponent, "zernio", "platform", sess.Platform, "profile", sess.ProfileID)
-		return h.redirectConnectSuccess(c, sess.Platform)
+		return h.redirectConnectSuccess(c, sess.ReturnTo, sess.Platform)
 
 	default:
 		sealed, err := h.sealSecrets(connectSecrets{ConnectToken: connectToken, TempToken: tempToken, UserProfile: userProfile})
@@ -180,13 +180,16 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 		jobs.ZernioConnectSelectorShown.Add(1)
 		slog.InfoContext(ctx, "connect awaiting selection",
 			logging.AttrComponent, "zernio", "platform", sess.Platform, "connectionId", cn, "targets", len(targets))
-		return h.redirectPicker(c, cn)
+		return h.redirectPicker(c, sess.ReturnTo, cn)
 	}
 }
 
 type pendingConnectionResponse struct {
 	Platform string                 `json:"platform"`
 	Options  []zernio.ConnectTarget `json:"options"`
+	// ReturnTo is where to go once an account is picked: "" for Settings,
+	// "onboarding" for setup after signup.
+	ReturnTo string `json:"returnTo" enums:",onboarding"`
 }
 
 // GetPendingConnection returns the selectable targets for an awaiting-selection
@@ -220,7 +223,7 @@ func (h *ZernioHandler) GetPendingConnection(c *fiber.Ctx) error {
 			return err
 		}
 	}
-	return c.JSON(pendingConnectionResponse{Platform: sess.Platform, Options: opts})
+	return c.JSON(pendingConnectionResponse{Platform: sess.Platform, Options: opts, ReturnTo: sess.ReturnTo})
 }
 
 type selectConnectionRequest struct {
@@ -338,8 +341,17 @@ func (h *ZernioHandler) connectCallbackURL(sessionID string) string {
 	return h.spaBase() + "/api/integrations/zernio/connect/callback?ogen_cn=" + url.QueryEscape(sessionID)
 }
 
-func (h *ZernioHandler) redirectConnectSuccess(c *fiber.Ctx, platform string) error {
-	return c.Redirect(h.spaBase()+"/workspace-settings?connected="+url.QueryEscape(platform), fiber.StatusFound)
+// returnPage is the SPA page a connect returns to: Settings, or setup after
+// signup.
+func returnPage(returnTo string) string {
+	if returnTo == models.ZernioConnectReturnOnboarding {
+		return "/onboarding"
+	}
+	return "/workspace-settings"
+}
+
+func (h *ZernioHandler) redirectConnectSuccess(c *fiber.Ctx, returnTo, platform string) error {
+	return c.Redirect(h.spaBase()+returnPage(returnTo)+"?connected="+url.QueryEscape(platform), fiber.StatusFound)
 }
 
 // connectErrorCodeForStatus maps a Zernio select-step HTTP status to the SPA
@@ -368,16 +380,22 @@ func connectErrorCodeForStatus(status int) string {
 	return "upstream"
 }
 
-func (h *ZernioHandler) redirectConnectError(c *fiber.Ctx, platform, code string) error {
-	u := h.spaBase() + "/workspace-settings?connect_error=" + url.QueryEscape(code)
+func (h *ZernioHandler) redirectConnectError(c *fiber.Ctx, returnTo, platform, code string) error {
+	u := h.spaBase() + returnPage(returnTo) + "?connect_error=" + url.QueryEscape(code)
 	if platform != "" {
 		u += "&platform=" + url.QueryEscape(platform)
 	}
 	return c.Redirect(u, fiber.StatusFound)
 }
 
-func (h *ZernioHandler) redirectPicker(c *fiber.Ctx, connectionID string) error {
-	return c.Redirect(h.spaBase()+"/workspace-settings/connect/"+url.PathEscape(connectionID), fiber.StatusFound)
+// redirectPicker opens the account picker, which lives under Settings; a
+// connect started from setup tells it where to go once an account is picked.
+func (h *ZernioHandler) redirectPicker(c *fiber.Ctx, returnTo, connectionID string) error {
+	u := h.spaBase() + "/workspace-settings/connect/" + url.PathEscape(connectionID)
+	if returnTo != models.ZernioConnectReturnSettings {
+		u += "?returnTo=" + url.QueryEscape(returnTo)
+	}
+	return c.Redirect(u, fiber.StatusFound)
 }
 
 // --- token sealing ----------------------------------------------------------
