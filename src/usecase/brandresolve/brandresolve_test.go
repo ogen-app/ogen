@@ -108,11 +108,18 @@ func (f *fakeBrandRepo) GetGuardrailsStance(context.Context) (*models.BrandGuard
 func (f *fakeBrandRepo) SetGuardrailsStance(context.Context, *models.BrandGuardrailsStanceRecord) (*models.BrandGuardrailsStanceRecord, error) {
 	return nil, nil
 }
-func (f *fakeBrandRepo) DeleteGuardrailsStance(context.Context) error                { return nil }
-func (f *fakeBrandRepo) DeleteGuardrails(context.Context) (bool, error)              { return false, nil }
-func (f *fakeBrandRepo) GetLook(context.Context) (*models.BrandLook, error)          { return nil, nil }
-func (f *fakeBrandRepo) UpsertLook(context.Context, *models.BrandLook) error         { return nil }
-func (f *fakeBrandRepo) DeleteLook(context.Context) (bool, error)                    { return false, nil }
+func (f *fakeBrandRepo) DeleteGuardrailsStance(context.Context) error        { return nil }
+func (f *fakeBrandRepo) DeleteGuardrails(context.Context) (bool, error)      { return false, nil }
+func (f *fakeBrandRepo) GetLook(context.Context) (*models.BrandLook, error)  { return nil, nil }
+func (f *fakeBrandRepo) UpsertLook(context.Context, *models.BrandLook) error { return nil }
+func (f *fakeBrandRepo) DeleteLook(context.Context) (bool, error)            { return false, nil }
+func (f *fakeBrandRepo) GetPositioning(context.Context) (*models.BrandPositioning, error) {
+	return nil, nil
+}
+func (f *fakeBrandRepo) UpsertPositioning(context.Context, bun.IDB, *models.BrandPositioning) error {
+	return nil
+}
+func (f *fakeBrandRepo) DeletePositioning(context.Context) (bool, error)             { return false, nil }
 func (f *fakeBrandRepo) CreateTemplate(context.Context, *models.BrandTemplate) error { return nil }
 func (f *fakeBrandRepo) UpdateTemplate(context.Context, *models.BrandTemplate) error { return nil }
 func (f *fakeBrandRepo) DeleteTemplate(context.Context, string) (bool, error)        { return false, nil }
@@ -137,6 +144,10 @@ func data() *models.BrandData {
 			NeverClaim:  models.StringSlice{"any future return"},
 			BannedWords: models.StringSlice{"guaranteed"},
 			Disclaimer:  "Capital at risk.",
+		},
+		Positioning: &models.BrandPositioning{
+			Statement:       "The only adviser that charges a flat fee.",
+			Differentiators: models.StringSlice{"No commission, ever"},
 		},
 	}
 }
@@ -204,7 +215,7 @@ func TestPromptBlockRendersVoiceAudienceGuardrails(t *testing.T) {
 	r, _ := Resolve(t.Context(), repo, &models.Campaign{BrandVoiceID: new("v-def"), BrandAudienceID: new("a-camp")}, nil)
 	block := r.PromptBlock("")
 
-	for _, want := range []string{"deadpan one-liner", "Default", "sceptics", "NEVER claim", "guaranteed", "Capital at risk."} {
+	for _, want := range []string{"deadpan one-liner", "Default", "sceptics", "NEVER claim", "guaranteed", "Capital at risk.", "sets the brand apart", "flat fee", "No commission, ever"} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("block missing %q:\n%s", want, block)
 		}

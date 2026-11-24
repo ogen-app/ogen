@@ -26,7 +26,10 @@ const (
 	maxNameRunes      = 80
 	maxWhyRunes       = 300
 	maxEvidenceQuotes = 5
-	answerSourceLabel = "Your answer"
+	// maxDifferentiators is how many differences a proposal backs its
+	// positioning with.
+	maxDifferentiators = 5
+	answerSourceLabel  = "Your answer"
 )
 
 var (
@@ -35,7 +38,7 @@ var (
 	voiceFormality = []string{"casual", "neutral", "formal"}
 	voicePerson    = []string{"i", "we", "third"}
 	voiceLength    = []string{"short", "medium", "long"}
-	sections       = []string{SectionVoices, SectionAudiences, SectionGuardrails, SectionFacts}
+	sections       = []string{SectionVoices, SectionAudiences, SectionPositioning, SectionGuardrails, SectionFacts}
 	levels         = []string{"found", "thin", "none"}
 )
 
@@ -80,6 +83,7 @@ func ground(d brand_distill.Draft, in groundInput) models.BrandProposal {
 		Coverage:  coverage(d.Coverage),
 	}
 	p.Guardrails = g.guardrails(d.Guardrails, brand.Guardrails)
+	p.Positioning = g.positioning(d.Positioning, brand.Positioning)
 	p.Dropped = g.dropped
 	return p
 }
@@ -203,8 +207,9 @@ func (g *grounder) audiences(in []brand_distill.DraftAudience, brand *models.Bra
 	return out
 }
 
-// lines grounds one guardrail list against what the workspace has.
-func (g *grounder) lines(in []brand_distill.DraftLine, have []string, list string, limit int, lower bool, maxLen int) []models.ProposedLine {
+// lines grounds one list of lines against what the workspace has; each kept
+// line is numbered after prefix.
+func (g *grounder) lines(in []brand_distill.DraftLine, have []string, prefix string, limit int, lower bool, maxLen int) []models.ProposedLine {
 	out := []models.ProposedLine{}
 	seen := map[string]bool{}
 	for _, h := range have {
@@ -228,7 +233,7 @@ func (g *grounder) lines(in []brand_distill.DraftLine, have []string, list strin
 			continue
 		}
 		seen[lineKey(text)] = true
-		out = append(out, models.ProposedLine{ProposalID: fmt.Sprintf("g:%s:%d", list, len(out)+1), Text: text, Evidence: ev})
+		out = append(out, models.ProposedLine{ProposalID: fmt.Sprintf("%s%d", prefix, len(out)+1), Text: text, Evidence: ev})
 	}
 	return out
 }
@@ -238,9 +243,9 @@ func (g *grounder) guardrails(d brand_distill.DraftGuardrails, have *models.Bran
 		have = &models.BrandGuardrails{}
 	}
 	out := models.ProposedGuardrails{
-		MayClaim:    g.lines(d.MayClaim, have.MayClaim, "mayClaim", maxClaims, false, brandcheck.MaxStatementBytes),
-		NeverClaim:  g.lines(d.NeverClaim, have.NeverClaim, "neverClaim", maxClaims, false, brandcheck.MaxStatementBytes),
-		BannedWords: g.lines(d.BannedWords, have.BannedWords, "bannedWords", maxBannedWords, true, maxBannedRunes),
+		MayClaim:    g.lines(d.MayClaim, have.MayClaim, "g:mayClaim:", maxClaims, false, brandcheck.MaxStatementBytes),
+		NeverClaim:  g.lines(d.NeverClaim, have.NeverClaim, "g:neverClaim:", maxClaims, false, brandcheck.MaxStatementBytes),
+		BannedWords: g.lines(d.BannedWords, have.BannedWords, "g:bannedWords:", maxBannedWords, true, maxBannedRunes),
 	}
 	if dc := d.Disclaimer; dc != nil && strings.TrimSpace(dc.Text) != "" {
 		text := strings.TrimSpace(dc.Text)
@@ -259,6 +264,43 @@ func (g *grounder) guardrails(d brand_distill.DraftGuardrails, have *models.Bran
 				pd.Current = new(have.Disclaimer)
 			}
 			out.Disclaimer = pd
+		}
+	}
+	return out
+}
+
+// Proposal ids of positioning items.
+const (
+	statementProposalID  = "p:statement"
+	differentiatorPrefix = "p:differentiators:"
+)
+
+// positioning keeps a statement with a passage or answer behind it that says
+// something the workspace's own does not, and the differentiators it can back
+// up that the workspace does not list yet.
+func (g *grounder) positioning(d *brand_distill.DraftPositioning, have *models.BrandPositioning) models.ProposedPositioning {
+	if have == nil {
+		have = &models.BrandPositioning{}
+	}
+	out := models.ProposedPositioning{Differentiators: []models.ProposedLine{}}
+	if d == nil {
+		return out
+	}
+	out.Differentiators = g.lines(d.Differentiators, have.Differentiators, differentiatorPrefix, maxDifferentiators, false, brandcheck.MaxStatementBytes)
+	text := strings.TrimSpace(d.Statement)
+	if text == "" {
+		return out
+	}
+	ev := g.evidences(d.Evidence)
+	switch {
+	case len(ev) == 0 || len(text) > brandcheck.MaxStatementBytes:
+		g.dropped.Ungrounded++
+	case lineKey(text) == lineKey(have.Statement):
+		g.dropped.Duplicate++
+	default:
+		out.Statement = &models.ProposedStatement{ProposalID: statementProposalID, Text: text, Evidence: ev}
+		if have.Statement != "" {
+			out.Statement.Current = new(have.Statement)
 		}
 	}
 	return out
@@ -395,7 +437,7 @@ func carryIDs(prev *models.BrandProposal, next *models.BrandProposal) {
 	for _, f := range prev.Facts {
 		c.had("f", lineKey(f.Statement), f.ProposalID)
 	}
-	for prefix, list := range guardrailLists(prev) {
+	for prefix, list := range lineLists(prev) {
 		for _, l := range list {
 			c.had(prefix, lineKey(l.Text), l.ProposalID)
 		}
@@ -409,19 +451,21 @@ func carryIDs(prev *models.BrandProposal, next *models.BrandProposal) {
 	for i := range next.Facts {
 		c.give("f", lineKey(next.Facts[i].Statement), &next.Facts[i].ProposalID)
 	}
-	for prefix, list := range guardrailLists(next) {
+	for prefix, list := range lineLists(next) {
 		for i := range list {
 			c.give(prefix, lineKey(list[i].Text), &list[i].ProposalID)
 		}
 	}
 }
 
-// guardrailLists are a proposal's guardrail lists by id prefix.
-func guardrailLists(p *models.BrandProposal) map[string][]models.ProposedLine {
+// lineLists are a proposal's lists of lines by id prefix: the guardrails and
+// the differentiators.
+func lineLists(p *models.BrandProposal) map[string][]models.ProposedLine {
 	return map[string][]models.ProposedLine{
-		"g:mayClaim:":    p.Guardrails.MayClaim,
-		"g:neverClaim:":  p.Guardrails.NeverClaim,
-		"g:bannedWords:": p.Guardrails.BannedWords,
+		"g:mayClaim:":        p.Guardrails.MayClaim,
+		"g:neverClaim:":      p.Guardrails.NeverClaim,
+		"g:bannedWords:":     p.Guardrails.BannedWords,
+		differentiatorPrefix: p.Positioning.Differentiators,
 	}
 }
 

@@ -557,6 +557,9 @@ func digest(b *models.BrandData) brand_distill.Digest {
 	for _, f := range b.Facts {
 		d.Facts = append(d.Facts, f.Statement)
 	}
+	if p := b.Positioning; p != nil {
+		d.Positioning, d.Differentiators = p.Statement, p.Differentiators
+	}
 	return d
 }
 

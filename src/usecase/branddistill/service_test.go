@@ -136,6 +136,10 @@ func (s *stubFlows) compose(_ context.Context, req brand_distill.ComposeRequest)
 			Samples: []brand_distill.DraftSample{{Ref: c.Ref, Text: c.Quote}, {Ref: c.Ref, Text: "We are simply the best."}},
 		}}
 		d.Facts = []brand_distill.DraftFact{{Statement: "We roast light.", Evidence: []brand_distill.DraftEvidence{{Ref: c.Ref, Quote: "We roast light"}}}}
+		d.Positioning = &brand_distill.DraftPositioning{
+			Statement: "The roaster that roasts light.", Evidence: []brand_distill.DraftEvidence{{Ref: c.Ref, Quote: c.Quote}},
+			Differentiators: []brand_distill.DraftLine{{Text: "Light roasts only", Evidence: []brand_distill.DraftEvidence{{Ref: c.Ref, Quote: c.Quote}}}},
+		}
 	}
 	for _, a := range req.Answers {
 		d.Audiences = append(d.Audiences, brand_distill.DraftAudience{Name: "From " + a.QuestionID, Who: a.Answer, Evidence: []brand_distill.DraftEvidence{{QuestionID: a.QuestionID}}})

@@ -13,6 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
+	"github.com/ogen-app/ogen/src/domain/brandcheck"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
@@ -65,6 +66,8 @@ func (h *BrandHandler) Register(app *fiber.App) {
 	g.Put("/guardrails/stance", h.auth, h.PutGuardrailsStance)
 	g.Put("/look", h.auth, h.PutLook)
 	g.Delete("/look", h.auth, h.DeleteLook)
+	g.Put("/positioning", h.auth, h.PutPositioning)
+	g.Delete("/positioning", h.auth, h.DeletePositioning)
 	// Libraries.
 	g.Post("/voices", h.auth, h.CreateVoice)
 	g.Put("/voices/:id", h.auth, h.UpdateVoice)
@@ -290,6 +293,79 @@ func (h *BrandHandler) DeleteLook(c *fiber.Ctx) error {
 	}
 	if deleted {
 		h.recordActivity(c, "brand_look_deleted")
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// ── Positioning (singleton) ─────────────────────────────────────────────────
+
+type positioningRequest struct {
+	// Statement is what sets the brand apart, in a sentence.
+	Statement string `json:"statement"`
+	// Differentiators are the differences that back it; at most 10.
+	Differentiators []string `json:"differentiators"`
+}
+
+// PutPositioning godoc
+// @Summary      Set what sets the brand apart
+// @Description  Replaces the positioning: one statement and the differences that back it (at most 10, each at most 1 KB). Both empty is a 422; DELETE clears it.
+// @Tags         brand
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        body  body      positioningRequest  true  "Positioning"
+// @Success      200   {object}  models.BrandPositioning
+// @Failure      400   {object}  map[string]string
+// @Failure      401   {object}  map[string]string
+// @Failure      422   {object}  map[string]string
+// @Router       /api/brand/positioning [put]
+func (h *BrandHandler) PutPositioning(c *fiber.Ctx) error {
+	var body positioningRequest
+	if err := c.BodyParser(&body); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	p := models.BrandPositioning{Statement: strings.TrimSpace(body.Statement), Differentiators: models.StringSlice{}}
+	for _, d := range body.Differentiators {
+		p.Differentiators = append(p.Differentiators, strings.TrimSpace(d))
+	}
+	if err := ruleError(brandcheck.Positioning(&p)); err != nil {
+		return err
+	}
+	existing, err := h.repo.GetPositioning(reqCtx(c))
+	if err != nil {
+		return err
+	}
+	now := brandNow()
+	p.UpdatedAt = now
+	if existing == nil {
+		if p.ID, err = models.NewID(); err != nil {
+			return err
+		}
+		p.CreatedAt = now
+	} else {
+		p.ID, p.CreatedAt = existing.ID, existing.CreatedAt
+	}
+	if err := h.repo.UpsertPositioning(reqCtx(c), nil, &p); err != nil {
+		return err
+	}
+	h.recordActivity(c, "brand_positioning_updated")
+	return c.JSON(&p)
+}
+
+// DeletePositioning godoc
+// @Summary      Clear what sets the brand apart
+// @Tags         brand
+// @Security     CookieAuth
+// @Success      204
+// @Failure      401  {object}  map[string]string
+// @Router       /api/brand/positioning [delete]
+func (h *BrandHandler) DeletePositioning(c *fiber.Ctx) error {
+	deleted, err := h.repo.DeletePositioning(reqCtx(c))
+	if err != nil {
+		return err
+	}
+	if deleted {
+		h.recordActivity(c, "brand_positioning_deleted")
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }

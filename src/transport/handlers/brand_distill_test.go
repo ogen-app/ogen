@@ -178,7 +178,7 @@ var _ = Describe("Brand distillation", Ordered, Serial, func() {
 	It("serves the starter questions", func() {
 		resp, body := do("GET", "/api/brand/distills/starter-questions", nil)
 		Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
-		Expect(body["questions"]).To(HaveLen(7))
+		Expect(body["questions"]).To(HaveLen(8))
 	})
 
 	It("commits the kept items and answers with the brand, what was applied and what was skipped", func() {

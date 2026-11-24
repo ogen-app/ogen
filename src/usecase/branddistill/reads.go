@@ -91,10 +91,10 @@ func (s *Service) AddRead(ctx context.Context, in ReadInput) (*models.BrandDisti
 		if err != nil {
 			return err
 		}
+		read.ReadOf = &run.ID
 		if err := admitRead(read, reads); err != nil {
 			return err
 		}
-		read.ReadOf = &run.ID
 		if err := s.repos.Runs.Create(ctx, tx, read); err != nil {
 			return err
 		}

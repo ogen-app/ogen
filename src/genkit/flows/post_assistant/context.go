@@ -144,6 +144,10 @@ func brandFingerprint(r *brandresolve.Resolved) string {
 	if r.Guardrails != nil {
 		b.WriteString(r.Guardrails.UpdatedAt.String())
 	}
+	b.WriteByte('\x1f')
+	if r.Positioning != nil {
+		b.WriteString(r.Positioning.UpdatedAt.String())
+	}
 	// Facts are their own rows. The list is already filtered for
 	// expiry, so a fact going off also changes the fingerprint.
 	for _, f := range r.Facts {

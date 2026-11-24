@@ -63,6 +63,10 @@ type CommitInput struct {
 	BannedWords []CommitLine
 	Disclaimer  *CommitLine
 	Facts       []CommitFact
+	// Statement replaces the workspace's positioning statement only when
+	// sent; Differentiators are added to its list.
+	Statement       *CommitLine
+	Differentiators []CommitLine
 }
 
 // CommitResult is what a commit saved and skipped, with the run.
@@ -105,6 +109,9 @@ func (s *Service) Commit(ctx context.Context, in CommitInput) (*CommitResult, er
 		for _, id := range res.Guardrails {
 			locked.CommittedIDs[id] = "guardrails"
 		}
+		for _, id := range res.Positioning {
+			locked.CommittedIDs[id] = "positioning"
+		}
 		committed = locked
 		return s.repos.Runs.Save(ctx, tx, locked, "status", "committed_by", "committed_at", "committed_ids")
 	})
@@ -115,6 +122,7 @@ func (s *Service) Commit(ctx context.Context, in CommitInput) (*CommitResult, er
 	committedTotal.Add("audiences", int64(len(res.Audiences)))
 	committedTotal.Add("guardrails", int64(len(res.Guardrails)))
 	committedTotal.Add("facts", int64(len(res.Facts)))
+	committedTotal.Add("positioning", int64(len(res.Positioning)))
 	committedTotal.Add("skipped", int64(len(res.Skipped)))
 	runsTotal.Add("committed", 1)
 	s.publish(ctx, committed)
@@ -145,13 +153,14 @@ type proposalIndex struct {
 	lines      map[string]models.ProposedLine
 	disclaimer *models.ProposedDisclaimer
 	facts      map[string]models.ProposedFact
+	statement  *models.ProposedStatement
 }
 
 func indexProposal(p *models.BrandProposal) proposalIndex {
 	ix := proposalIndex{
 		voices: map[string]models.ProposedVoice{}, audiences: map[string]models.ProposedAudience{},
 		lines: map[string]models.ProposedLine{}, facts: map[string]models.ProposedFact{},
-		disclaimer: p.Guardrails.Disclaimer,
+		disclaimer: p.Guardrails.Disclaimer, statement: p.Positioning.Statement,
 	}
 	for _, v := range p.Voices {
 		ix.voices[v.ProposalID] = v
@@ -159,7 +168,7 @@ func indexProposal(p *models.BrandProposal) proposalIndex {
 	for _, a := range p.Audiences {
 		ix.audiences[a.ProposalID] = a
 	}
-	for _, list := range guardrailLists(p) {
+	for _, list := range lineLists(p) {
 		for _, l := range list {
 			ix.lines[l.ProposalID] = l
 		}
@@ -191,6 +200,11 @@ func buildBatch(run *models.BrandDistillRun, in CommitInput) (repository.Distill
 		},
 		func() error { return b.disclaimer(in.Disclaimer) },
 		func() error { return b.facts(in.Facts) },
+		func() error { return b.statement(in.Statement) },
+		func() (err error) {
+			b.batch.Differentiators, err = b.lines(in.Differentiators, differentiatorPrefix)
+			return err
+		},
 	}
 	for _, step := range steps {
 		if err := step(); err != nil {
@@ -287,6 +301,21 @@ func (b *batchBuilder) disclaimer(d *CommitLine) error {
 	return nil
 }
 
+func (b *batchBuilder) statement(s *CommitLine) error {
+	if s == nil {
+		return nil
+	}
+	if b.ix.statement == nil || s.ProposalID != b.ix.statement.ProposalID {
+		return unknownItem(s.ProposalID)
+	}
+	text := strings.TrimSpace(s.Text)
+	if text == "" || len(text) > brandcheck.MaxStatementBytes {
+		return invalidItem(s.ProposalID, fmt.Errorf("the statement is required and at most %d KB", brandcheck.MaxStatementBytes>>10))
+	}
+	b.batch.Statement = &repository.DistilledLine{ProposalID: s.ProposalID, Text: text}
+	return nil
+}
+
 // facts checks the kept facts; each is added and checked today.
 func (b *batchBuilder) facts(in []CommitFact) error {
 	today := models.CalendarDate{Time: time.Now().UTC().Truncate(24 * time.Hour)}
@@ -308,7 +337,8 @@ func (b *batchBuilder) facts(in []CommitFact) error {
 
 func (b *batchBuilder) empty() bool {
 	x := b.batch
-	return len(x.Voices)+len(x.Audiences)+len(x.MayClaim)+len(x.NeverClaim)+len(x.BannedWords)+len(x.Facts) == 0 && x.Disclaimer == nil
+	return len(x.Voices)+len(x.Audiences)+len(x.MayClaim)+len(x.NeverClaim)+len(x.BannedWords)+len(x.Facts)+len(x.Differentiators) == 0 &&
+		x.Disclaimer == nil && x.Statement == nil
 }
 
 func sampleEvidence(v models.ProposedVoice) []models.DistillEvidence {
