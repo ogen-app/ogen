@@ -64,6 +64,22 @@ func TestSetAnalyticsWindow(t *testing.T) {
 	_, err = setAnalyticsWindow(ctx, d, SetWindowInput{Platforms: []string{"myspace"}})
 	refused(t, err)
 
+	// From a campaign's Analytics tab the whole workspace is the workspace's
+	// dashboard, and the reads after it aren't narrowed to the thread's
+	// campaign.
+	tab := tenantctx.With(context.WithValue(t.Context(), logging.UserIDKey, "u1"), "tenant-1")
+	tab, _ = assistant.NewViewTurnContext(tab, viewcontext.ViewContext{Version: viewcontext.Version, Screen: "campaign.analytics", Scope: campaign1,
+		Window: &viewcontext.Window{From: "2026-10-01", To: "2026-10-14", CampaignID: "c1"}}, nil)
+	if _, sc, err := rangeAndScope(tab, d, AnalyticsQuery{}, ""); err != nil || sc.Campaign() != "c1" {
+		t.Fatalf("on the tab a read = %+v, %v", sc, err)
+	}
+	if out, err = setAnalyticsWindow(tab, d, SetWindowInput{CampaignID: "all"}); err != nil || out.Done != "set analytics to the whole workspace" {
+		t.Fatalf("to the workspace = %+v, %v", out, err)
+	}
+	if _, sc, err := rangeAndScope(tab, d, AnalyticsQuery{}, ""); err != nil || sc.Campaign() != "" {
+		t.Fatalf("after it a read = %+v, %v", sc, err)
+	}
+
 	home := tenantctx.With(context.WithValue(t.Context(), logging.UserIDKey, "u1"), "tenant-1")
 	home, _ = assistant.NewTurnContext(home, workspace, nil)
 	_, err = setAnalyticsWindow(home, d, SetWindowInput{Window: "7d"})

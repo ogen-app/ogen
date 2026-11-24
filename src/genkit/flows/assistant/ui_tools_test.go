@@ -368,6 +368,72 @@ func TestSetWindowAfterNavigate(t *testing.T) {
 	}
 }
 
+// A campaign's Analytics tab is narrowed to its campaign by its address: a
+// window there keeps the tab, another campaign's lands on that campaign's
+// tab, and the whole workspace on the workspace's dashboard. The turn is on
+// that screen after it.
+func TestSetWindowFromCampaignTab(t *testing.T) {
+	set := func(campaign string) func(*viewcontext.Window) (viewcontext.Window, error) {
+		return func(cur *viewcontext.Window) (viewcontext.Window, error) {
+			w := cur.Clone()
+			w.CampaignID = campaign
+			return w, nil
+		}
+	}
+	linkedin := func(cur *viewcontext.Window) (viewcontext.Window, error) {
+		w := cur.Clone()
+		w.Platforms = []string{"linkedin"}
+		return w, nil
+	}
+	tab := func(w *viewcontext.Window) context.Context {
+		ctx, _ := NewViewTurnContext(t.Context(), viewcontext.ViewContext{Version: viewcontext.Version, Screen: "campaign.analytics",
+			Scope: viewcontext.Scope{Kind: "campaign", ID: "c1"}, Window: w}, nil)
+		return ctx
+	}
+
+	// A tab that hasn't sent its window yet is still its campaign's.
+	ctx := tab(nil)
+	screen, w, err := SetWindow(ctx, linkedin)
+	if err != nil || screen != "campaign.analytics" || w.CampaignID != "c1" {
+		t.Fatalf("screen %q, window %+v, %v", screen, w, err)
+	}
+	st, _ := turnStateFrom(ctx)
+	if a := st.uiActions()[0]; a.CampaignID != "c1" || a.Before == nil || a.Before.CampaignID != "c1" || !slices.Equal(a.Changed, []string{viewcontext.WindowPlatforms}) {
+		t.Fatalf("set_window = %+v, before %+v", a, a.Before)
+	}
+
+	ctx = tab(&viewcontext.Window{From: "2026-10-01", To: "2026-10-28", Preset: "28d", CampaignID: "c1"})
+	st, _ = turnStateFrom(ctx)
+	if screen, _, err = SetWindow(ctx, set("c2")); err != nil || screen != "campaign.analytics" {
+		t.Fatalf("to c2 = %q, %v", screen, err)
+	}
+	if a := st.uiActions()[0]; a.CampaignID != "c2" || !slices.Equal(a.Changed, []string{viewcontext.WindowCampaign}) || a.Window.From != "2026-10-01" {
+		t.Fatalf("to c2 = %+v", a)
+	}
+	if id, ok := AnalyticsCampaign(ctx); !ok || id != "c2" || st.currentCampaign() != "c2" {
+		t.Fatalf("after c2 the turn is on %q (%v)", id, ok)
+	}
+
+	if screen, _, err = SetWindow(ctx, set("")); err != nil || screen != "analytics" {
+		t.Fatalf("to the workspace = %q, %v", screen, err)
+	}
+	if a := st.uiActions()[1]; a.Screen != "analytics" || a.CampaignID != "" || a.Before.CampaignID != "c2" {
+		t.Fatalf("to the workspace = %+v", a)
+	}
+	if id, ok := AnalyticsCampaign(ctx); !ok || id != "" || st.currentScreen() != "analytics" {
+		t.Fatalf("after the workspace the turn is on %q (%v)", id, ok)
+	}
+	// On the workspace's dashboard a campaign stays a filter of it.
+	if screen, _, err = SetWindow(ctx, set("c1")); err != nil || screen != "analytics" || st.uiActions()[2].CampaignID != "" {
+		t.Fatalf("narrowed again = %q, %+v, %v", screen, st.uiActions()[2], err)
+	}
+
+	st.addUI(UIAction{Type: UINavigate, Screen: "campaign.ideas", CampaignID: "c1"})
+	if _, ok := AnalyticsCampaign(ctx); ok {
+		t.Fatal("off the dashboards there is no analytics campaign")
+	}
+}
+
 // Windows set together each build on the other's: the merges run one at a
 // time, so neither change is lost.
 func TestSetWindow_ConcurrentMerges(t *testing.T) {

@@ -322,8 +322,11 @@ func (st *turnState) addUI(a UIAction) {
 	if a.Type == UISetFilter {
 		st.filter = a.Filter
 	}
+	// A window can move the user: off a campaign's Analytics tab to
+	// another campaign's, or to the workspace's dashboard.
 	if a.Type == UISetWindow {
 		st.window = a.Window
+		st.screen, st.campaign = a.Screen, a.CampaignID
 	}
 }
 
