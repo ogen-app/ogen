@@ -56,7 +56,11 @@ type DistilledBrand struct {
 	// Disclaimer replaces the workspace's own when set.
 	Disclaimer *DistilledLine
 	Facts      []DistilledFact
-	Author     *string
+	// Statement replaces the positioning statement when set; Differentiators
+	// are merged into its list.
+	Statement       *DistilledLine
+	Differentiators []DistilledLine
+	Author          *string
 }
 
 // SkippedItem is a committed item that was not saved.
@@ -72,7 +76,9 @@ type DistilledResult struct {
 	Audiences  map[string]string
 	Facts      map[string]string
 	Guardrails []string
-	Skipped    []SkippedItem
+	// Positioning are the positioning items merged.
+	Positioning []string
+	Skipped     []SkippedItem
 	// StanceCleared is set when the "no guardrails" stance was withdrawn.
 	StanceCleared bool
 }
@@ -96,6 +102,9 @@ func (r *brandRepository) ApplyDistilled(ctx context.Context, in DistilledBrand,
 		}
 		changed, err := mergeGuardrails(ctx, tx, in, now, res)
 		if err != nil {
+			return err
+		}
+		if err := mergePositioning(ctx, tx, in, now, res); err != nil {
 			return err
 		}
 		added, err := addFacts(ctx, tx, in.Facts, in.Author, now, res)
@@ -200,8 +209,9 @@ func lineKey(s string) string {
 }
 
 // mergeList appends the new lines to list, skipping repeats and anything
-// beyond limit. It reports whether it added any.
-func mergeList(list models.StringSlice, add []DistilledLine, limit int, lower bool, res *DistilledResult) (models.StringSlice, bool) {
+// beyond limit, and records each one added in applied. It reports whether it
+// added any.
+func mergeList(list models.StringSlice, add []DistilledLine, limit int, lower bool, res *DistilledResult, applied *[]string) (models.StringSlice, bool) {
 	seen := make(map[string]bool, len(list))
 	for _, s := range list {
 		seen[lineKey(s)] = true
@@ -220,7 +230,7 @@ func mergeList(list models.StringSlice, add []DistilledLine, limit int, lower bo
 		default:
 			seen[key] = true
 			list = append(list, text)
-			res.Guardrails = append(res.Guardrails, l.ProposalID)
+			*applied = append(*applied, l.ProposalID)
 			added = true
 		}
 	}
@@ -248,9 +258,9 @@ func mergeGuardrails(ctx context.Context, tx bun.Tx, in DistilledBrand, now time
 		return false, err
 	}
 	var a, b, c bool
-	g.MayClaim, a = mergeList(g.MayClaim, in.MayClaim, brandcheck.MaxStatements, false, res)
-	g.NeverClaim, b = mergeList(g.NeverClaim, in.NeverClaim, brandcheck.MaxStatements, false, res)
-	g.BannedWords, c = mergeList(g.BannedWords, in.BannedWords, brandcheck.MaxBannedWords, true, res)
+	g.MayClaim, a = mergeList(g.MayClaim, in.MayClaim, brandcheck.MaxStatements, false, res, &res.Guardrails)
+	g.NeverClaim, b = mergeList(g.NeverClaim, in.NeverClaim, brandcheck.MaxStatements, false, res, &res.Guardrails)
+	g.BannedWords, c = mergeList(g.BannedWords, in.BannedWords, brandcheck.MaxBannedWords, true, res, &res.Guardrails)
 	changed := a || b || c
 	if d := in.Disclaimer; d != nil {
 		text := strings.TrimSpace(d.Text)
@@ -277,6 +287,50 @@ func mergeGuardrails(ctx context.Context, tx bun.Tx, in DistilledBrand, now time
 		Set("updated_at = EXCLUDED.updated_at").
 		Exec(ctx)
 	return err == nil, err
+}
+
+// mergePositioning adds the new differentiators to the singleton (creating
+// it when absent) and replaces the statement when one is given. It writes
+// only when something changed.
+func mergePositioning(ctx context.Context, tx bun.Tx, in DistilledBrand, now time.Time, res *DistilledResult) error {
+	if in.Statement == nil && len(in.Differentiators) == 0 {
+		return nil
+	}
+	p := new(models.BrandPositioning)
+	err := tx.NewSelect().Model(p).For("UPDATE").Limit(1).Scan(ctx)
+	switch {
+	case err == nil:
+	case errors.Is(err, sql.ErrNoRows):
+		p = &models.BrandPositioning{Differentiators: models.StringSlice{}}
+		if err := stamp(&p.ID, &p.CreatedAt, &p.UpdatedAt, now); err != nil {
+			return err
+		}
+	default:
+		return err
+	}
+	var changed bool
+	p.Differentiators, changed = mergeList(p.Differentiators, in.Differentiators, brandcheck.MaxDifferentiators, false, res, &res.Positioning)
+	if s := in.Statement; s != nil {
+		text := strings.TrimSpace(s.Text)
+		if text == "" || lineKey(text) == lineKey(p.Statement) {
+			res.Skipped = append(res.Skipped, SkippedItem{ProposalID: s.ProposalID, Reason: SkipDuplicate})
+		} else {
+			p.Statement = text
+			res.Positioning = append(res.Positioning, s.ProposalID)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	p.UpdatedAt = now
+	_, err = tx.NewInsert().Model(p).
+		On("CONFLICT (tenant_id) DO UPDATE").
+		Set("statement = EXCLUDED.statement").
+		Set("differentiators = EXCLUDED.differentiators").
+		Set("updated_at = EXCLUDED.updated_at").
+		Exec(ctx)
+	return err
 }
 
 // addFacts inserts the facts the ledger has room for, skipping statements it

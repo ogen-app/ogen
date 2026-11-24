@@ -243,7 +243,9 @@ type Counts struct {
 	Audiences  int `json:"audiences"`
 	Guardrails int `json:"guardrails"`
 	Facts      int `json:"facts"`
-	Questions  int `json:"questions"`
+	// Positioning counts the statement and the differentiators.
+	Positioning int `json:"positioning"`
+	Questions   int `json:"questions"`
 }
 
 // Failure is why a run failed.
@@ -261,7 +263,11 @@ func CountsOf(p *models.BrandProposal) Counts {
 	if p.Guardrails.Disclaimer != nil {
 		g++
 	}
-	return Counts{Voices: len(p.Voices), Audiences: len(p.Audiences), Guardrails: g, Facts: len(p.Facts), Questions: len(p.Questions)}
+	pos := len(p.Positioning.Differentiators)
+	if p.Positioning.Statement != nil {
+		pos++
+	}
+	return Counts{Voices: len(p.Voices), Audiences: len(p.Audiences), Guardrails: g, Facts: len(p.Facts), Questions: len(p.Questions), Positioning: pos}
 }
 
 // FailureOf is the run's failure, nil unless it failed.

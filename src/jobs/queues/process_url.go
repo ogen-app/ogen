@@ -99,10 +99,10 @@ type URLDeps struct {
 	// Published records the page's published time; nil skips it.
 	Published publishedAtSetter
 	// Sites records a site root's name and icon; nil skips them.
-	Sites siteMetaSetter
-	Chunks    chunkUpserter
-	Images    imageReplacer
-	Hub       eventPublisher
+	Sites  siteMetaSetter
+	Chunks chunkUpserter
+	Images imageReplacer
+	Hub    eventPublisher
 	// Recorder + EmbedModel meter scrape + embedding usage. A
 	// nil Recorder is a no-op. EmbedModel is the embed price-map key.
 	Recorder   *usage.Recorder
@@ -187,10 +187,10 @@ type imageRef struct {
 }
 
 const (
-	urlPhaseScrape = "scrape"
+	urlPhaseScrape  = "scrape"
 	urlPhaseImages  = "images"
 	urlPhaseFavicon = "favicon"
-	urlPhaseEmbed  = "embed"
+	urlPhaseEmbed   = "embed"
 )
 
 // step scrapes the page (Firecrawl), mirrors its images into storage one at a

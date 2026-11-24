@@ -211,7 +211,7 @@ func composeInput(req ComposeRequest) composeData {
 		Today:  req.Today,
 		Digest: d,
 		Empty: len(d.Voices) == 0 && len(d.Audiences) == 0 && len(d.MayClaim) == 0 && len(d.NeverClaim) == 0 &&
-			len(d.BannedWords) == 0 && d.Disclaimer == "" && len(d.Facts) == 0,
+			len(d.BannedWords) == 0 && d.Disclaimer == "" && len(d.Facts) == 0 && d.Positioning == "" && len(d.Differentiators) == 0,
 	}
 	for _, kind := range CandidateKinds {
 		g := passageGroup{Title: groupTitles[kind]}

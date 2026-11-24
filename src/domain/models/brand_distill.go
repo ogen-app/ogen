@@ -186,6 +186,21 @@ type ProposedGuardrails struct {
 	Disclaimer  *ProposedDisclaimer `json:"disclaimer"`
 }
 
+// ProposedStatement is a positioning statement a run proposes; Current is the
+// workspace's own, nil when it has none.
+type ProposedStatement struct {
+	ProposalID string            `json:"proposalId"`
+	Text       string            `json:"text"`
+	Current    *string           `json:"current"`
+	Evidence   []DistillEvidence `json:"evidence"`
+}
+
+// ProposedPositioning is what a run proposes sets the brand apart.
+type ProposedPositioning struct {
+	Statement       *ProposedStatement `json:"statement"`
+	Differentiators []ProposedLine     `json:"differentiators"`
+}
+
 // ProposedFact is a ledger fact a run proposes.
 type ProposedFact struct {
 	ProposalID string            `json:"proposalId"`
@@ -230,6 +245,9 @@ type BrandProposal struct {
 	Questions  []DistillQuestion          `json:"questions"`
 	Coverage   map[string]DistillCoverage `json:"coverage"`
 	Dropped    DistillDropped             `json:"dropped"`
+	// Positioning is what sets the brand apart: a statement replaces the
+	// workspace's only when committed, differentiators are added.
+	Positioning ProposedPositioning `json:"positioning"`
 }
 
 // BrandDistillRun is one brand distillation.

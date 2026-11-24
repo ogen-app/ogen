@@ -28,6 +28,8 @@ type Resolved struct {
 	Voice      *models.BrandVoice
 	Audience   *models.BrandAudience
 	Guardrails *models.BrandGuardrails
+	// Positioning is what sets the brand apart; nil when unset.
+	Positioning *models.BrandPositioning
 	// Facts are the ledger's current facts: expired ones are
 	// already dropped. Independent of Guardrails, which may be nil.
 	Facts         []models.BrandFact
@@ -73,6 +75,7 @@ func Resolve(ctx context.Context, repo repository.BrandRepository, campaign *mod
 	}
 
 	r.Guardrails = data.Guardrails
+	r.Positioning = data.Positioning
 	r.Facts = currentFacts(ctx, data.Facts, models.CalendarDateOf(now()))
 	return r, nil
 }
@@ -169,7 +172,7 @@ func (r *Resolved) ChannelNotesBlock(platformIDs []string) string {
 // PromptBlock renders the resolved material as a markdown block for injection
 // into a generation prompt. platformID selects the voice's per-channel note.
 // Returns "" only when there is genuinely nothing to say (no voice, no audience,
-// no guardrails and no legacy prose).
+// no positioning, no guardrails and no legacy prose).
 func (r *Resolved) PromptBlock(platformID string) string {
 	if r == nil {
 		return ""
@@ -213,6 +216,15 @@ func (r *Resolved) PromptBlock(platformID string) string {
 		writeLine(&b, "Believes a claim when", a.BelievesWhen)
 	} else if strings.TrimSpace(r.LegacyPersona) != "" {
 		fmt.Fprintf(&b, "\n## Target persona\n%s\n", strings.TrimSpace(r.LegacyPersona))
+	}
+
+	// ── Positioning (always, voice-independent) ──
+	if p := r.Positioning; p != nil {
+		b.WriteString("\n## What sets the brand apart — let posts show it, don't recite it\n")
+		writeLine(&b, "Positioning", oneLine(p.Statement))
+		for _, d := range p.Differentiators {
+			fmt.Fprintf(&b, "- %s\n", oneLine(d))
+		}
 	}
 
 	// ── Guardrails (always, voice-independent) ──

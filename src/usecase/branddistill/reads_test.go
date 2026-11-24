@@ -149,6 +149,31 @@ func TestIncrementalRunReadsEachSourceOnItsOwn(t *testing.T) {
 	if f.charges(t) != 1 {
 		t.Fatalf("charges = %d, want one for the whole run", f.charges(t))
 	}
+
+	t.Run("its positioning commits to the brand", func(t *testing.T) {
+		pos := got.Proposal.Positioning
+		if pos.Statement == nil || len(pos.Differentiators) != 1 {
+			t.Fatalf("proposed positioning = %+v", pos)
+		}
+		res, err := f.svc.Commit(f.ctx, branddistill.CommitInput{
+			TenantID: tenant, RunID: run.ID, UserID: new("user-1"),
+			Statement:       &branddistill.CommitLine{ProposalID: pos.Statement.ProposalID, Text: pos.Statement.Text},
+			Differentiators: []branddistill.CommitLine{{ProposalID: pos.Differentiators[0].ProposalID, Text: pos.Differentiators[0].Text}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Result.Positioning) != 2 || res.Run.CommittedIDs[pos.Statement.ProposalID] != "positioning" {
+			t.Fatalf("applied = %v, committed ids = %v", res.Result.Positioning, res.Run.CommittedIDs)
+		}
+		brand, err := f.repos.Brands.GetAll(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if brand.Positioning == nil || brand.Positioning.Statement != pos.Statement.Text || len(brand.Positioning.Differentiators) != 1 {
+			t.Fatalf("brand positioning = %+v", brand.Positioning)
+		}
+	})
 }
 
 func TestIncrementalRunHoldsTheSlot(t *testing.T) {

@@ -75,6 +75,10 @@ type BrandRepository interface {
 	UpsertLook(ctx context.Context, l *models.BrandLook) error
 	DeleteLook(ctx context.Context) (bool, error)
 
+	GetPositioning(ctx context.Context) (*models.BrandPositioning, error) // nil when unset
+	UpsertPositioning(ctx context.Context, db bun.IDB, p *models.BrandPositioning) error
+	DeletePositioning(ctx context.Context) (bool, error)
+
 	// ApplyDistilled adds a committed brand distillation in one transaction:
 	// voices, audiences, guardrail lines merged into the singleton, ledger
 	// facts. Nothing existing is changed or removed except the disclaimer
@@ -129,6 +133,10 @@ func (r *brandRepository) GetAll(ctx context.Context) (*models.BrandData, error)
 	if err != nil {
 		return nil, err
 	}
+	positioning, err := r.GetPositioning(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// bun leaves the slices nil when zero rows come back on some paths; the
 	// aggregate contract is `[]`, never null.
 	if voices == nil {
@@ -151,6 +159,8 @@ func (r *brandRepository) GetAll(ctx context.Context) (*models.BrandData, error)
 		Look:       look,
 		Templates:  templates,
 		Facts:      facts,
+
+		Positioning: positioning,
 
 		GuardrailsStance: models.StanceOf(stance),
 	}, nil
@@ -423,6 +433,43 @@ func (r *brandRepository) UpsertLook(ctx context.Context, l *models.BrandLook) e
 
 func (r *brandRepository) DeleteLook(ctx context.Context) (bool, error) {
 	return deleteSingleton(ctx, r.db, (*models.BrandLook)(nil))
+}
+
+// ── Positioning (singleton) ─────────────────────────────────────────────────
+
+func (r *brandRepository) GetPositioning(ctx context.Context) (*models.BrandPositioning, error) {
+	return getPositioning(ctx, r.db)
+}
+
+func getPositioning(ctx context.Context, db bun.IDB) (*models.BrandPositioning, error) {
+	p := new(models.BrandPositioning)
+	err := db.NewSelect().Model(p).Limit(1).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// UpsertPositioning is UpsertLook for the positioning singleton, on db (nil
+// is the repository's own).
+func (r *brandRepository) UpsertPositioning(ctx context.Context, db bun.IDB, p *models.BrandPositioning) error {
+	if db == nil {
+		db = r.db
+	}
+	_, err := db.NewInsert().Model(p).
+		On("CONFLICT (tenant_id) DO UPDATE").
+		Set("statement = EXCLUDED.statement").
+		Set("differentiators = EXCLUDED.differentiators").
+		Set("updated_at = EXCLUDED.updated_at").
+		Exec(ctx)
+	return err
+}
+
+func (r *brandRepository) DeletePositioning(ctx context.Context) (bool, error) {
+	return deleteSingleton(ctx, r.db, (*models.BrandPositioning)(nil))
 }
 
 // ── Templates ───────────────────────────────────────────────────────────────

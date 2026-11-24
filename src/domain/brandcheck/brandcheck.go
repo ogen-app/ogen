@@ -140,6 +140,29 @@ func Guardrails(g *models.BrandGuardrails, facts []string) error {
 	return nil
 }
 
+// MaxDifferentiators caps the differences a positioning lists.
+const MaxDifferentiators = 10
+
+// Positioning checks what sets the brand apart. Both empty is an error:
+// deleting is the way to clear it. Fields are expected trimmed.
+func Positioning(p *models.BrandPositioning) error {
+	if p.Statement == "" && len(p.Differentiators) == 0 {
+		return fail("positioning is empty — use DELETE to clear the section")
+	}
+	if len(p.Statement) > MaxStatementBytes {
+		return fail("the statement exceeds %d KB", MaxStatementBytes>>10)
+	}
+	if len(p.Differentiators) > MaxDifferentiators {
+		return fail("at most %d differentiators", MaxDifferentiators)
+	}
+	for _, d := range p.Differentiators {
+		if d == "" || len(d) > MaxStatementBytes {
+			return fail("a differentiator is required and at most %d KB", MaxStatementBytes>>10)
+		}
+	}
+	return nil
+}
+
 // Fact checks the editable fields of a ledger fact. The statement and source
 // are expected trimmed.
 func Fact(f *models.BrandFact) error {

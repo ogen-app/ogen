@@ -410,7 +410,7 @@ func (h *BrandDistillHandler) List(c *fiber.Ctx) error {
 
 // StarterQuestions godoc
 // @Summary      Questions for a brand with nothing written down
-// @Description  Seven fixed questions with stable ids; answer any of them in POST /api/brand/distills.
+// @Description  Eight fixed questions with stable ids; answer any of them in POST /api/brand/distills.
 // @Tags         brand
 // @Produce      json
 // @Security     CookieAuth
@@ -526,6 +526,14 @@ type brandDistillCommitRequest struct {
 	Audiences  []commitAudienceBody `json:"audiences"`
 	Guardrails commitGuardrailsBody `json:"guardrails"`
 	Facts      []commitFactBody     `json:"facts"`
+	// Positioning is what sets the brand apart: the statement replaces the
+	// workspace's own only when sent; differentiators are added.
+	Positioning commitPositioningBody `json:"positioning"`
+}
+
+type commitPositioningBody struct {
+	Statement       *commitLineBody  `json:"statement"`
+	Differentiators []commitLineBody `json:"differentiators"`
 }
 
 type appliedItem struct {
@@ -538,6 +546,8 @@ type brandDistillApplied struct {
 	Audiences  []appliedItem `json:"audiences"`
 	Guardrails []string      `json:"guardrails"`
 	Facts      []appliedItem `json:"facts"`
+	// Positioning are the positioning proposal ids saved.
+	Positioning []string `json:"positioning"`
 }
 
 type brandDistillCommitResponse struct {
@@ -568,6 +578,7 @@ func appliedItems(ids map[string]string, order []string) []appliedItem {
 func commitInput(body brandDistillCommitRequest) (branddistill.CommitInput, error) {
 	in := branddistill.CommitInput{
 		MayClaim: lines(body.Guardrails.MayClaim), NeverClaim: lines(body.Guardrails.NeverClaim), BannedWords: lines(body.Guardrails.BannedWords),
+		Differentiators: lines(body.Positioning.Differentiators),
 	}
 	for _, v := range body.Voices {
 		in.Voices = append(in.Voices, branddistill.CommitVoice{
@@ -582,6 +593,9 @@ func commitInput(body brandDistillCommitRequest) (branddistill.CommitInput, erro
 	}
 	if d := body.Guardrails.Disclaimer; d != nil {
 		in.Disclaimer = &branddistill.CommitLine{ProposalID: d.ProposalID, Text: d.Text}
+	}
+	if s := body.Positioning.Statement; s != nil {
+		in.Statement = &branddistill.CommitLine{ProposalID: s.ProposalID, Text: s.Text}
 	}
 	for _, f := range body.Facts {
 		fact := branddistill.CommitFact{
@@ -637,10 +651,13 @@ func (h *BrandDistillHandler) Commit(c *fiber.Ctx) error {
 	out := brandDistillCommitResponse{
 		Brand:   brand,
 		Skipped: res.Result.Skipped,
-		Applied: brandDistillApplied{Guardrails: res.Result.Guardrails},
+		Applied: brandDistillApplied{Guardrails: res.Result.Guardrails, Positioning: res.Result.Positioning},
 	}
 	if out.Skipped == nil {
 		out.Skipped = []repository.SkippedItem{}
+	}
+	if out.Applied.Positioning == nil {
+		out.Applied.Positioning = []string{}
 	}
 	if out.Applied.Guardrails == nil {
 		out.Applied.Guardrails = []string{}

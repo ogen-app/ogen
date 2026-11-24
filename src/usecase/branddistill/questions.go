@@ -19,6 +19,7 @@ var starterQuestions = []models.DistillQuestion{
 	{ID: "q_three_words", Text: "Three words a customer would use about you.", Section: SectionVoices},
 	{ID: "q_never_post", Text: "A sentence you would never post.", Section: SectionVoices},
 	{ID: "q_not_for", Text: "Who are you not for?", Section: SectionAudiences},
+	{ID: "q_apart", Text: "What do you do that the alternatives don't?", Section: SectionPositioning},
 	{ID: "q_proof", Text: "What can you prove?", Section: SectionFacts},
 	{ID: "q_legal", Text: "What does legal not let you say?", Section: SectionGuardrails},
 	{ID: "q_disclaimer", Text: "The disclaimer you already run, if any.", Section: SectionGuardrails},

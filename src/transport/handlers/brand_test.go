@@ -413,5 +413,24 @@ var _ = Describe("BrandHandler", Ordered, func() {
 			Expect(do("DELETE", "/api/brand/look", nil).StatusCode).To(Equal(204))
 			Expect(getBrand().Look).To(BeNil())
 		})
+
+		It("sets what sets the brand apart, replaces it, and deletes it to null", func() {
+			Expect(getBrand().Positioning).To(BeNil())
+			resp := do("PUT", "/api/brand/positioning", fiber.Map{
+				"statement": "  The only roaster that ships within a day. ", "differentiators": []string{"Roasted to order"},
+			})
+			Expect(resp.StatusCode).To(Equal(200))
+			p := getBrand().Positioning
+			Expect(p).NotTo(BeNil())
+			Expect(p.Statement).To(Equal("The only roaster that ships within a day."))
+
+			resp = do("PUT", "/api/brand/positioning", fiber.Map{"statement": "", "differentiators": []string{"Roasted to order", "Light only"}})
+			Expect(resp.StatusCode).To(Equal(200))
+			Expect(getBrand().Positioning.Differentiators).To(HaveLen(2))
+
+			Expect(do("PUT", "/api/brand/positioning", fiber.Map{"statement": " ", "differentiators": []string{}}).StatusCode).To(Equal(422))
+			Expect(do("DELETE", "/api/brand/positioning", nil).StatusCode).To(Equal(204))
+			Expect(getBrand().Positioning).To(BeNil())
+		})
 	})
 })

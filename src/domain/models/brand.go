@@ -266,6 +266,19 @@ type BrandLook struct {
 	UpdatedAt       time.Time    `bun:"updated_at,notnull,default:current_timestamp" json:"updatedAt"`
 }
 
+// BrandPositioning — what sets the brand apart: one statement and the
+// differences that back it. A singleton; one row per tenant.
+type BrandPositioning struct {
+	bun.BaseModel `bun:"table:brand_positioning,alias:bp" swaggerignore:"true"`
+	TenantScoped
+
+	ID              string      `bun:"id,pk"                                        json:"-"`
+	Statement       string      `bun:"statement,notnull"                            json:"statement"`
+	Differentiators StringSlice `bun:"differentiators,notnull,type:jsonb"           json:"differentiators"`
+	CreatedAt       time.Time   `bun:"created_at,notnull,default:current_timestamp" json:"-"`
+	UpdatedAt       time.Time   `bun:"updated_at,notnull,default:current_timestamp" json:"updatedAt"`
+}
+
 // BrandTemplate — a full-canvas frame per platform and per ratio. Called a
 // template (the user's word), built as an overlay (ours). No layout reflow.
 type BrandTemplate struct {
@@ -293,6 +306,8 @@ type BrandData struct {
 	Guardrails *BrandGuardrails `json:"guardrails"`
 	Look       *BrandLook       `json:"look"`
 	Templates  []BrandTemplate  `json:"templates"`
+	// Positioning is what sets the brand apart; null until set.
+	Positioning *BrandPositioning `json:"positioning"`
 	// Facts is the ledger, all facts including expired ones, ordered
 	// by created_at then id. Always an array.
 	Facts []BrandFact `json:"facts"`

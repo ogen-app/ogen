@@ -84,6 +84,9 @@ type Digest struct {
 	BannedWords []string
 	Disclaimer  string
 	Facts       []string
+	// Positioning and Differentiators are what already sets it apart.
+	Positioning     string
+	Differentiators []string
 }
 
 // ComposeRequest is everything the proposal is written from.
@@ -169,6 +172,16 @@ type Draft struct {
 	Facts      []DraftFact                       `json:"facts"`
 	Questions  []DraftQuestion                   `json:"questions"`
 	Coverage   map[string]models.DistillCoverage `json:"coverage"`
+	// Positioning is what sets the brand apart; nil when nothing says.
+	Positioning *DraftPositioning `json:"positioning"`
+}
+
+// DraftPositioning is a statement of what sets the brand apart and the
+// differences that back it.
+type DraftPositioning struct {
+	Statement       string          `json:"statement"`
+	Evidence        []DraftEvidence `json:"evidence"`
+	Differentiators []DraftLine     `json:"differentiators"`
 }
 
 // ComposeResponse is the draft and the model that wrote it.
