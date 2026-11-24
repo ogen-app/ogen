@@ -26,6 +26,8 @@ type fakeBrandDistiller struct {
 	request branddistill.RequestInput
 	commit  branddistill.CommitInput
 	result  *branddistill.CommitResult
+	read    branddistill.ReadInput
+	reads   []models.BrandDistillRun
 }
 
 func (f *fakeBrandDistiller) Request(_ context.Context, in branddistill.RequestInput) (*models.BrandDistillRun, error) {
@@ -54,6 +56,23 @@ func (f *fakeBrandDistiller) Commit(_ context.Context, in branddistill.CommitInp
 }
 
 func (f *fakeBrandDistiller) Discard(context.Context, string, string) (*models.BrandDistillRun, error) {
+	return f.run, f.err
+}
+
+func (f *fakeBrandDistiller) AddRead(_ context.Context, in branddistill.ReadInput) (*models.BrandDistillRun, error) {
+	f.read = in
+	return f.run, f.err
+}
+
+func (f *fakeBrandDistiller) StopRead(context.Context, string, string, string) (*models.BrandDistillRun, error) {
+	return f.run, f.err
+}
+
+func (f *fakeBrandDistiller) Reads(context.Context, string, string) ([]models.BrandDistillRun, error) {
+	return f.reads, nil
+}
+
+func (f *fakeBrandDistiller) Compose(context.Context, string, string) (*models.BrandDistillRun, error) {
 	return f.run, f.err
 }
 
@@ -217,5 +236,61 @@ var _ = Describe("Brand distillation", Ordered, Serial, func() {
 		fake.err, fake.run = nil, &models.BrandDistillRun{ID: "run-4", Status: models.BrandDistillStatusDiscarded}
 		resp, _ = do("DELETE", "/api/brand/distills/run-4", nil)
 		Expect(resp.StatusCode).To(Equal(fiber.StatusNoContent))
+	})
+
+	Describe("an incremental run", func() {
+		runID := "inc-1"
+		read := func(id, status string) models.BrandDistillRun {
+			return models.BrandDistillRun{
+				ID: id, ReadOf: &runID, Status: models.BrandDistillStatus(status), Sources: []models.DistillSource{{AssetID: "a1"}},
+				Coverage: map[string]models.DistillCoverage{"voices": {Level: "thin", Note: "1 passage from 1 source."}},
+			}
+		}
+
+		It("starts with its reads and their coverage", func() {
+			fake.run = &models.BrandDistillRun{ID: runID, Incremental: true, Status: models.BrandDistillStatusCollecting,
+				Coverage: map[string]models.DistillCoverage{"voices": {Level: "thin"}}}
+			fake.reads = []models.BrandDistillRun{read("r1", "reading")}
+			resp, body := do("POST", "/api/brand/distills", fiber.Map{"incremental": true, "assetIds": []string{"a1"}})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusAccepted))
+			Expect(fake.request.Incremental).To(BeTrue())
+			Expect(body["incremental"]).To(BeTrue())
+			Expect(body["coverage"]).To(HaveKey("voices"))
+			reads := body["reads"].([]any)
+			Expect(reads).To(HaveLen(1))
+			Expect(reads[0]).To(HaveKeyWithValue("kind", "asset"))
+			Expect(reads[0]).To(HaveKeyWithValue("status", "reading"))
+		})
+
+		It("adds a read and answers 202 with it", func() {
+			r := read("r2", "pending")
+			fake.run = &r
+			resp, body := do("POST", "/api/brand/distills/"+runID+"/reads", fiber.Map{"websiteUrl": "https://acme.com"})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusAccepted))
+			Expect(body["id"]).To(Equal("r2"))
+			Expect(fake.read.RunID).To(Equal(runID))
+			Expect(fake.read.WebsiteURL).To(Equal("https://acme.com"))
+		})
+
+		It("refuses a read when the run takes no more sources", func() {
+			fake.err = branddistill.ErrNotCollecting
+			resp, body := do("POST", "/api/brand/distills/"+runID+"/reads", fiber.Map{"assetId": "a1"})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusConflict))
+			Expect(body["code"]).To(Equal("run_not_collecting"))
+		})
+
+		It("stops a read with 204", func() {
+			r := read("r1", "discarded")
+			fake.run = &r
+			resp, _ := do("DELETE", "/api/brand/distills/"+runID+"/reads/r1", nil)
+			Expect(resp.StatusCode).To(Equal(fiber.StatusNoContent))
+		})
+
+		It("refuses to compose while a read is open", func() {
+			fake.err = branddistill.ErrReadsOpen
+			resp, body := do("POST", "/api/brand/distills/"+runID+"/compose", nil)
+			Expect(resp.StatusCode).To(Equal(fiber.StatusConflict))
+			Expect(body["code"]).To(Equal("reads_in_progress"))
+		})
 	})
 })

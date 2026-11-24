@@ -103,7 +103,12 @@ func (s *Service) finish(ctx context.Context, tenantID, runID string) error {
 			return err
 		}
 	}
-	err = s.compose(ctx, run)
+	// A read ends at its passages; its run composes once every read is done.
+	if run.ReadOf != nil {
+		err = s.settleRead(ctx, run)
+	} else {
+		err = s.compose(ctx, run)
+	}
 	if errors.Is(err, repository.ErrBrandDistillClosed) {
 		return nil
 	}
@@ -144,9 +149,10 @@ func (s *Service) FailInactive(ctx context.Context, tenantID, runID string) {
 	}
 }
 
-// admit applies the tier gates before any work; a gated run fails.
+// admit applies the tier gates before any work; a gated run fails. A read is
+// admitted once its run is charged.
 func (s *Service) admit(ctx context.Context, run *models.BrandDistillRun) bool {
-	if run.Charged {
+	if s.charged(ctx, run) {
 		return true
 	}
 	tenantID, _ := tenantctx.From(ctx)
@@ -184,7 +190,7 @@ func (s *Service) collectWebsite(ctx context.Context, run *models.BrandDistillRu
 	}
 	run.Website = &models.DistillWebsite{URL: site, Mapped: err == nil && len(links) > 1, PagesFound: len(links)}
 	userID := ptrValue(run.CreatedBy)
-	mark, err := s.deps.Marker.Prepare(ctx, models.AssetRoleWebsite, run.ID, userID)
+	mark, err := s.deps.Marker.Prepare(ctx, models.AssetRoleWebsite, run.BillingRunID(), userID)
 	if err != nil {
 		return err
 	}
@@ -332,17 +338,28 @@ func (s *Service) read(ctx context.Context, run *models.BrandDistillRun) error {
 	return s.save(ctx, run, "candidates", "model_ids")
 }
 
+// charged reports whether the run its model calls count against is charged.
+func (s *Service) charged(ctx context.Context, run *models.BrandDistillRun) bool {
+	if run.ReadOf == nil {
+		return run.Charged
+	}
+	billed, err := s.repos.Runs.Get(ctx, *run.ReadOf)
+	return err == nil && billed.Charged
+}
+
 // charge counts a first run against the monthly allowance once, before its
-// first model call.
+// first model call. A read counts its run, once for all its reads.
 func (s *Service) charge(ctx context.Context, run *models.BrandDistillRun) error {
 	if run.Charged || run.ParentRunID != nil {
 		return nil
 	}
-	if err := s.repos.Runs.RecordCharge(ctx, run.ID); err != nil {
+	if _, err := s.repos.Runs.ChargeOnce(ctx, run.BillingRunID()); err != nil {
 		return fmt.Errorf("charge the run: %w", err)
 	}
-	run.Charged = true
-	return s.save(ctx, run, "charged")
+	if run.ReadOf == nil {
+		run.Charged = true
+	}
+	return nil
 }
 
 // segments reads every usable source, refs "s<source>.<segment>", up to

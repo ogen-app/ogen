@@ -44,11 +44,20 @@ type BrandDistillRepository interface {
 	// still open, and returns ErrBrandDistillClosed when it is not.
 	SaveOpen(ctx context.Context, run *models.BrandDistillRun, columns ...string) error
 	// ExpireReadyBefore marks every tenant's ready runs finished before cutoff
-	// expired and drops their working state. It returns how many it expired.
+	// expired and drops their working state, and expires the incremental runs
+	// still collecting that were last touched before cutoff. It returns how
+	// many it expired.
 	ExpireReadyBefore(ctx context.Context, cutoff time.Time) (int64, error)
 	// StampSourceRun records runID on the brand-source assets among ids that
 	// have none yet.
 	StampSourceRun(ctx context.Context, runID string, assetIDs []string) error
+	// ListReads returns an incremental run's reads, oldest first, without
+	// their proposals; db nil reads outside a transaction.
+	ListReads(ctx context.Context, db bun.IDB, runID string) ([]models.BrandDistillRun, error)
+	// ChargeOnce marks an open run charged and logs it against the monthly
+	// cap, once however many reads race for it. It reports whether this call
+	// did; a closed run is never charged.
+	ChargeOnce(ctx context.Context, runID string) (bool, error)
 	// RecordCharge logs one run against the monthly cap; ReleaseCharge hands
 	// a run that never finished back to the allowance.
 	RecordCharge(ctx context.Context, runID string) error
@@ -106,6 +115,7 @@ func (r *brandDistillRepository) Open(ctx context.Context) (*models.BrandDistill
 	run := new(models.BrandDistillRun)
 	err := r.db.NewSelect().
 		Model(run).
+		Where("bdr.read_of IS NULL").
 		Where("bdr.status IN (?)", bun.List(models.BrandDistillOpenStatuses)).
 		Limit(1).
 		Scan(ctx)
@@ -120,10 +130,55 @@ func (r *brandDistillRepository) List(ctx context.Context, limit int) ([]models.
 	err := r.db.NewSelect().
 		Model(&out).
 		ExcludeColumn("candidates", "proposal").
+		Where("bdr.read_of IS NULL").
 		OrderExpr("bdr.created_at DESC, bdr.id DESC").
 		Limit(limit).
 		Scan(ctx)
 	return out, err
+}
+
+func (r *brandDistillRepository) ListReads(ctx context.Context, db bun.IDB, runID string) ([]models.BrandDistillRun, error) {
+	if db == nil {
+		db = r.db
+	}
+	out := []models.BrandDistillRun{}
+	err := db.NewSelect().
+		Model(&out).
+		ExcludeColumn("proposal").
+		Where("bdr.read_of = ?", runID).
+		OrderExpr("bdr.created_at, bdr.id").
+		Scan(ctx)
+	return out, err
+}
+
+func (r *brandDistillRepository) ChargeOnce(ctx context.Context, runID string) (bool, error) {
+	charged := false
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		res, err := tx.NewUpdate().
+			Model((*models.BrandDistillRun)(nil)).
+			Set("charged = true").
+			Set("updated_at = now()").
+			Where("bdr.id = ?", runID).
+			Where("NOT bdr.charged").
+			Where("bdr.status IN (?)", bun.List(models.BrandDistillOpenStatuses)).
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil
+		}
+		id, err := models.NewID()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.NewInsert().Model(&models.BrandDistillCharge{ID: id, RunID: runID}).Exec(ctx); err != nil {
+			return err
+		}
+		charged = true
+		return nil
+	})
+	return charged, err
 }
 
 func (r *brandDistillRepository) Lock(ctx context.Context, tx bun.Tx, id string) (*models.BrandDistillRun, error) {
@@ -177,7 +232,18 @@ func (r *brandDistillRepository) ExpireReadyBefore(ctx context.Context, cutoff t
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	return n, nil
+	// An incremental run nobody added to or composed in as long holds the
+	// workspace's open slot for nothing.
+	res, err = r.db.NewRaw(`UPDATE brand_distill_runs
+		SET status = ?, updated_at = now(), finished_at = now()
+		WHERE incremental AND status = ? AND updated_at < ?`,
+		models.BrandDistillStatusExpired, models.BrandDistillStatusCollecting, cutoff,
+	).Exec(ctx)
+	if err != nil {
+		return n, err
+	}
+	idle, _ := res.RowsAffected()
+	return n + idle, nil
 }
 
 func (r *brandDistillRepository) StampSourceRun(ctx context.Context, runID string, assetIDs []string) error {
