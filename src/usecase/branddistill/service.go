@@ -213,6 +213,22 @@ type EventPayload struct {
 	Sources     []EventSource             `json:"sources"`
 	Counts      Counts                    `json:"counts"`
 	Failure     *Failure                  `json:"failure,omitempty"`
+	// ReadOf, Coverage and Reads are set for incremental runs and their
+	// reads: a read's event names its run, and the run's event carries every
+	// read and the coverage they add up to.
+	ReadOf   *string                           `json:"readOf,omitempty"`
+	Coverage map[string]models.DistillCoverage `json:"coverage,omitempty"`
+	Reads    []EventRead                       `json:"reads,omitempty"`
+}
+
+// EventRead is one read of an incremental run.
+type EventRead struct {
+	ID       string                            `json:"id"`
+	Kind     string                            `json:"kind"`
+	Status   models.BrandDistillStatus         `json:"status"`
+	Sources  []EventSource                     `json:"sources"`
+	Coverage map[string]models.DistillCoverage `json:"coverage,omitempty"`
+	Failure  *Failure                          `json:"failure,omitempty"`
 }
 
 // EventSource is one source's progress.
@@ -267,12 +283,42 @@ func (s *Service) publish(ctx context.Context, run *models.BrandDistillRun) {
 	tenantID, _ := tenantctx.From(ctx)
 	payload := EventPayload{
 		ID: run.ID, Status: run.Status, ParentRunID: run.ParentRunID, ChildRunID: run.ChildRunID,
-		Sources: make([]EventSource, 0, len(run.Sources)), Counts: CountsOf(run.Proposal), Failure: FailureOf(run),
+		Sources: eventSources(run.Sources), Counts: CountsOf(run.Proposal), Failure: FailureOf(run),
+		ReadOf: run.ReadOf, Coverage: run.Coverage,
 	}
-	for _, src := range run.Sources {
-		payload.Sources = append(payload.Sources, EventSource{AssetID: src.AssetID, Status: src.Status})
+	if run.Incremental {
+		reads, err := s.repos.Runs.ListReads(ctx, nil, run.ID)
+		if err != nil {
+			s.warn(ctx, "list a run's reads for its event", run.ID, err)
+		}
+		payload.Reads = make([]EventRead, 0, len(reads))
+		for i := range reads {
+			r := &reads[i]
+			payload.Reads = append(payload.Reads, EventRead{
+				ID: r.ID, Kind: r.ReadKind(), Status: r.Status, Sources: eventSources(r.Sources), Coverage: r.Coverage, Failure: FailureOf(r),
+			})
+		}
 	}
 	_ = s.hub.Publish(ctx, eventhub.Event{Topic: Topic(run.ID), TenantID: tenantID, Type: eventType, Payload: payload})
+}
+
+func eventSources(in []models.DistillSource) []EventSource {
+	out := make([]EventSource, 0, len(in))
+	for _, src := range in {
+		out = append(out, EventSource{AssetID: src.AssetID, Status: src.Status})
+	}
+	return out
+}
+
+// publishRun publishes the run a read belongs to, so a client watching the
+// run sees each read move.
+func (s *Service) publishRun(ctx context.Context, read *models.BrandDistillRun) {
+	if s.hub == nil || read.ReadOf == nil {
+		return
+	}
+	if run, err := s.repos.Runs.Get(ctx, *read.ReadOf); err == nil {
+		s.publish(ctx, run)
+	}
 }
 
 // save writes the named columns and publishes the run. A failed write is
@@ -285,6 +331,7 @@ func (s *Service) save(ctx context.Context, run *models.BrandDistillRun, columns
 		return err
 	}
 	s.publish(ctx, run)
+	s.publishRun(ctx, run)
 	return nil
 }
 
@@ -348,7 +395,8 @@ func (s *Service) supersedeParent(ctx context.Context, child *models.BrandDistil
 
 // announce tells the run's author it is ready or failed. Best effort.
 func (s *Service) announce(ctx context.Context, run *models.BrandDistillRun) {
-	if s.deps.Notifier == nil || run.CreatedBy == nil {
+	// A read is followed where it was added; only its run is announced.
+	if s.deps.Notifier == nil || run.CreatedBy == nil || run.ReadOf != nil {
 		return
 	}
 	spec := notify.Spec{

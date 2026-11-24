@@ -30,11 +30,16 @@ type RequestInput struct {
 	WebsiteURL string
 	AssetIDs   []string
 	Answers    []Answer
+	// Incremental reads each source on its own as it is added (AddRead), and
+	// composes when asked (Compose). The sources given here, if any, are the
+	// first reads.
+	Incremental bool
 }
 
 // Request validates and queues a run, returned pending. A workspace with an
 // open run gets that run with ErrInProgress; a gated tier gets the limiter's
-// FeatureNotAvailableError or QuotaExceededError.
+// FeatureNotAvailableError or QuotaExceededError. An incremental run is
+// returned collecting, its first reads started.
 func (s *Service) Request(ctx context.Context, in RequestInput) (*models.BrandDistillRun, error) {
 	ctx = tenantctx.With(ctx, in.TenantID)
 	answers, err := cleanAnswers(in.Answers)
@@ -43,7 +48,7 @@ func (s *Service) Request(ctx context.Context, in RequestInput) (*models.BrandDi
 	}
 	ids := compactIDs(in.AssetIDs)
 	website := strings.TrimSpace(in.WebsiteURL)
-	if website == "" && len(ids) == 0 && len(answers) == 0 {
+	if website == "" && len(ids) == 0 && len(answers) == 0 && !in.Incremental {
 		return nil, &InputError{Code: CodeEmptyRequest, Msg: "give a website, assets or answers"}
 	}
 	if len(ids) > MaxAssets {
@@ -54,17 +59,9 @@ func (s *Service) Request(ctx context.Context, in RequestInput) (*models.BrandDi
 	}
 	run := &models.BrandDistillRun{Status: models.BrandDistillStatusPending, Answers: answers, CreatedBy: in.UserID}
 	if website != "" {
-		if s.deps.Importer == nil || s.deps.Mapper == nil || !s.deps.Importer.Configured(ctx) {
-			return nil, ErrScrapingUnavailable
-		}
-		url, err := urlimport.Normalize(ctx, website)
-		if invalid, ok := errors.AsType[*urlimport.InvalidURLError](err); ok {
-			return nil, &InputError{Code: CodeInvalidURL, Msg: invalid.Msg}
-		}
-		if err != nil {
+		if run.WebsiteURL, err = s.websiteURL(ctx, website); err != nil {
 			return nil, err
 		}
-		run.WebsiteURL = &url
 	}
 	if run.Sources, err = s.assetSources(ctx, ids); err != nil {
 		return nil, err
@@ -75,6 +72,9 @@ func (s *Service) Request(ctx context.Context, in RequestInput) (*models.BrandDi
 	if _, err := s.limiter.Require(ctx, in.TenantID, FeatureMonthly); err != nil {
 		return nil, err
 	}
+	if in.Incremental {
+		return s.startIncremental(ctx, in)
+	}
 	if err := s.repos.Runs.Create(ctx, s.db, run); err != nil {
 		return s.inProgress(ctx, err)
 	}
@@ -82,6 +82,22 @@ func (s *Service) Request(ctx context.Context, in RequestInput) (*models.BrandDi
 		s.warn(ctx, "stamp the run on its brand sources", run.ID, err)
 	}
 	return run, s.start(ctx, in.TenantID, run)
+}
+
+// websiteURL checks a website to read: pages can be imported here and the
+// address is a page's.
+func (s *Service) websiteURL(ctx context.Context, website string) (*string, error) {
+	if s.deps.Importer == nil || s.deps.Mapper == nil || !s.deps.Importer.Configured(ctx) {
+		return nil, ErrScrapingUnavailable
+	}
+	url, err := urlimport.Normalize(ctx, website)
+	if invalid, ok := errors.AsType[*urlimport.InvalidURLError](err); ok {
+		return nil, &InputError{Code: CodeInvalidURL, Msg: invalid.Msg}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &url, nil
 }
 
 // start queues a created run's job; a run that cannot be queued is failed.
@@ -194,6 +210,9 @@ func (s *Service) Refine(ctx context.Context, tenantID, runID string, userID *st
 			return err
 		}
 		switch {
+		case parent.ReadOf != nil:
+			// A read has no proposal of its own; its run is refined.
+			return ErrNotReady
 		case parent.Status == models.BrandDistillStatusCommitted:
 			return ErrCommitted
 		case parent.Status != models.BrandDistillStatusReady:
@@ -263,7 +282,13 @@ func (s *Service) Discard(ctx context.Context, tenantID, runID string) (*models.
 		}
 		wasOpen = run.Status.Open()
 		run.Status = models.BrandDistillStatusDiscarded
-		return s.repos.Runs.Save(ctx, tx, run, "status")
+		if err := s.repos.Runs.Save(ctx, tx, run, "status"); err != nil {
+			return err
+		}
+		if run.Incremental {
+			return s.discardReads(ctx, tx, run.ID)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -272,8 +297,8 @@ func (s *Service) Discard(ctx context.Context, tenantID, runID string) (*models.
 		s.unlinkParent(ctx, run)
 	}
 	// Only a run that never finished goes back to the allowance; a proposal
-	// that was read is spent.
-	if run.Charged && wasOpen {
+	// that was read is spent, and so are an incremental run's reads.
+	if run.Charged && wasOpen && !run.Incremental {
 		if err := s.repos.Runs.ReleaseCharge(ctx, run.ID); err != nil {
 			s.warn(ctx, "release a discarded run's charge", run.ID, err)
 		}

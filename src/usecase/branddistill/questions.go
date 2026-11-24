@@ -8,6 +8,8 @@ const (
 	SectionAudiences  = "audiences"
 	SectionGuardrails = "guardrails"
 	SectionFacts      = "facts"
+	// SectionPositioning is what sets the brand apart.
+	SectionPositioning = "positioning"
 )
 
 // starterQuestions are asked when nothing is written down. Ids are stable so

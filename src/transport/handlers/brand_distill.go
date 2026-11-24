@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -21,6 +22,8 @@ const (
 	codeDistillRefineLimit      = "refine_limit"
 	codeScrapingUnavailable     = "scraping_unavailable"
 	codeBrandDistillUnavailable = "distill_unavailable"
+	codeDistillNotCollecting    = "run_not_collecting"
+	codeDistillReadsOpen        = "reads_in_progress"
 )
 
 // BrandDistiller runs brand distillations. *branddistill.Service implements
@@ -32,6 +35,10 @@ type BrandDistiller interface {
 	Refine(ctx context.Context, tenantID, runID string, userID *string, answers []branddistill.Answer) (*models.BrandDistillRun, error)
 	Commit(ctx context.Context, in branddistill.CommitInput) (*branddistill.CommitResult, error)
 	Discard(ctx context.Context, tenantID, runID string) (*models.BrandDistillRun, error)
+	AddRead(ctx context.Context, in branddistill.ReadInput) (*models.BrandDistillRun, error)
+	StopRead(ctx context.Context, tenantID, runID, readID string) (*models.BrandDistillRun, error)
+	Reads(ctx context.Context, tenantID, runID string) ([]models.BrandDistillRun, error)
+	Compose(ctx context.Context, tenantID, runID string) (*models.BrandDistillRun, error)
 }
 
 // BrandDistillHandler serves /api/brand/distills: reading a brand off a
@@ -55,6 +62,9 @@ func (h *BrandDistillHandler) Register(app *fiber.App) {
 	g.Get("/:id", h.auth, h.Get)
 	g.Post("/:id/answers", h.auth, h.Answers)
 	g.Post("/:id/commit", h.auth, h.Commit)
+	g.Post("/:id/reads", h.auth, h.AddRead)
+	g.Delete("/:id/reads/:readId", h.auth, h.StopRead)
+	g.Post("/:id/compose", h.auth, h.Compose)
 	g.Delete("/:id", h.auth, h.Discard)
 }
 
@@ -82,6 +92,40 @@ type brandDistillRequest struct {
 	// Answers to starter or gap questions; blank answers are ignored. At most
 	// 12.
 	Answers []distillAnswerBody `json:"answers"`
+	// Incremental reads each source on its own: the run stays collecting,
+	// sources are added with POST /{id}/reads, and the proposal is written
+	// with POST /{id}/compose. Sources given here are its first reads; none
+	// is needed.
+	Incremental bool `json:"incremental"`
+}
+
+// brandDistillReadRequest is one source to read: exactly one of the three.
+type brandDistillReadRequest struct {
+	WebsiteURL string              `json:"websiteUrl"`
+	AssetID    string              `json:"assetId"`
+	Answers    []distillAnswerBody `json:"answers"`
+}
+
+// brandDistillRead is one source of an incremental run on the wire.
+type brandDistillRead struct {
+	ID      string                    `json:"id"`
+	Kind    string                    `json:"kind" enums:"website,asset,answers"`
+	Status  models.BrandDistillStatus `json:"status" swaggertype:"string" enums:"pending,collecting,reading,ready,discarded,failed"`
+	Website *models.DistillWebsite    `json:"website"`
+	Sources []models.DistillSource    `json:"sources"`
+	Answers []models.DistillAnswer    `json:"answers"`
+	// Coverage is what this source adds to each section.
+	Coverage   map[string]models.DistillCoverage `json:"coverage"`
+	Failure    *branddistill.Failure             `json:"failure"`
+	CreatedAt  time.Time                         `json:"createdAt"`
+	FinishedAt *time.Time                        `json:"finishedAt" extensions:"x-nullable"`
+}
+
+func readView(r *models.BrandDistillRun) brandDistillRead {
+	return brandDistillRead{
+		ID: r.ID, Kind: r.ReadKind(), Status: r.Status, Website: r.Website, Sources: r.Sources, Answers: r.Answers,
+		Coverage: r.Coverage, Failure: branddistill.FailureOf(r), CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt,
+	}
 }
 
 type brandDistillAnswersRequest struct {
@@ -93,10 +137,31 @@ type brandDistillAnswersRequest struct {
 type brandDistillRun struct {
 	*models.BrandDistillRun
 	Failure *branddistill.Failure `json:"failure"`
+	// Reads are an incremental run's sources, oldest first; left out of the
+	// list and of runs that are not incremental.
+	Reads []brandDistillRead `json:"reads,omitempty"`
 }
 
 func runView(run *models.BrandDistillRun) brandDistillRun {
 	return brandDistillRun{BrandDistillRun: run, Failure: branddistill.FailureOf(run)}
+}
+
+// fullRunView is runView with an incremental run's reads.
+func (h *BrandDistillHandler) fullRunView(c *fiber.Ctx, run *models.BrandDistillRun) (brandDistillRun, error) {
+	out := runView(run)
+	if !run.Incremental {
+		return out, nil
+	}
+	tenantID, _ := tenantctx.From(reqCtx(c))
+	reads, err := h.svc.Reads(reqCtx(c), tenantID, run.ID)
+	if err != nil {
+		return out, err
+	}
+	out.Reads = make([]brandDistillRead, 0, len(reads))
+	for i := range reads {
+		out.Reads = append(out.Reads, readView(&reads[i]))
+	}
+	return out, nil
 }
 
 type brandDistillRunsResponse struct {
@@ -143,6 +208,10 @@ func distillError(c *fiber.Ctx, err error, run *models.BrandDistillRun) error {
 		return rejectCoded(c, fiber.StatusUnprocessableEntity, codeDistillRefineLimit, "no more answer rounds for this run", nil)
 	case errors.Is(err, branddistill.ErrUnavailable):
 		return rejectCoded(c, fiber.StatusServiceUnavailable, codeBrandDistillUnavailable, "reading your brand is not available", nil)
+	case errors.Is(err, branddistill.ErrNotCollecting):
+		return rejectCoded(c, fiber.StatusConflict, codeDistillNotCollecting, "the run takes no more sources", nil)
+	case errors.Is(err, branddistill.ErrReadsOpen):
+		return rejectCoded(c, fiber.StatusConflict, codeDistillReadsOpen, "a source is still being read; stop it or wait", nil)
 	}
 	return err
 }
@@ -172,15 +241,112 @@ func (h *BrandDistillHandler) Request(c *fiber.Ctx) error {
 	tenantID, _ := tenantctx.From(ctx)
 	run, err := h.svc.Request(ctx, branddistill.RequestInput{
 		TenantID: tenantID, UserID: sessionUserID(c),
-		WebsiteURL: body.WebsiteURL, AssetIDs: body.AssetIDs, Answers: toAnswers(body.Answers),
+		WebsiteURL: body.WebsiteURL, AssetIDs: body.AssetIDs, Answers: toAnswers(body.Answers), Incremental: body.Incremental,
 	})
 	if err != nil {
 		return distillError(c, err, run)
 	}
 	h.record(c, "brand_distill_requested", activity.WithEntity("brand_distill", run.ID), activity.WithPayload(map[string]any{
-		"website": run.WebsiteURL != nil, "assets": len(run.Sources), "answers": len(run.Answers),
+		"website": run.WebsiteURL != nil || body.WebsiteURL != "", "assets": max(len(run.Sources), len(body.AssetIDs)),
+		"answers": max(len(run.Answers), len(body.Answers)), "incremental": run.Incremental,
 	}))
-	return c.Status(fiber.StatusAccepted).JSON(runView(run))
+	out, err := h.fullRunView(c, run)
+	if err != nil {
+		return err
+	}
+	return c.Status(fiber.StatusAccepted).JSON(out)
+}
+
+// AddRead godoc
+// @Summary      Read one more source of an incremental run
+// @Description  Starts reading one source at once, on its own: a website (its homepage and up to nine pages), an asset, or answers to starter questions, exactly one. A website or an asset takes about a minute; answers are read at once. Each read's progress, and the run's coverage as each one finishes, arrive as brand.distill.updated events on the run's topic entity:brand_distill:<id>.
+// @Tags         brand
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id    path      string                   true  "Run id"
+// @Param        body  body      brandDistillReadRequest  true  "One source"
+// @Success      202   {object}  brandDistillRead
+// @Failure      401   {object}  map[string]string
+// @Failure      404   {object}  map[string]string
+// @Failure      409   {object}  map[string]any  "run_not_collecting or scraping_unavailable"
+// @Failure      422   {object}  map[string]any  "empty_request, one_source, invalid_url, unknown_asset, asset_failed, already_read, too_many or invalid_answer"
+// @Failure      503   {object}  map[string]any  "distill_unavailable"
+// @Router       /api/brand/distills/{id}/reads [post]
+func (h *BrandDistillHandler) AddRead(c *fiber.Ctx) error {
+	var body brandDistillReadRequest
+	if err := c.BodyParser(&body); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+	ctx := reqCtx(c)
+	tenantID, _ := tenantctx.From(ctx)
+	read, err := h.svc.AddRead(ctx, branddistill.ReadInput{
+		TenantID: tenantID, RunID: c.Params("id"), UserID: sessionUserID(c),
+		WebsiteURL: body.WebsiteURL, AssetID: body.AssetID, Answers: toAnswers(body.Answers),
+	})
+	if err != nil {
+		return distillError(c, err, nil)
+	}
+	h.record(c, "brand_distill_read_started", activity.WithEntity("brand_distill", c.Params("id")), activity.WithPayload(map[string]any{
+		"read_id": read.ID, "kind": read.ReadKind(),
+	}))
+	return c.Status(fiber.StatusAccepted).JSON(readView(read))
+}
+
+// StopRead godoc
+// @Summary      Stop a read
+// @Description  Stops a source still being read, or takes a finished one out of the run; either way its coverage leaves the run's.
+// @Tags         brand
+// @Security     CookieAuth
+// @Param        id      path  string  true  "Run id"
+// @Param        readId  path  string  true  "Read id"
+// @Success      204
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  map[string]any  "run_not_collecting"
+// @Router       /api/brand/distills/{id}/reads/{readId} [delete]
+func (h *BrandDistillHandler) StopRead(c *fiber.Ctx) error {
+	ctx := reqCtx(c)
+	tenantID, _ := tenantctx.From(ctx)
+	read, err := h.svc.StopRead(ctx, tenantID, c.Params("id"), c.Params("readId"))
+	if err != nil {
+		return distillError(c, err, nil)
+	}
+	h.record(c, "brand_distill_read_stopped", activity.WithEntity("brand_distill", c.Params("id")), activity.WithPayload(map[string]any{
+		"read_id": read.ID, "kind": read.ReadKind(),
+	}))
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// Compose godoc
+// @Summary      Write an incremental run's proposal
+// @Description  Composes the proposal from every finished read, as one run: the run is charged once however many sources it read. Every read must be done; stop the ones still in progress first. The run then moves like any other, to ready.
+// @Tags         brand
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id   path      string  true  "Run id"
+// @Success      202  {object}  brandDistillRun
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  map[string]any  "run_not_collecting or reads_in_progress"
+// @Failure      422  {object}  map[string]any  "nothing_read"
+// @Failure      503  {object}  map[string]any  "distill_unavailable"
+// @Router       /api/brand/distills/{id}/compose [post]
+func (h *BrandDistillHandler) Compose(c *fiber.Ctx) error {
+	ctx := reqCtx(c)
+	tenantID, _ := tenantctx.From(ctx)
+	run, err := h.svc.Compose(ctx, tenantID, c.Params("id"))
+	if err != nil {
+		return distillError(c, err, nil)
+	}
+	h.record(c, "brand_distill_composed", activity.WithEntity("brand_distill", run.ID), activity.WithPayload(map[string]any{
+		"sources": len(run.Sources), "answers": len(run.Answers),
+	}))
+	out, err := h.fullRunView(c, run)
+	if err != nil {
+		return err
+	}
+	return c.Status(fiber.StatusAccepted).JSON(out)
 }
 
 // List godoc
@@ -237,7 +403,11 @@ func (h *BrandDistillHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return distillError(c, err, nil)
 	}
-	return c.JSON(runView(run))
+	out, err := h.fullRunView(c, run)
+	if err != nil {
+		return err
+	}
+	return c.JSON(out)
 }
 
 // Answers godoc

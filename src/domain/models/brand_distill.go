@@ -233,7 +233,16 @@ type BrandDistillRun struct {
 	bun.BaseModel `bun:"table:brand_distill_runs,alias:bdr" swaggerignore:"true"`
 	TenantScoped
 
-	ID          string             `bun:"id,pk"                              json:"id"`
+	ID string `bun:"id,pk" json:"id"`
+	// Incremental runs are read a source at a time: each source is a read
+	// (ReadOf names this run), and the run composes once they are done.
+	Incremental bool    `bun:"incremental,notnull,default:false" json:"incremental"`
+	ReadOf      *string `bun:"read_of"                           json:"readOf" extensions:"x-nullable"`
+	// Coverage is what the sources read so far give each section: on a read,
+	// what it added; on an incremental run, every finished read together.
+	// The proposal's own coverage is the composed verdict.
+	Coverage map[string]DistillCoverage `bun:"coverage,type:jsonb" json:"coverage"`
+
 	ParentRunID *string            `bun:"parent_run_id"                      json:"parentRunId" extensions:"x-nullable"`
 	ChildRunID  *string            `bun:"child_run_id"                       json:"childRunId"  extensions:"x-nullable"`
 	Depth       int                `bun:"depth,notnull,default:0"            json:"-"`
@@ -260,6 +269,34 @@ type BrandDistillRun struct {
 	CreatedAt    time.Time  `bun:"created_at,notnull,default:current_timestamp" json:"createdAt"`
 	UpdatedAt    time.Time  `bun:"updated_at,notnull,default:current_timestamp" json:"updatedAt"`
 	FinishedAt   *time.Time `bun:"finished_at"                                  json:"finishedAt" extensions:"x-nullable"`
+}
+
+// Kinds of read: what one source of an incremental run is.
+const (
+	DistillReadWebsite = "website"
+	DistillReadAsset   = "asset"
+	DistillReadAnswers = "answers"
+)
+
+// ReadKind is what a read reads; "" for a run that is not a read.
+func (r *BrandDistillRun) ReadKind() string {
+	switch {
+	case r.ReadOf == nil:
+		return ""
+	case r.WebsiteURL != nil:
+		return DistillReadWebsite
+	case len(r.Sources) > 0:
+		return DistillReadAsset
+	}
+	return DistillReadAnswers
+}
+
+// BillingRunID is the run a read's model calls count against: its run.
+func (r *BrandDistillRun) BillingRunID() string {
+	if r.ReadOf != nil {
+		return *r.ReadOf
+	}
+	return r.ID
 }
 
 // BrandDistillCharge records one run against the monthly cap.
