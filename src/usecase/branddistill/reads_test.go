@@ -183,6 +183,38 @@ func TestIncrementalRunHoldsTheSlot(t *testing.T) {
 	}
 }
 
+func TestWebsiteReadTakesTheSiteNameAndIcon(t *testing.T) {
+	f := newFixture(t)
+	f.importer.site = &models.AssetSiteMeta{Name: "Acme", FaviconKey: "t/default/assets/x/favicon.png"}
+	run, err := f.svc.Request(f.ctx, branddistill.RequestInput{TenantID: tenant, Incremental: true, WebsiteURL: "https://acme.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads := readsOf(t, f, run.ID)
+	if len(reads) != 1 || reads[0].ReadKind() != models.DistillReadWebsite {
+		t.Fatalf("reads = %+v", reads)
+	}
+	if err := f.svc.Run(f.ctx, tenant, reads[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	got := f.run(t, reads[0].ID)
+	if got.Website == nil || got.Website.SiteName != "Acme" || got.Website.FaviconKey == "" {
+		t.Fatalf("website = %+v", got.Website)
+	}
+	page, err := f.repos.Assets.GetByID(f.ctx, got.Sources[0].AssetID)
+	if err != nil || page.OriginRef == nil || page.OriginRef.RunID != run.ID {
+		t.Fatalf("a read's page names %+v, want its run %s", page.OriginRef, run.ID)
+	}
+
+	composed, err := f.svc.Compose(f.ctx, tenant, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if composed.Website == nil || composed.Website.SiteName != "Acme" {
+		t.Fatalf("the run's website = %+v, want the read's", composed.Website)
+	}
+}
+
 func TestComposeNeedsSomethingRead(t *testing.T) {
 	f := newFixture(t)
 	run, err := f.svc.Request(f.ctx, branddistill.RequestInput{TenantID: tenant, Incremental: true})

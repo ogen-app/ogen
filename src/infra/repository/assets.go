@@ -62,6 +62,9 @@ type AssetRepository interface {
 	// SetPublishedAt records when the asset's source was published, read from
 	// its metadata at ingest. It leaves updated_at alone: it is not an edit.
 	SetPublishedAt(ctx context.Context, id string, at time.Time) error
+	// SetSiteMeta records what a site root's page says about the site. Like
+	// SetPublishedAt it is not an edit.
+	SetSiteMeta(ctx context.Context, id string, meta *models.AssetSiteMeta) error
 	// SetContent sets content only (title/status untouched) — the process_audio
 	// worker's transcript write on completion.
 	SetContent(ctx context.Context, id, content string) error
@@ -233,6 +236,15 @@ func (r *assetRepository) UpdateContent(ctx context.Context, id, title, content 
 		Set("title = ?", title).
 		Set("content = ?", content).
 		Set("updated_at = ?", time.Now().UTC())).
+		Where("id = ?", id).
+		Exec(ctx)
+	return err
+}
+
+func (r *assetRepository) SetSiteMeta(ctx context.Context, id string, meta *models.AssetSiteMeta) error {
+	_, err := r.db.NewUpdate().
+		Model((*models.Asset)(nil)).
+		Set("site_meta = ?", meta).
 		Where("id = ?", id).
 		Exec(ctx)
 	return err

@@ -101,6 +101,11 @@ type ScrapeResult struct {
 	// PublishedTime holds the values of the page's published-time meta tags,
 	// most specific tag first.
 	PublishedTime []string
+	// SiteName is the site's own name from its meta tags (og:site_name, then
+	// application-name); empty when it states none.
+	SiteName string
+	// Favicon is the page's icon URL as Firecrawl found it; empty when none.
+	Favicon string
 }
 
 // scrapeBody is the POST /v2/scrape request body. Field names match Firecrawl's
@@ -132,6 +137,10 @@ type scrapeResponse struct {
 			PublishedTime        flexStrings `json:"publishedTime"`
 			ArticlePublishedTime flexStrings `json:"article:published_time"`
 			OGPublishedTime      flexStrings `json:"og:published_time"`
+			OGSiteName           flexStrings `json:"ogSiteName"`
+			OGSiteNameTag        flexStrings `json:"og:site_name"`
+			ApplicationName      flexStrings `json:"application-name"`
+			Favicon              flexStrings `json:"favicon"`
 		} `json:"metadata"`
 	} `json:"data"`
 }
@@ -164,7 +173,10 @@ func (c *Client) Scrape(ctx context.Context, in ScrapeRequest) (*ScrapeResult, e
 		return nil, &APIError{Message: msg}
 	}
 
+	meta := out.Data.Metadata
 	return &ScrapeResult{
+		SiteName:    firstNonBlank(slices.Concat(meta.OGSiteName, meta.OGSiteNameTag, meta.ApplicationName)),
+		Favicon:     firstNonBlank(meta.Favicon),
 		Markdown:    out.Data.Markdown,
 		Title:       out.Data.Metadata.Title.String(),
 		Description: out.Data.Metadata.Description.String(),
@@ -325,6 +337,16 @@ func IsTransient(err error) bool {
 // strings (Firecrawl returns title/description as either). The array form is
 // joined with " · " so nothing is silently dropped.
 type flexString string
+
+// firstNonBlank is the first value with text in it, trimmed.
+func firstNonBlank(values []string) string {
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 func (f *flexString) UnmarshalJSON(b []byte) error {
 	b = bytes.TrimSpace(b)

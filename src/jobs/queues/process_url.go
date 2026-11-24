@@ -65,6 +65,10 @@ type assetContentWriter interface {
 	CreatorOf(ctx context.Context, id string) (string, error)
 }
 
+type siteMetaSetter interface {
+	SetSiteMeta(ctx context.Context, id string, meta *models.AssetSiteMeta) error
+}
+
 type imageReplacer interface {
 	ReplaceForAsset(ctx context.Context, assetID string, images []models.AssetImage) error
 }
@@ -94,6 +98,8 @@ type URLDeps struct {
 	Assets   assetContentWriter
 	// Published records the page's published time; nil skips it.
 	Published publishedAtSetter
+	// Sites records a site root's name and icon; nil skips them.
+	Sites siteMetaSetter
 	Chunks    chunkUpserter
 	Images    imageReplacer
 	Hub       eventPublisher
@@ -168,6 +174,10 @@ type urlState struct {
 	// Empty marks a run that staged no chunks: the page has nothing
 	// embeddable, so its earlier chunks are cleared at commit.
 	Empty bool `json:"empty,omitzero"`
+	// Site is what a site root's page says about the site, its icon copied
+	// once the page images are; nil for any other page.
+	Site        *models.AssetSiteMeta `json:"site,omitempty"`
+	FaviconDone bool                  `json:"favicon_done,omitzero"`
 }
 
 // imageRef is one page image to mirror.
@@ -178,7 +188,8 @@ type imageRef struct {
 
 const (
 	urlPhaseScrape = "scrape"
-	urlPhaseImages = "images"
+	urlPhaseImages  = "images"
+	urlPhaseFavicon = "favicon"
 	urlPhaseEmbed  = "embed"
 )
 
@@ -201,6 +212,9 @@ func (p *ProcessURLProcessor) step(ctx context.Context, in StepInput) (StepOutpu
 		return p.scraped(ctx, task, in.Result)
 	case urlPhaseImages:
 		p.fetched(ctx, task, &st, in.Result)
+		return p.nextImage(ctx, task, &st)
+	case urlPhaseFavicon:
+		p.faviconFetched(ctx, task, &st, in.Result)
 		return p.nextImage(ctx, task, &st)
 	case urlPhaseEmbed:
 		if err := p.embedLoop().settle(ctx, &st.Embed, in.Result); err != nil {
@@ -288,6 +302,9 @@ func (p *ProcessURLProcessor) scraped(ctx context.Context, in ProcessURLTask, r 
 	if p.Deps.Storage != nil {
 		st.Refs = imageRefs(ctx, in.AssetID, res.Markdown)
 	}
+	if p.Deps.Sites != nil {
+		st.Site = siteMeta(in.SourceURL, res)
+	}
 	return p.nextImage(ctx, in, st)
 }
 
@@ -309,6 +326,9 @@ func (p *ProcessURLProcessor) nextImage(ctx context.Context, in ProcessURLTask, 
 			},
 		}}, nil
 	}
+	if st.Site != nil && st.Site.FaviconSource != "" && p.Deps.Storage != nil && !st.FaviconDone {
+		return p.fetchFavicon(st)
+	}
 	markdown, err := gunzipText(st.Markdown)
 	if err != nil {
 		return StepOutput{}, err
@@ -316,6 +336,12 @@ func (p *ProcessURLProcessor) nextImage(ctx context.Context, in ProcessURLTask, 
 	markdown = replaceLinks(markdown, st.Replacements)
 	if err := p.persistContent(ctx, in.AssetID, st.Title, markdown, st.Images); err != nil {
 		return retry("process_url", err)
+	}
+	if st.Site != nil {
+		if err := p.Deps.Sites.SetSiteMeta(ctx, in.AssetID, st.Site); err != nil {
+			slog.WarnContext(ctx, "could not record the site's name and icon", logging.AttrComponent, "jobs.process_url",
+				"asset_id", in.AssetID, logging.AttrError, err)
+		}
 	}
 	runID, err := models.NewID()
 	if err != nil {
@@ -641,6 +667,8 @@ func extForImage(contentType, rawURL string) string {
 		return ".webp"
 	case "image/avif":
 		return ".avif"
+	case "image/x-icon", "image/vnd.microsoft.icon":
+		return ".ico"
 	}
 	if u, err := url.Parse(rawURL); err == nil {
 		if ext := strings.ToLower(path.Ext(u.Path)); ext != "" && ext != ".svg" && len(ext) <= 5 {
