@@ -168,6 +168,7 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 	// tenant.tier_id is required (NOT NULL); a new workspace starts on
 	// the seeded default tier, reassignable later by Harbor.
 	tenant := &models.Tenant{ID: tenantID, Name: req.Name, Slug: slug, TierID: models.DefaultTierID, BillingRequired: h.billingRequired, CreatedAt: now, UpdatedAt: now}
+	tenant.StartSetup(now)
 	// The creator owns the new workspace (CON-26 role model).
 	membership := &models.User{ID: userID, AccountID: account.ID, TenantID: tenantID, Name: account.Name, Email: account.Email, Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now}
 

@@ -53,6 +53,17 @@ type Tenant struct {
 	// InviteID is the tester invite the workspace was created from, if any.
 	InviteID *string `bun:"invite_id" json:"-"`
 
+	// Setup is where the workspace is in setup after signup. Read it through
+	// SetupState; the REST contract carries that view, not these columns.
+	SetupStatus     *string    `bun:"setup_status"                    json:"-"`
+	SetupStep       string     `bun:"setup_step,notnull,default:''"    json:"-"`
+	SetupReached    string     `bun:"setup_reached,notnull,default:''" json:"-"`
+	SetupRole       string     `bun:"setup_role,notnull,default:''"    json:"-"`
+	SetupRunID      *string    `bun:"setup_run_id"                    json:"-"`
+	SetupUpdatedAt  *time.Time `bun:"setup_updated_at"                json:"-"`
+	SetupFinishedBy *string    `bun:"setup_finished_by"               json:"-"`
+	SetupFinishedAt *time.Time `bun:"setup_finished_at"               json:"-"`
+
 	// Tier and Groups are hydrated on the operator/admin read path only (CON-208
 	// TenantAdminService), never scanned from the tenants table (bun:"-"), and —
 	// like TierID — excluded from tenant-facing REST (json:"-"). The gRPC service

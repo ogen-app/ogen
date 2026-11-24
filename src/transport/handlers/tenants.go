@@ -73,6 +73,13 @@ type TenantsHandler struct {
 	// billingGate adds billing_required to GET /api/tenants/current; nil
 	// while billing is off.
 	billingGate BillingGate
+	// users reads the caller's role for the owner-only setup write.
+	users repository.UserRepository
+}
+
+// SetUsers lets owners write the workspace's setup state.
+func (h *TenantsHandler) SetUsers(users repository.UserRepository) {
+	h.users = users
 }
 
 // SetBillingGate reports the billing gate on the current-tenant read.
@@ -86,6 +93,9 @@ func (h *TenantsHandler) SetBillingGate(gate BillingGate) {
 type currentTenantResponse struct {
 	*models.Tenant
 	BillingRequired bool `json:"billing_required"`
+	// Setup is where the workspace is in setup after signup; null for a
+	// workspace made before setup existed, which is never sent through it.
+	Setup *models.TenantSetup `json:"setup"`
 }
 
 func NewTenantsHandler(signupSvc *signup.Service, tenantRepo repository.TenantRepository, cookieName string, secureCookie bool, auth fiber.Handler, rec *activity.Recorder) *TenantsHandler {
@@ -117,6 +127,7 @@ func (h *TenantsHandler) Register(app *fiber.App) {
 
 	g := app.Group("/api/tenants", h.auth)
 	g.Get("/current", h.Current)
+	g.Put("/current/setup", h.UpdateSetup)
 	g.Get("/:id", h.Get)
 	g.Put("/:id", h.Update)
 }
@@ -215,13 +226,67 @@ func (h *TenantsHandler) Current(c *fiber.Ctx) error {
 	if err != nil {
 		return notFound(err, "tenant not found")
 	}
-	out := currentTenantResponse{Tenant: tenant}
+	out := currentTenantResponse{Tenant: tenant, Setup: tenant.SetupState()}
 	if h.billingGate != nil {
 		if out.BillingRequired, err = h.billingGate(reqCtx(c), id); err != nil {
 			return err
 		}
 	}
 	return c.JSON(out)
+}
+
+type updateSetupRequest struct {
+	Status  string  `json:"status" enums:"pending,done,skipped"`
+	Step    string  `json:"step"`
+	Reached string  `json:"reached"`
+	Role    string  `json:"role" enums:",own,client"`
+	RunID   *string `json:"runId" extensions:"x-nullable"`
+}
+
+// UpdateSetup godoc
+// @Summary      Write the workspace's setup state
+// @Description  Owners only. Replaces the setup state: status pending, done or skipped, the step to open on, the furthest step reached, the role (own or client) and the brand read setup started. Finishing or skipping records who and when; going back to pending clears that. Setup is the workspace's, not a person's.
+// @Tags         tenants
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        body  body      updateSetupRequest  true  "Setup state"
+// @Success      200   {object}  models.TenantSetup
+// @Failure      400   {object}  map[string]string
+// @Failure      401   {object}  map[string]string
+// @Failure      403   {object}  map[string]string  "owner role required"
+// @Failure      422   {object}  map[string]any     "invalid_setup"
+// @Router       /api/tenants/current/setup [put]
+func (h *TenantsHandler) UpdateSetup(c *fiber.Ctx) error {
+	if h.users == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "setup is not available")
+	}
+	user, err := requireOwner(c, h.users)
+	if err != nil {
+		return err
+	}
+	var req updateSetupRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+	tenant, err := h.tenantRepo.GetByID(reqCtx(c), h.callerTenantID(c))
+	if err != nil {
+		return notFound(err, "tenant not found")
+	}
+	update := models.SetupUpdate{Status: req.Status, Step: req.Step, Reached: req.Reached, Role: req.Role, RunID: req.RunID}
+	if err := tenant.ApplySetup(update, user.ID, time.Now().UTC()); err != nil {
+		if invalid, ok := errors.AsType[*models.InvalidSetupError](err); ok {
+			return rejectCoded(c, fiber.StatusUnprocessableEntity, "invalid_setup", invalid.Msg, nil)
+		}
+		return err
+	}
+	if err := h.tenantRepo.SaveSetup(reqCtx(c), tenant); err != nil {
+		return err
+	}
+	h.activity.Record(reqCtx(c), activity.CategoryWorkspace, "workspace_setup_updated",
+		activity.WithEntity("tenant", tenant.ID), activity.WithSource(activity.SourceAPI),
+		activity.WithPayload(map[string]any{"status": req.Status, "step": req.Step}))
+	return c.JSON(tenant.SetupState())
 }
 
 // Get godoc
