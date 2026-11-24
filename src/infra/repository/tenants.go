@@ -21,6 +21,8 @@ type TenantRepository interface {
 	GetByID(ctx context.Context, id string) (*models.Tenant, error)
 	GetBySlug(ctx context.Context, slug string) (*models.Tenant, error)
 	Update(ctx context.Context, tenant *models.Tenant) error
+	// SaveSetup writes only the setup columns, so a rename never races it.
+	SaveSetup(ctx context.Context, tenant *models.Tenant) error
 	// SoftDeleteTx marks a workspace deleted on the provided bun.IDB
 	// so it can join the delete handler's transaction (which also, later, enqueues
 	// the Zernio teardown). It stamps status='deleted' alongside deleted_at
@@ -104,8 +106,19 @@ func (r *tenantRepository) GetBySlug(ctx context.Context, slug string) (*models.
 	return tenant, nil
 }
 
+// setupColumns are written by SaveSetup alone.
+var setupColumns = []string{
+	"setup_status", "setup_step", "setup_reached", "setup_role", "setup_run_id",
+	"setup_updated_at", "setup_finished_by", "setup_finished_at",
+}
+
 func (r *tenantRepository) Update(ctx context.Context, tenant *models.Tenant) error {
-	_, err := r.db.NewUpdate().Model(tenant).WherePK().Exec(ctx)
+	_, err := r.db.NewUpdate().Model(tenant).ExcludeColumn(setupColumns...).WherePK().Exec(ctx)
+	return err
+}
+
+func (r *tenantRepository) SaveSetup(ctx context.Context, tenant *models.Tenant) error {
+	_, err := r.db.NewUpdate().Model(tenant).Column(setupColumns...).WherePK().Exec(ctx)
 	return err
 }
 

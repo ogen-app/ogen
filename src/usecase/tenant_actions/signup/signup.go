@@ -384,7 +384,7 @@ func newSignupEntities(in Input, slug string, now time.Time) (*signupEntities, e
 		return nil, fmt.Errorf("generate session token: %w", err)
 	}
 	e := &signupEntities{
-		tenant:  &models.Tenant{ID: tenantID, Name: in.TenantName, Slug: slug, TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now},
+		tenant:  newTenant(tenantID, in.TenantName, slug, now),
 		account: &models.Account{ID: accountID, Email: in.Email, PasswordHash: hash, Name: in.UserName, CreatedAt: now, UpdatedAt: now},
 		user:    &models.User{ID: userID, AccountID: accountID, TenantID: tenantID, Name: in.UserName, Email: in.Email, Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now},
 		session: &models.Session{ID: token, AccountID: accountID, UserID: userID, TenantID: tenantID, ExpiresAt: now.Add(sessionTTL), CreatedAt: now},
@@ -396,6 +396,13 @@ func newSignupEntities(in Input, slug string, now time.Time) (*signupEntities, e
 		}
 	}
 	return e, nil
+}
+
+// newTenant is a signed-up workspace: it owes its setup.
+func newTenant(id, name, slug string, now time.Time) *models.Tenant {
+	t := &models.Tenant{ID: id, Name: name, Slug: slug, TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now}
+	t.StartSetup(now)
+	return t
 }
 
 // enqueueSideEffectsTx enqueues the welcome and onboarding-drip mails and the

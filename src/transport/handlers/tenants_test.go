@@ -45,7 +45,9 @@ var _ = Describe("TenantsHandler", Ordered, func() {
 		sessionRepo := repository.NewSessionRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		signupSvc := signup.New(db, repository.NewAccountRepository(db), tenantRepo)
-		handlers.NewTenantsHandler(signupSvc, tenantRepo, testCookieName, false, auth, nil).Register(app)
+		tenants := handlers.NewTenantsHandler(signupSvc, tenantRepo, testCookieName, false, auth, nil)
+		tenants.SetUsers(userRepo)
+		tenants.Register(app)
 	})
 
 	AfterEach(func() {
@@ -301,6 +303,92 @@ var _ = Describe("TenantsHandler", Ordered, func() {
 			resp, err := app.Test(req)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(400))
+		})
+	})
+
+	Describe("setup state", func() {
+		current := func(cookie *http.Cookie) map[string]any {
+			GinkgoHelper()
+			req := httptest.NewRequest("GET", "/api/tenants/current", nil)
+			req.AddCookie(cookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(200))
+			var got map[string]any
+			Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
+			return got
+		}
+		putSetup := func(cookie *http.Cookie, body fiber.Map) (int, map[string]any) {
+			GinkgoHelper()
+			raw, _ := json.Marshal(body)
+			req := httptest.NewRequest("PUT", "/api/tenants/current/setup", bytes.NewReader(raw))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(cookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			var got map[string]any
+			_ = json.NewDecoder(resp.Body).Decode(&got)
+			return resp.StatusCode, got
+		}
+
+		It("starts a signed-up workspace pending", func() {
+			cookie, _ := signup("Acme Inc", "Alice", "alice@acme.test", "password-alice")
+			setup := current(cookie)["setup"].(map[string]any)
+			Expect(setup["status"]).To(Equal("pending"))
+			Expect(setup["finishedAt"]).To(BeNil())
+		})
+
+		It("reads null for a workspace made before setup existed", func() {
+			cookie, out := signup("Acme Inc", "Alice", "alice@acme.test", "password-alice")
+			_, err := db.NewUpdate().TableExpr("tenants").Set("setup_status = NULL").Where("id = ?", tenantID(out)).Exec(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(current(cookie)).To(HaveKeyWithValue("setup", BeNil()))
+		})
+
+		It("lets the owner move it on, records who finished, and keeps it across a rename", func() {
+			cookie, out := signup("Acme Inc", "Alice", "alice@acme.test", "password-alice")
+			code, got := putSetup(cookie, fiber.Map{"status": "pending", "step": "sources", "reached": "sources", "role": "client", "runId": "run-1"})
+			Expect(code).To(Equal(200))
+			Expect(got).To(HaveKeyWithValue("step", "sources"))
+			Expect(got).To(HaveKeyWithValue("role", "client"))
+			Expect(got).To(HaveKeyWithValue("finishedBy", BeNil()))
+
+			code, got = putSetup(cookie, fiber.Map{"status": "done", "step": "accounts", "reached": "accounts", "role": "client", "runId": "run-1"})
+			Expect(code).To(Equal(200))
+			Expect(got["finishedBy"]).NotTo(BeEmpty())
+			Expect(got["finishedAt"]).NotTo(BeNil())
+
+			body, _ := json.Marshal(fiber.Map{"name": "Acme Renamed"})
+			req := httptest.NewRequest("PUT", "/api/tenants/"+tenantID(out), bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(cookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(200))
+			setup := current(cookie)["setup"].(map[string]any)
+			Expect(setup["status"]).To(Equal("done"))
+			Expect(setup["runId"]).To(Equal("run-1"))
+
+			code, got = putSetup(cookie, fiber.Map{"status": "pending", "step": "you"})
+			Expect(code).To(Equal(200))
+			Expect(got).To(HaveKeyWithValue("finishedAt", BeNil()))
+		})
+
+		It("refuses a member", func() {
+			cookie, out := signup("Acme Inc", "Alice", "alice@acme.test", "password-alice")
+			_, err := db.NewUpdate().TableExpr("users").Set("role = ?", models.RoleMember).Where("tenant_id = ?", tenantID(out)).Exec(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			code, _ := putSetup(cookie, fiber.Map{"status": "skipped"})
+			Expect(code).To(Equal(403))
+		})
+
+		It("refuses an unknown status or role with 422", func() {
+			cookie, _ := signup("Acme Inc", "Alice", "alice@acme.test", "password-alice")
+			code, got := putSetup(cookie, fiber.Map{"status": "finished"})
+			Expect(code).To(Equal(422))
+			Expect(got).To(HaveKeyWithValue("code", "invalid_setup"))
+			code, _ = putSetup(cookie, fiber.Map{"status": "pending", "role": "agency"})
+			Expect(code).To(Equal(422))
 		})
 	})
 })

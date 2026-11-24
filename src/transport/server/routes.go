@@ -111,6 +111,7 @@ func registerAuthRoutes(app *fiber.App, d *deps) {
 	tenants := handlers.NewTenantsHandler(d.svc.signup, r.tenantRepo, cfg.SessionCookieName, secure, d.auth, rec)
 	tenants.SetLoginSecurity(d.svc.loginSecurity, cfg.DeviceCookieName)
 	tenants.SetBillingGate(d.billingGate())
+	tenants.SetUsers(r.userRepo)
 	tenants.Register(app)
 	handlers.NewSignupAccessHandler(d.svc.signupAccess).Register(app)
 	handlers.NewLoginAlertsHandler(d.svc.loginSecurity).Register(app)
