@@ -58,6 +58,8 @@ type fakeImporter struct {
 	status  string
 	content map[string]string
 	pages   []string
+	// site is what the homepage says about the site, set on the root page.
+	site *models.AssetSiteMeta
 }
 
 func (i *fakeImporter) Configured(context.Context) bool { return true }
@@ -73,6 +75,9 @@ func (i *fakeImporter) Import(ctx context.Context, in urlimport.Input) (*urlimpo
 	a := &models.Asset{
 		ID: id, Title: in.URL, Content: body, Status: i.statusOr(), Type: new(models.AssetTypeURL), SourceURL: new(in.URL),
 		TagIDs: models.StringSlice{}, CreatedBy: in.UserID, CreatedAt: now, UpdatedAt: now,
+	}
+	if strings.HasSuffix(in.URL, "/") && strings.Count(in.URL, "/") == 3 {
+		a.SiteMeta = i.site
 	}
 	if in.Mark != nil {
 		in.Mark.Apply(a)

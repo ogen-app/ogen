@@ -216,6 +216,7 @@ func newIngestion(d *deps, callbacks embedding.Callbacks, embedder ai.Embedder) 
 		Storage:    store,
 		Assets:     r.pieceRepo,
 		Published:  r.pieceRepo,
+		Sites:      r.pieceRepo,
 		Chunks:     r.chunksRepo,
 		Images:     r.assetImageRepo,
 		Hub:        d.hub,

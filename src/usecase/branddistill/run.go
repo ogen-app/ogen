@@ -84,7 +84,7 @@ func (s *Service) prepare(ctx context.Context, tenantID, runID string, mapper Ma
 	}
 	// The model stages run apart and reload the run, so they read the
 	// sources as settled here.
-	return s.save(ctx, run, "sources")
+	return s.save(ctx, run, "sources", "website")
 }
 
 // finish runs the model stages of a prepared run: reading its sources, then
@@ -254,6 +254,9 @@ func (s *Service) settleSources(ctx context.Context, run *models.BrandDistillRun
 		if a.Title != "" {
 			src.Title = a.Title
 		}
+		if src.Role == models.DistillRoleWebsite && run.Website != nil && a.SiteMeta != nil {
+			run.Website.SiteName, run.Website.FaviconKey = a.SiteMeta.Name, a.SiteMeta.FaviconKey
+		}
 		if src.Role == models.DistillRoleWebsite && src.Status != models.DistillSourcePending && src.Status != models.DistillSourceFailed &&
 			len(strings.Fields(a.Content)) < minPageWords {
 			src.Status = models.DistillSourceThin
@@ -262,7 +265,7 @@ func (s *Service) settleSources(ctx context.Context, run *models.BrandDistillRun
 	}
 	if pending && s.now().Sub(run.CreatedAt) < collectTimeout {
 		run.Status = models.BrandDistillStatusCollecting
-		return true, s.save(ctx, run, "status", "sources")
+		return true, s.save(ctx, run, "status", "sources", "website")
 	}
 	for i := range run.Sources {
 		if run.Sources[i].Status == models.DistillSourcePending {

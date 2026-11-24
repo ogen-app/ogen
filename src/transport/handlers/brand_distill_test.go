@@ -238,6 +238,19 @@ var _ = Describe("Brand distillation", Ordered, Serial, func() {
 		Expect(resp.StatusCode).To(Equal(fiber.StatusNoContent))
 	})
 
+	It("shows the site's name and never its icon's storage key", func() {
+		fake.run = &models.BrandDistillRun{ID: "run-5", Status: models.BrandDistillStatusReady, Website: &models.DistillWebsite{
+			URL: "https://acme.com", Mapped: true, PagesFound: 4, SiteName: "Acme", FaviconKey: "t/default/assets/a1/favicon.png",
+		}}
+		resp, body := do("GET", "/api/brand/distills/run-5", nil)
+		Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+		website := body["website"].(map[string]any)
+		Expect(website).To(HaveKeyWithValue("siteName", "Acme"))
+		Expect(website).To(HaveKeyWithValue("url", "https://acme.com"))
+		Expect(website).To(HaveKey("faviconUrl"))
+		Expect(website).NotTo(HaveKey("faviconKey"))
+	})
+
 	Describe("an incremental run", func() {
 		runID := "inc-1"
 		read := func(id, status string) models.BrandDistillRun {

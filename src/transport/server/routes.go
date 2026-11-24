@@ -192,7 +192,9 @@ func registerContentBankRoutes(app *fiber.App, d *deps) {
 		Register(app)
 	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, d.store, d.db, imgJobs, d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth).Register(app)
 	handlers.NewBrandHandler(r.brandRepo, d.store, d.auth, d.activity.recorder).Register(app)
-	handlers.NewBrandDistillHandler(d.brandDistill, r.brandRepo, d.auth, d.activity.recorder).Register(app)
+	distill := handlers.NewBrandDistillHandler(d.brandDistill, r.brandRepo, d.auth, d.activity.recorder)
+	distill.SetStorage(d.store, d.cfg.StoragePublicRead)
+	distill.Register(app)
 	// Before the ideas routes, so POST /api/ideas/compile wins over /:id.
 	composer := compose.New(d.db, r.ideaRepo, r.campaignRepo, r.postIdeaRepo, r.postLogRepo, d.hub).WithSeries(r.seriesRepo).WithDrafter(ideaDrafter(d.genkit))
 	handlers.NewIdeaPostsHandler(composer.Compile, r.postIdeaRepo, r.ideaRepo, r.postRepo, d.activity.recorder, d.auth).

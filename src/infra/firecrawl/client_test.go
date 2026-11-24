@@ -47,6 +47,30 @@ func TestScrape_Success(t *testing.T) {
 	}
 }
 
+func TestScrape_SiteNameAndFavicon(t *testing.T) {
+	cases := map[string]struct{ metadata, siteName, favicon string }{
+		"og site name":     {`{"ogSiteName":"Acme","og:site_name":"Other","favicon":"https://acme.com/icon.png"}`, "Acme", "https://acme.com/icon.png"},
+		"raw tag":          {`{"og:site_name":["", "Acme Roasters"]}`, "Acme Roasters", ""},
+		"application name": {`{"application-name":" Acme ","favicon":["https://acme.com/a.ico"]}`, "Acme", "https://acme.com/a.ico"},
+		"none":             {`{"title":"Home"}`, "", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"success":true,"data":{"markdown":"x","metadata":` + tc.metadata + `}}`))
+			}))
+			defer srv.Close()
+			res, err := New(staticKey("k"), srv.URL, 0).Scrape(t.Context(), ScrapeRequest{URL: "https://acme.com"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.SiteName != tc.siteName || res.Favicon != tc.favicon {
+				t.Fatalf("site name = %q, favicon = %q", res.SiteName, res.Favicon)
+			}
+		})
+	}
+}
+
 func TestScrape_FlexStringTitleArray(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"data":{"markdown":"x","metadata":{"title":["A","B"]}}}`))

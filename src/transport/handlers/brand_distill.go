@@ -11,6 +11,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/branddistill"
@@ -48,6 +49,39 @@ type BrandDistillHandler struct {
 	brands   repository.BrandRepository
 	auth     fiber.Handler
 	activity *activity.Recorder
+	// storage links a website's icon; nil leaves faviconUrl null.
+	storage    storage.Storage
+	publicRead bool
+}
+
+// SetStorage lets runs link the icon their website read copied.
+func (h *BrandDistillHandler) SetStorage(store storage.Storage, publicRead bool) {
+	h.storage, h.publicRead = store, publicRead
+}
+
+// distillWebsite is what a website read found, its icon linked.
+type distillWebsite struct {
+	URL        string `json:"url"`
+	Mapped     bool   `json:"mapped"`
+	PagesFound int    `json:"pagesFound"`
+	// SiteName is the business's name as its homepage states it; empty until
+	// the homepage is read or when it states none.
+	SiteName string `json:"siteName"`
+	// FaviconURL is the site's icon, copied into our storage: a link that
+	// expires, so refetch the run for a fresh one. Null when the site has no
+	// icon we could copy.
+	FaviconURL *string `json:"faviconUrl" extensions:"x-nullable"`
+}
+
+func (h *BrandDistillHandler) websiteView(c *fiber.Ctx, w *models.DistillWebsite) *distillWebsite {
+	if w == nil {
+		return nil
+	}
+	out := &distillWebsite{URL: w.URL, Mapped: w.Mapped, PagesFound: w.PagesFound, SiteName: w.SiteName}
+	if w.FaviconKey != "" {
+		out.FaviconURL = objectURL(reqCtx(c), h.storage, h.publicRead, w.FaviconKey)
+	}
+	return out
 }
 
 func NewBrandDistillHandler(svc BrandDistiller, brands repository.BrandRepository, auth fiber.Handler, rec *activity.Recorder) *BrandDistillHandler {
@@ -111,7 +145,7 @@ type brandDistillRead struct {
 	ID      string                    `json:"id"`
 	Kind    string                    `json:"kind" enums:"website,asset,answers"`
 	Status  models.BrandDistillStatus `json:"status" swaggertype:"string" enums:"pending,collecting,reading,ready,discarded,failed"`
-	Website *models.DistillWebsite    `json:"website"`
+	Website *distillWebsite           `json:"website"`
 	Sources []models.DistillSource    `json:"sources"`
 	Answers []models.DistillAnswer    `json:"answers"`
 	// Coverage is what this source adds to each section.
@@ -121,9 +155,9 @@ type brandDistillRead struct {
 	FinishedAt *time.Time                        `json:"finishedAt" extensions:"x-nullable"`
 }
 
-func readView(r *models.BrandDistillRun) brandDistillRead {
+func (h *BrandDistillHandler) readView(c *fiber.Ctx, r *models.BrandDistillRun) brandDistillRead {
 	return brandDistillRead{
-		ID: r.ID, Kind: r.ReadKind(), Status: r.Status, Website: r.Website, Sources: r.Sources, Answers: r.Answers,
+		ID: r.ID, Kind: r.ReadKind(), Status: r.Status, Website: h.websiteView(c, r.Website), Sources: r.Sources, Answers: r.Answers,
 		Coverage: r.Coverage, Failure: branddistill.FailureOf(r), CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt,
 	}
 }
@@ -137,18 +171,20 @@ type brandDistillAnswersRequest struct {
 type brandDistillRun struct {
 	*models.BrandDistillRun
 	Failure *branddistill.Failure `json:"failure"`
+	// Website replaces the stored one: the icon linked, its storage key left out.
+	Website *distillWebsite `json:"website"`
 	// Reads are an incremental run's sources, oldest first; left out of the
 	// list and of runs that are not incremental.
 	Reads []brandDistillRead `json:"reads,omitempty"`
 }
 
-func runView(run *models.BrandDistillRun) brandDistillRun {
-	return brandDistillRun{BrandDistillRun: run, Failure: branddistill.FailureOf(run)}
+func (h *BrandDistillHandler) runView(c *fiber.Ctx, run *models.BrandDistillRun) brandDistillRun {
+	return brandDistillRun{BrandDistillRun: run, Failure: branddistill.FailureOf(run), Website: h.websiteView(c, run.Website)}
 }
 
 // fullRunView is runView with an incremental run's reads.
 func (h *BrandDistillHandler) fullRunView(c *fiber.Ctx, run *models.BrandDistillRun) (brandDistillRun, error) {
-	out := runView(run)
+	out := h.runView(c, run)
 	if !run.Incremental {
 		return out, nil
 	}
@@ -159,7 +195,7 @@ func (h *BrandDistillHandler) fullRunView(c *fiber.Ctx, run *models.BrandDistill
 	}
 	out.Reads = make([]brandDistillRead, 0, len(reads))
 	for i := range reads {
-		out.Reads = append(out.Reads, readView(&reads[i]))
+		out.Reads = append(out.Reads, h.readView(c, &reads[i]))
 	}
 	return out, nil
 }
@@ -181,7 +217,7 @@ func toAnswers(in []distillAnswerBody) []branddistill.Answer {
 }
 
 // distillError answers the use case's refusals.
-func distillError(c *fiber.Ctx, err error, run *models.BrandDistillRun) error {
+func (h *BrandDistillHandler) distillError(c *fiber.Ctx, err error, run *models.BrandDistillRun) error {
 	if in, ok := errors.AsType[*branddistill.InputError](err); ok {
 		extra := fiber.Map{}
 		if in.ProposalID != "" {
@@ -195,7 +231,7 @@ func distillError(c *fiber.Ctx, err error, run *models.BrandDistillRun) error {
 	case errors.Is(err, branddistill.ErrInProgress):
 		var open any
 		if run != nil {
-			open = runView(run)
+			open = h.runView(c, run)
 		}
 		return rejectCoded(c, fiber.StatusConflict, codeDistillInProgress, "your brand is already being read", fiber.Map{"run": open})
 	case errors.Is(err, branddistill.ErrScrapingUnavailable):
@@ -244,7 +280,7 @@ func (h *BrandDistillHandler) Request(c *fiber.Ctx) error {
 		WebsiteURL: body.WebsiteURL, AssetIDs: body.AssetIDs, Answers: toAnswers(body.Answers), Incremental: body.Incremental,
 	})
 	if err != nil {
-		return distillError(c, err, run)
+		return h.distillError(c, err, run)
 	}
 	h.record(c, "brand_distill_requested", activity.WithEntity("brand_distill", run.ID), activity.WithPayload(map[string]any{
 		"website": run.WebsiteURL != nil || body.WebsiteURL != "", "assets": max(len(run.Sources), len(body.AssetIDs)),
@@ -285,12 +321,12 @@ func (h *BrandDistillHandler) AddRead(c *fiber.Ctx) error {
 		WebsiteURL: body.WebsiteURL, AssetID: body.AssetID, Answers: toAnswers(body.Answers),
 	})
 	if err != nil {
-		return distillError(c, err, nil)
+		return h.distillError(c, err, nil)
 	}
 	h.record(c, "brand_distill_read_started", activity.WithEntity("brand_distill", c.Params("id")), activity.WithPayload(map[string]any{
 		"read_id": read.ID, "kind": read.ReadKind(),
 	}))
-	return c.Status(fiber.StatusAccepted).JSON(readView(read))
+	return c.Status(fiber.StatusAccepted).JSON(h.readView(c, read))
 }
 
 // StopRead godoc
@@ -310,7 +346,7 @@ func (h *BrandDistillHandler) StopRead(c *fiber.Ctx) error {
 	tenantID, _ := tenantctx.From(ctx)
 	read, err := h.svc.StopRead(ctx, tenantID, c.Params("id"), c.Params("readId"))
 	if err != nil {
-		return distillError(c, err, nil)
+		return h.distillError(c, err, nil)
 	}
 	h.record(c, "brand_distill_read_stopped", activity.WithEntity("brand_distill", c.Params("id")), activity.WithPayload(map[string]any{
 		"read_id": read.ID, "kind": read.ReadKind(),
@@ -337,7 +373,7 @@ func (h *BrandDistillHandler) Compose(c *fiber.Ctx) error {
 	tenantID, _ := tenantctx.From(ctx)
 	run, err := h.svc.Compose(ctx, tenantID, c.Params("id"))
 	if err != nil {
-		return distillError(c, err, nil)
+		return h.distillError(c, err, nil)
 	}
 	h.record(c, "brand_distill_composed", activity.WithEntity("brand_distill", run.ID), activity.WithPayload(map[string]any{
 		"sources": len(run.Sources), "answers": len(run.Answers),
@@ -367,7 +403,7 @@ func (h *BrandDistillHandler) List(c *fiber.Ctx) error {
 	}
 	out := brandDistillRunsResponse{Runs: make([]brandDistillRun, 0, len(runs))}
 	for i := range runs {
-		out.Runs = append(out.Runs, runView(&runs[i]))
+		out.Runs = append(out.Runs, h.runView(c, &runs[i]))
 	}
 	return c.JSON(out)
 }
@@ -401,7 +437,7 @@ func (h *BrandDistillHandler) Get(c *fiber.Ctx) error {
 	tenantID, _ := tenantctx.From(ctx)
 	run, err := h.svc.Get(ctx, tenantID, c.Params("id"))
 	if err != nil {
-		return distillError(c, err, nil)
+		return h.distillError(c, err, nil)
 	}
 	out, err := h.fullRunView(c, run)
 	if err != nil {
@@ -434,12 +470,12 @@ func (h *BrandDistillHandler) Answers(c *fiber.Ctx) error {
 	tenantID, _ := tenantctx.From(ctx)
 	child, err := h.svc.Refine(ctx, tenantID, c.Params("id"), sessionUserID(c), toAnswers(body.Answers))
 	if err != nil {
-		return distillError(c, err, child)
+		return h.distillError(c, err, child)
 	}
 	h.record(c, "brand_distill_refined", activity.WithEntity("brand_distill", child.ID), activity.WithPayload(map[string]any{
 		"parent_run_id": c.Params("id"), "answers": len(child.Answers),
 	}))
-	return c.Status(fiber.StatusAccepted).JSON(runView(child))
+	return c.Status(fiber.StatusAccepted).JSON(h.runView(c, child))
 }
 
 type commitLineBody struct {
@@ -585,14 +621,14 @@ func (h *BrandDistillHandler) Commit(c *fiber.Ctx) error {
 	}
 	in, err := commitInput(body)
 	if err != nil {
-		return distillError(c, err, nil)
+		return h.distillError(c, err, nil)
 	}
 	ctx := reqCtx(c)
 	tenantID, _ := tenantctx.From(ctx)
 	in.TenantID, in.RunID, in.UserID = tenantID, c.Params("id"), sessionUserID(c)
 	res, err := h.svc.Commit(ctx, in)
 	if err != nil {
-		return distillError(c, err, nil)
+		return h.distillError(c, err, nil)
 	}
 	brand, err := h.brands.GetAll(ctx)
 	if err != nil {
@@ -667,7 +703,7 @@ func (h *BrandDistillHandler) Discard(c *fiber.Ctx) error {
 	tenantID, _ := tenantctx.From(ctx)
 	run, err := h.svc.Discard(ctx, tenantID, c.Params("id"))
 	if err != nil {
-		return distillError(c, err, nil)
+		return h.distillError(c, err, nil)
 	}
 	h.record(c, "brand_distill_discarded", activity.WithEntity("brand_distill", run.ID))
 	return c.SendStatus(fiber.StatusNoContent)

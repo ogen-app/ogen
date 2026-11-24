@@ -81,6 +81,10 @@ type DistillWebsite struct {
 	URL        string `json:"url"`
 	Mapped     bool   `json:"mapped"`
 	PagesFound int    `json:"pagesFound"`
+	// SiteName and FaviconKey are what the homepage says about the site,
+	// once it is read: its name and its icon in our storage.
+	SiteName   string `json:"siteName,omitempty"`
+	FaviconKey string `json:"faviconKey,omitempty" swaggerignore:"true"`
 }
 
 // DistillSource is one asset a run reads.

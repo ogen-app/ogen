@@ -84,6 +84,15 @@ type AssetOriginRef struct {
 	Role     string `json:"role,omitempty"`
 }
 
+// AssetSiteMeta is a site's own name and icon, read off its homepage. The
+// icon is copied into storage (FaviconKey) from FaviconSource; SVG icons are
+// never copied.
+type AssetSiteMeta struct {
+	Name          string `json:"name,omitempty"`
+	FaviconSource string `json:"faviconSource,omitempty"`
+	FaviconKey    string `json:"faviconKey,omitempty"`
+}
+
 type Asset struct {
 	bun.BaseModel `bun:"table:assets,alias:a" swaggerignore:"true"`
 	TenantScoped  // tenant_id column + central scoping hooks
@@ -142,4 +151,8 @@ type Asset struct {
 	UpdatedBy string    `bun:"updated_by,nullzero"                          json:"updated_by,omitempty"`
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+
+	// SiteMeta is what a site root's page says about the site; nil for every
+	// other asset.
+	SiteMeta *AssetSiteMeta `bun:"site_meta,type:jsonb" json:"-"`
 }
