@@ -59,6 +59,11 @@ var ErrNoAnalyticsScreen = errors.New("the window applies on the analytics scree
 // turn. The merge runs under the turn's planning lock, so tool calls made
 // together each build on the other's window. It returns the screen and the
 // window set; an error from merge leaves the window as it was.
+//
+// A campaign's Analytics tab is narrowed to its campaign by its address,
+// so merge sees that campaign even when the tab's window doesn't name it,
+// and a window over another campaign lands on that campaign's tab, one over
+// the whole workspace on the workspace's dashboard.
 func SetWindow(ctx context.Context, merge func(cur *viewcontext.Window) (viewcontext.Window, error)) (viewcontext.Screen, viewcontext.Window, error) {
 	st, err := turnStateFrom(ctx)
 	if err != nil {
@@ -66,21 +71,51 @@ func SetWindow(ctx context.Context, merge func(cur *viewcontext.Window) (viewcon
 	}
 	st.planning.Lock()
 	defer st.planning.Unlock()
-	screen := st.currentScreen()
+	screen, campaign := st.currentScreen(), st.currentCampaign()
 	if !screen.Analytics() {
 		return "", viewcontext.Window{}, ErrNoAnalyticsScreen
 	}
 	cur := st.currentWindow()
+	if screen.InCampaign() && (cur == nil || cur.CampaignID == "") {
+		var tab viewcontext.Window
+		if cur != nil {
+			tab = cur.Clone()
+		}
+		tab.CampaignID = campaign
+		cur = &tab
+	}
 	w, err := merge(cur)
 	if err != nil {
 		return "", viewcontext.Window{}, err
+	}
+	if screen.InCampaign() && w.CampaignID != campaign {
+		if w.CampaignID == "" {
+			screen = "analytics"
+		}
+		campaign = w.CampaignID
 	}
 	var before *viewcontext.Window
 	if cur != nil {
 		before = new(cur.Clone())
 	}
-	st.addUI(UIAction{Type: UISetWindow, Screen: screen, CampaignID: st.currentCampaign(), Window: &w, Before: before, Changed: w.Changes(cur)})
+	st.addUI(UIAction{Type: UISetWindow, Screen: screen, CampaignID: campaign, Window: &w, Before: before, Changed: w.Changes(cur)})
 	return screen, w, nil
+}
+
+// AnalyticsCampaign is the campaign the analytics screen the turn is on is
+// narrowed to by its address — a campaign's Analytics tab's, none on the
+// workspace's dashboard — and whether the turn is on one.
+func AnalyticsCampaign(ctx context.Context) (string, bool) {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return "", false
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !st.screen.Analytics() {
+		return "", false
+	}
+	return st.campaign, true
 }
 
 // OpenConnect asks the client to open the settings screen's connect flow

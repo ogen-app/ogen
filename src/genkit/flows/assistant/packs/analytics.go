@@ -89,7 +89,8 @@ type AnalyticsQuery struct {
 
 // rangeAndScope resolves a query against the screen: its window when the
 // query names no dates, its platforms when the query names none, and its
-// campaign, else the thread's, unless the query names one or "all".
+// campaign, else the dashboard's, else — off the dashboards — the thread's,
+// unless the query names one or "all".
 func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity string) (timeframe.Range, *analytics.Scope, error) {
 	from, to, window, platforms := in.From, in.To, in.Window, in.Platforms
 	// One read: a navigate made alongside this call can change the window,
@@ -117,7 +118,14 @@ func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity s
 	case campaign == "" && w != nil && w.CampaignID != "":
 		campaign = w.CampaignID
 	case campaign == "":
-		campaign = assistant.CampaignID(ctx)
+		// On a dashboard, the one its address narrows to: a set_window
+		// from a campaign's tab to the whole workspace reads the whole
+		// workspace, whatever the thread's campaign.
+		if id, ok := assistant.AnalyticsCampaign(ctx); ok {
+			campaign = id
+		} else {
+			campaign = assistant.CampaignID(ctx)
+		}
 	}
 	sc, err := resolveScope(ctx, d, platforms, campaign)
 	return rng, sc, err
