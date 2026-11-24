@@ -203,10 +203,11 @@ var _ = Describe("Brand distillation", Ordered, Serial, func() {
 		Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
 		Expect(body["brand"]).To(HaveKey("voices"))
 		Expect(body["applied"]).To(Equal(map[string]any{
-			"voices":     []any{map[string]any{"proposalId": "v1", "id": "voice-9"}},
-			"audiences":  []any{},
-			"guardrails": []any{"g:mayClaim:1"},
-			"facts":      []any{map[string]any{"proposalId": "f1", "id": "fact-9"}},
+			"voices":      []any{map[string]any{"proposalId": "v1", "id": "voice-9"}},
+			"audiences":   []any{},
+			"guardrails":  []any{"g:mayClaim:1"},
+			"facts":       []any{map[string]any{"proposalId": "f1", "id": "fact-9"}},
+			"positioning": []any{},
 		}))
 		Expect(body["skipped"]).To(Equal([]any{map[string]any{"proposalId": "f2", "reason": "duplicate"}}))
 
