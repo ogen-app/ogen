@@ -52,7 +52,7 @@ func TestMarkConnectInitiatedOnce(t *testing.T) {
 
 func TestOpenSessionRequiresTenant(t *testing.T) {
 	s := &Service{}
-	if _, _, err := s.openSession(t.Context(), "prof", "linkedin"); !errors.Is(err, ErrNoTenant) {
+	if _, _, err := s.openSession(t.Context(), "prof", "linkedin", ""); !errors.Is(err, ErrNoTenant) {
 		t.Fatalf("err = %v", err)
 	}
 }

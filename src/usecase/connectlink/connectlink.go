@@ -47,9 +47,10 @@ type Link struct {
 	ExpiresAt time.Time
 }
 
-// Create issues a connect link for platform. Errors are ErrDegraded,
+// Create issues a connect link for platform whose callback returns the browser
+// to returnTo (a models.ZernioConnectReturn* value). Errors are ErrDegraded,
 // ErrNoTenant, a *zernio.APIError from the link request, or a store failure.
-func (s *Service) Create(ctx context.Context, platform string) (*Link, error) {
+func (s *Service) Create(ctx context.Context, platform, returnTo string) (*Link, error) {
 	profileID, err := s.ensureProfile(ctx)
 	if err != nil {
 		return nil, err
@@ -61,7 +62,7 @@ func (s *Service) Create(ctx context.Context, platform string) (*Link, error) {
 		return nil, ErrDegraded
 	}
 
-	sessionID, now, err := s.openSession(ctx, profileID, platform)
+	sessionID, now, err := s.openSession(ctx, profileID, platform, returnTo)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +107,7 @@ func (s *Service) ensureProfile(ctx context.Context) (string, error) {
 // cross-site redirect through Zernio); it also holds the pending selection
 // when a platform has 2+ targets. It returns the session id and its creation
 // time.
-func (s *Service) openSession(ctx context.Context, profileID, platform string) (string, time.Time, error) {
+func (s *Service) openSession(ctx context.Context, profileID, platform, returnTo string) (string, time.Time, error) {
 	tenantID, ok := tenantctx.From(ctx)
 	if !ok {
 		return "", time.Time{}, ErrNoTenant
@@ -121,6 +122,7 @@ func (s *Service) openSession(ctx context.Context, profileID, platform string) (
 		TenantID:  tenantID,
 		ProfileID: profileID,
 		Platform:  platform,
+		ReturnTo:  returnTo,
 		Status:    models.ZernioConnectStatusPendingAuth,
 		CreatedAt: now,
 		UpdatedAt: now,

@@ -15,6 +15,17 @@ const (
 	ZernioConnectStatusAwaitingSelection = "awaiting_selection"
 )
 
+// Where a connect returns the browser to. The empty value is Settings.
+const (
+	ZernioConnectReturnSettings   = ""
+	ZernioConnectReturnOnboarding = "onboarding"
+)
+
+// ValidZernioConnectReturn reports whether r is a place a connect may return to.
+func ValidZernioConnectReturn(r string) bool {
+	return r == ZernioConnectReturnSettings || r == ZernioConnectReturnOnboarding
+}
+
 // ZernioConnectSession is the short-lived, server-side state for a headless
 // Zernio account connection (hide Zernio's hosted account selector).
 // It is created when a connect link is issued and consumed by the OAuth
@@ -37,6 +48,7 @@ type ZernioConnectSession struct {
 	ProfileID     string          `bun:"profile_id,notnull"                           json:"profile_id"`
 	Platform      string          `bun:"platform,notnull"                             json:"platform"`
 	Status        string          `bun:"status,notnull"                               json:"status"`
+	ReturnTo      string          `bun:"return_to,notnull,default:''"                 json:"-"` // where the callback sends the browser back to
 	SealedSecrets []byte          `bun:"sealed_secrets,nullzero"                      json:"-"`
 	Options       json.RawMessage `bun:"options,type:jsonb,nullzero"                  json:"-"`
 	CreatedAt     time.Time       `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`

@@ -13,6 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/crypto/envelope"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -240,6 +241,9 @@ func (h *ZernioHandler) ListPlatforms(c *fiber.Ctx) error {
 
 type connectLinkRequest struct {
 	Platform string `json:"platform" validate:"required"`
+	// ReturnTo is where the browser comes back to after the platform's
+	// consent: "" (Settings) or "onboarding" (setup after signup).
+	ReturnTo string `json:"returnTo" enums:",onboarding"`
 }
 
 type connectLinkResponse struct {
@@ -259,7 +263,7 @@ type connectLinkResponse struct {
 // @Security     CookieAuth
 // @Param        body  body      connectLinkRequest  true  "Platform to connect"
 // @Success      200   {object}  connectLinkResponse
-// @Failure      400   {object}  map[string]string  "invalid_platform"
+// @Failure      400   {object}  map[string]string  "invalid_platform or invalid_return_to"
 // @Failure      401   {object}  map[string]string
 // @Failure      409   {object}  map[string]string  "integration_disabled"
 // @Failure      429   {object}  map[string]string  "rate_limited"
@@ -276,6 +280,9 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 	}
 	if zernio.LookupSupportedPlatform(req.Platform) == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid_platform")
+	}
+	if !models.ValidZernioConnectReturn(req.ReturnTo) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid_return_to")
 	}
 
 	// The plan's connected-accounts cap is checked before anything is
@@ -304,7 +311,7 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 		SessionTTL:     connectSessionTTL,
 		FastPollWindow: fastPollWindow,
 	}
-	link, err := svc.Create(reqCtx(c), req.Platform)
+	link, err := svc.Create(reqCtx(c), req.Platform, req.ReturnTo)
 	if err != nil {
 		return connectLinkError(err)
 	}
