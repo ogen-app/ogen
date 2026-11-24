@@ -102,20 +102,22 @@ func SetWindow(ctx context.Context, merge func(cur *viewcontext.Window) (viewcon
 	return screen, w, nil
 }
 
-// AnalyticsCampaign is the campaign the analytics screen the turn is on is
-// narrowed to by its address — a campaign's Analytics tab's, none on the
-// workspace's dashboard — and whether the turn is on one.
-func AnalyticsCampaign(ctx context.Context) (string, bool) {
+// AnalyticsView is Window together with the campaign the analytics screen
+// the turn is on is narrowed to by its address — a campaign's Analytics
+// tab's, none on the workspace's dashboard — and whether the turn is on one,
+// all read at once, so a set_window made alongside can't put the window of
+// one screen with the campaign of another. Off the dashboards the campaign
+// is empty.
+func AnalyticsView(ctx context.Context) (w *viewcontext.Window, campaign string, onDashboard bool) {
 	st, err := turnStateFrom(ctx)
 	if err != nil {
-		return "", false
+		return nil, "", false
 	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if !st.screen.Analytics() {
-		return "", false
+	w, campaign, onDashboard = st.analyticsView()
+	if !onDashboard {
+		campaign = ""
 	}
-	return st.campaign, true
+	return w, campaign, onDashboard
 }
 
 // OpenConnect asks the client to open the settings screen's connect flow

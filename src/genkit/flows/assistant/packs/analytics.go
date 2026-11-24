@@ -93,9 +93,10 @@ type AnalyticsQuery struct {
 // unless the query names one or "all".
 func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity string) (timeframe.Range, *analytics.Scope, error) {
 	from, to, window, platforms := in.From, in.To, in.Window, in.Platforms
-	// One read: a navigate made alongside this call can change the window,
-	// so the dates and the campaign come from the same one.
-	w := assistant.Window(ctx)
+	// One read: a navigate or set_window made alongside this call can change
+	// the window and the screen, so the dates and the campaign come from the
+	// same one.
+	w, screenCampaign, onDashboard := assistant.AnalyticsView(ctx)
 	if w != nil {
 		if from == "" && to == "" && window == "" {
 			from, to = w.From, w.To
@@ -117,15 +118,13 @@ func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity s
 		campaign = ""
 	case campaign == "" && w != nil && w.CampaignID != "":
 		campaign = w.CampaignID
+	case campaign == "" && onDashboard:
+		// The one its address narrows to: a set_window from a campaign's
+		// tab to the whole workspace reads the whole workspace, whatever
+		// the thread's campaign.
+		campaign = screenCampaign
 	case campaign == "":
-		// On a dashboard, the one its address narrows to: a set_window
-		// from a campaign's tab to the whole workspace reads the whole
-		// workspace, whatever the thread's campaign.
-		if id, ok := assistant.AnalyticsCampaign(ctx); ok {
-			campaign = id
-		} else {
-			campaign = assistant.CampaignID(ctx)
-		}
+		campaign = assistant.CampaignID(ctx)
 	}
 	sc, err := resolveScope(ctx, d, platforms, campaign)
 	return rng, sc, err
