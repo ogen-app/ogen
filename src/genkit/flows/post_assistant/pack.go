@@ -100,7 +100,7 @@ func NewPack(g *genkit.Genkit, cfg PostAssistantFlowConfig, repos PostAssistantR
 func begin(ctx context.Context, g *genkit.Genkit, cfg PostAssistantFlowConfig, repos PostAssistantRepos, p *prompts, t assistant.Turn) (context.Context, string, error) {
 	id := t.Subject(models.AssistantScopePost)
 	if id == "" {
-		return nil, "", assistantkit.Refused("this message isn't about one post; open the post, or ask the user which one")
+		return nil, "", assistantkit.Refused("this message isn't about one post; open the post or select just that one on the list, or ask the user which one")
 	}
 	post, err := repos.Posts.GetByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
