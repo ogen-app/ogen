@@ -391,13 +391,11 @@ func (s *Service) save(ctx context.Context, t *target, resp *asset_analysis.Anal
 }
 
 func (s *Service) stillAttached(ctx context.Context, tx bun.Tx, campaignID, assetID string) (bool, error) {
-	n, err := tx.NewSelect().
+	return repository.RowsExist(ctx, tx.NewSelect().
 		Model((*models.Campaign)(nil)).
 		Where("c.id = ?", campaignID).
 		Where("c.deleted_at IS NULL").
-		Where("c.asset_ids @> ?::jsonb", jsonIDs(assetID)).
-		Count(ctx)
-	return n > 0, err
+		Where("c.asset_ids @> ?::jsonb", jsonIDs(assetID)))
 }
 
 func (s *Service) setStatus(ctx context.Context, t *target, status models.AssetAnalysisStatus, code, reason string) {

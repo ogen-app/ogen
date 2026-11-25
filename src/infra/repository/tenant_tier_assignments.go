@@ -89,10 +89,9 @@ func (r *tenantTierAssignmentRepository) Create(ctx context.Context, a *models.T
 }
 
 func (r *tenantTierAssignmentRepository) HasOpen(ctx context.Context, tenantID string) (bool, error) {
-	return r.db.NewSelect().Model((*models.TenantTierAssignment)(nil)).
+	return RowsExist(ctx, r.db.NewSelect().Model((*models.TenantTierAssignment)(nil)).
 		Where("tta.tenant_id = ?", tenantID).
-		Where("upper_inf(tta.valid)").
-		Exists(ctx)
+		Where("upper_inf(tta.valid)"))
 }
 
 func (r *tenantTierAssignmentRepository) LatestClosedUpper(ctx context.Context, tenantID string) (*time.Time, error) {

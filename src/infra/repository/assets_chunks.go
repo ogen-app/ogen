@@ -104,15 +104,21 @@ func (r *assetChunksRepository) PreviewByAssetID(ctx context.Context, assetID st
 }
 
 func (r *assetChunksRepository) ListPageByAssetID(ctx context.Context, assetID string, offset, limit int) ([]models.AssetChunk, int, error) {
+	total, err := CountRows(ctx, r.db.NewSelect().
+		Model((*models.AssetChunk)(nil)).
+		Where("ac.asset_id = ?", assetID))
+	if err != nil {
+		return nil, 0, err
+	}
 	chunks := []models.AssetChunk{}
-	total, err := r.db.NewSelect().
+	err = r.db.NewSelect().
 		Model(&chunks).
 		ExcludeColumn("embedding").
 		Where("ac.asset_id = ?", assetID).
 		OrderExpr("ac.chunk_index ASC").
 		Offset(offset).
 		Limit(limit).
-		ScanAndCount(ctx)
+		Scan(ctx)
 	return chunks, total, err
 }
 

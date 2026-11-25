@@ -139,13 +139,12 @@ func (r *campaignRepository) DeletePhaseWindows(ctx context.Context, campaignID 
 }
 
 func (r *campaignRepository) PhaseBelongsToCampaign(ctx context.Context, campaignID, phaseID string) (bool, error) {
-	return r.db.NewSelect().
+	return RowsExist(ctx, r.db.NewSelect().
 		Model((*models.Campaign)(nil)).
 		Join("JOIN campaigns_types_phases AS ctp ON ctp.campaign_type_id = c.campaign_type_id").
 		Where("c.id = ?", campaignID).
 		Where("c.deleted_at IS NULL").
-		Where("ctp.id = ?", phaseID).
-		Exists(ctx)
+		Where("ctp.id = ?", phaseID))
 }
 
 // Constraint names raised by the CON-166 integrity triggers.

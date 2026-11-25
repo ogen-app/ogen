@@ -143,10 +143,9 @@ func (r *campaignRepository) CreatedBetween(ctx context.Context, from, to time.T
 }
 
 func (r *campaignRepository) CountActive(ctx context.Context) (int64, error) {
-	n, err := r.db.NewSelect().Model((*models.Campaign)(nil)).
+	n, err := CountRows(ctx, r.db.NewSelect().Model((*models.Campaign)(nil)).
 		Where("c.deleted_at IS NULL").
-		Where("c.archived_at IS NULL").
-		Count(ctx)
+		Where("c.archived_at IS NULL"))
 	return int64(n), err
 }
 
@@ -183,16 +182,9 @@ func (r *campaignRepository) Create(ctx context.Context, campaign *models.Campai
 // as gone (sql.ErrNoRows); archived campaigns are still returned so they can be
 // viewed and unarchived.
 func (r *campaignRepository) Exists(ctx context.Context, id string) (bool, error) {
-	// Scan, not bun's Exists() or Count(): only a scanning select runs the
-	// BeforeSelect hook that adds the tenant predicate.
-	var ids []string
-	err := r.db.NewSelect().Model((*models.Campaign)(nil)).
-		Column("c.id").
+	return RowsExist(ctx, r.db.NewSelect().Model((*models.Campaign)(nil)).
 		Where("c.id = ?", id).
-		Where("c.deleted_at IS NULL").
-		Limit(1).
-		Scan(ctx, &ids)
-	return len(ids) > 0, err
+		Where("c.deleted_at IS NULL"))
 }
 
 func (r *campaignRepository) GetByID(ctx context.Context, id string) (*models.Campaign, error) {

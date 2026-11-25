@@ -61,12 +61,11 @@ func (r *signupSettingsRepository) CountOwnedWorkspacesTx(ctx context.Context, d
 	// users is not TenantScoped for this read: the count spans workspaces.
 	// Deleted workspaces do not count; suspended ones do. The legacy default
 	// workspace is ignored.
-	return db.NewSelect().TableExpr("users AS u").
+	return CountRows(ctx, db.NewSelect().TableExpr("users AS u").
 		Join("JOIN tenants AS t ON t.id = u.tenant_id").
 		Where("u.account_id = ?", accountID).
 		Where("u.role = ?", models.RoleOwner).
 		Where("t.status <> ?", models.TenantStatusDeleted).
 		Where("t.deleted_at IS NULL").
-		Where("t.id <> ?", models.DefaultTenantID).
-		Count(ctx)
+		Where("t.id <> ?", models.DefaultTenantID))
 }

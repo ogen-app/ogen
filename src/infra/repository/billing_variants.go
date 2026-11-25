@@ -64,7 +64,7 @@ func (r *billingRepository) SeedVariantMappings(ctx context.Context, testMode bo
 		if _, err := tx.NewRaw("SELECT pg_advisory_xact_lock(hashtext('billing_variant_seed'))").Exec(ctx); err != nil {
 			return err
 		}
-		exists, err := tx.NewSelect().Model((*models.BillingVariantMapping)(nil)).Where("test_mode = ?", testMode).Exists(ctx)
+		exists, err := RowsExist(ctx, tx.NewSelect().Model((*models.BillingVariantMapping)(nil)).Where("test_mode = ?", testMode))
 		if err != nil || exists {
 			return err
 		}

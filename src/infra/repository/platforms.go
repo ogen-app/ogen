@@ -9,6 +9,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
 // PlatformRepository defines all persistence operations for the Platform domain.
@@ -113,26 +114,26 @@ func (r *platformRepository) SetEnabled(ctx context.Context, id string, enabled 
 }
 
 func (r *platformRepository) InUseCounts(ctx context.Context, p *models.Platform) (accounts, scheduledPosts int, err error) {
+	// The counts span every tenant: the platform catalog is global.
+	ctx = tenantctx.WithSystem(ctx)
 	// Connected accounts join on the Zernio slug (social_accounts.platform holds
 	// the wire slug, e.g. "twitter"); soft-deleted accounts don't count.
 	if p.ZernioID != "" {
-		accounts, err = r.db.NewSelect().Model((*models.SocialAccount)(nil)).
+		accounts, err = CountRows(ctx, r.db.NewSelect().Model((*models.SocialAccount)(nil)).
 			Where("platform = ?", p.ZernioID).
-			Where("deleted_at IS NULL").
-			Count(ctx)
+			Where("deleted_at IS NULL"))
 		if err != nil {
 			return 0, 0, err
 		}
 	}
 	// Scheduled posts join on the Sqid (posts.platform_id) and are the ones that
 	// would still fire after a disable — the in-flight work §11 preserves.
-	scheduledPosts, err = r.db.NewSelect().Model((*models.Post)(nil)).
+	scheduledPosts, err = CountRows(ctx, r.db.NewSelect().Model((*models.Post)(nil)).
 		Where("platform_id = ?", p.ID).
 		Where("status IN (?)", bun.List([]string{
 			string(models.PostStatusScheduled),
 			string(models.PostStatusScheduledForManualPublish),
-		})).
-		Count(ctx)
+		})))
 	if err != nil {
 		return 0, 0, err
 	}

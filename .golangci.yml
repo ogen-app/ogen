@@ -12,7 +12,19 @@ linters:
     - gocyclo
     - gocognit
     - modernize
+    - forbidigo
   settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        # bun runs a model's BeforeSelect hook only for a scanning select, so
+        # these skip the tenant predicate TenantScoped adds and read every
+        # tenant's rows. Count or probe with countRows / rowsExist instead; a
+        # model that is not TenantScoped may use them with a nolint naming why.
+        - pattern: ^bun\.\*?SelectQuery\.(Count|Exists|ScanAndCount)$
+          pkg: ^github.com/uptrace/bun$
+          msg: skips the TenantScoped BeforeSelect hook; use countRows / rowsExist from the repository package
+
     errcheck:
       # Closing the read side (response bodies, downloads, uploaded files) has
       # nothing to recover; write paths must still check Close.
@@ -34,6 +46,7 @@ linters:
         linters:
           - gocyclo
           - gocognit
+          - forbidigo
       # genkit v1.9 deprecates model middleware in favour of WithUse. The
       # usage metering, prompt caching and effort hooks still run through it;
       # moving them to the new hooks is its own change.

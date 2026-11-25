@@ -162,10 +162,9 @@ func (r *emailLogRepository) ExistsByIdempotencyKey(ctx context.Context, key str
 	if key == "" {
 		return false, nil
 	}
-	return r.db.NewSelect().
+	return RowsExist(ctx, r.db.NewSelect().
 		Model((*models.EmailLog)(nil)).
-		Where("idempotency_key = ?", key).
-		Exists(ctx)
+		Where("idempotency_key = ?", key))
 }
 
 func (r *emailLogRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {

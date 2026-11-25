@@ -117,11 +117,11 @@ func (r *brandRepository) DeleteVoiceIf(ctx context.Context, db bun.IDB, id stri
 // in b that have no voice since. ErrBrandChanged when its id is taken.
 func (r *brandRepository) RestoreVoice(ctx context.Context, db bun.IDB, v *models.BrandVoice, b BrandBindings) error {
 	return r.inTx(ctx, db, func(ctx context.Context, tx bun.IDB) error {
-		n, err := tx.NewSelect().Model((*models.BrandVoice)(nil)).Where("id = ?", v.ID).Count(ctx)
+		taken, err := RowsExist(ctx, tx.NewSelect().Model((*models.BrandVoice)(nil)).Where("id = ?", v.ID))
 		if err != nil {
 			return err
 		}
-		if n > 0 {
+		if taken {
 			return ErrBrandChanged
 		}
 		if v.IsDefault {
@@ -216,11 +216,11 @@ func (r *brandRepository) DeleteAudienceIf(ctx context.Context, db bun.IDB, id s
 // in b that have no audience since. ErrBrandChanged when its id is taken.
 func (r *brandRepository) RestoreAudience(ctx context.Context, db bun.IDB, a *models.BrandAudience, b BrandBindings) error {
 	return r.inTx(ctx, db, func(ctx context.Context, tx bun.IDB) error {
-		n, err := tx.NewSelect().Model((*models.BrandAudience)(nil)).Where("id = ?", a.ID).Count(ctx)
+		taken, err := RowsExist(ctx, tx.NewSelect().Model((*models.BrandAudience)(nil)).Where("id = ?", a.ID))
 		if err != nil {
 			return err
 		}
-		if n > 0 {
+		if taken {
 			return ErrBrandChanged
 		}
 		if _, err := tx.NewInsert().Model(a).Exec(ctx); err != nil {

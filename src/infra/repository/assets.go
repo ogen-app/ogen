@@ -114,12 +114,12 @@ func NewAssetRepository(db *bun.DB, tagRepo TagRepository, fileRepo AssetFileRep
 }
 
 func (r *assetRepository) Count(ctx context.Context) (int64, error) {
-	n, err := r.db.NewSelect().Model((*models.Asset)(nil)).Count(ctx)
+	n, err := CountRows(ctx, r.db.NewSelect().Model((*models.Asset)(nil)))
 	return int64(n), err
 }
 
 func (r *assetRepository) CountByType(ctx context.Context, assetType string) (int64, error) {
-	n, err := r.db.NewSelect().Model((*models.Asset)(nil)).Where("a.type = ?", assetType).Count(ctx)
+	n, err := CountRows(ctx, r.db.NewSelect().Model((*models.Asset)(nil)).Where("a.type = ?", assetType))
 	return int64(n), err
 }
 

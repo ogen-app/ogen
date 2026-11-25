@@ -470,11 +470,11 @@ func (r *brandRepository) SetGuardrailsStance(ctx context.Context, s *models.Bra
 		if err := lockGuardrails(ctx, tx); err != nil {
 			return err
 		}
-		exists, err := tx.NewSelect().Model((*models.BrandGuardrails)(nil)).Count(ctx)
+		exists, err := RowsExist(ctx, tx.NewSelect().Model((*models.BrandGuardrails)(nil)))
 		if err != nil {
 			return err
 		}
-		if exists > 0 {
+		if exists {
 			return ErrGuardrailsExist
 		}
 		name, err := authorName(ctx, tx, s.DecidedBy)

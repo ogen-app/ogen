@@ -143,7 +143,7 @@ func (r *campaignTypeRepository) NameTaken(ctx context.Context, name, excludeID 
 	if err != nil {
 		return false, err
 	}
-	return q.Exists(ctx)
+	return RowsExist(ctx, q)
 }
 
 // Create inserts a type; the CampaignType insert hook stamps a custom type's

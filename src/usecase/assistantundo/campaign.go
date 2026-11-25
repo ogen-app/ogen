@@ -277,7 +277,7 @@ func campaignUsed(ctx context.Context, tx bun.IDB, campaignID string) (bool, err
 				OR i.plan_target_date IS NOT NULL`, models.IdeaOriginAssetAnalysis),
 	}
 	for _, q := range checks {
-		ok, err := q.Exists(ctx)
+		ok, err := repository.RowsExist(ctx, q)
 		if err != nil || ok {
 			return ok, err
 		}

@@ -320,7 +320,7 @@ func (r *tenantInviteRepository) Revoke(ctx context.Context, id string, now time
 // notPendingOrMissing tells an absent invite (sql.ErrNoRows) from one that is
 // no longer pending.
 func (r *tenantInviteRepository) notPendingOrMissing(ctx context.Context, db bun.IDB, id string) error {
-	exists, err := r.idb(db).NewSelect().Model((*models.TenantInvite)(nil)).Where("id = ?", id).Exists(ctx)
+	exists, err := RowsExist(ctx, r.idb(db).NewSelect().Model((*models.TenantInvite)(nil)).Where("id = ?", id))
 	if err != nil {
 		return err
 	}

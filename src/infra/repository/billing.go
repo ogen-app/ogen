@@ -140,12 +140,11 @@ type BillingRepository interface {
 }
 
 func (r *billingRepository) CountConnectedAccounts(ctx context.Context, tenantID string) (int64, error) {
-	// A raw table count: bun's Count skips the TenantScoped hook, so the
-	// tenant is filtered explicitly.
-	n, err := r.db.NewSelect().TableExpr("social_accounts").
+	// A raw table count runs no model hook, so the tenant is filtered
+	// explicitly.
+	n, err := CountRows(ctx, r.db.NewSelect().TableExpr("social_accounts").
 		Where("tenant_id = ?", tenantID).
-		Where("deleted_at IS NULL").
-		Count(ctx)
+		Where("deleted_at IS NULL"))
 	return int64(n), err
 }
 
@@ -207,11 +206,10 @@ func (r *billingRepository) ListSubscriptionsByTenant(ctx context.Context, db bu
 }
 
 func (r *billingRepository) TrialUsed(ctx context.Context, accountID string, testMode bool) (bool, error) {
-	return r.db.NewSelect().Model((*models.BillingSubscription)(nil)).
+	return RowsExist(ctx, r.db.NewSelect().Model((*models.BillingSubscription)(nil)).
 		Where("bs.account_id = ?", accountID).
 		Where("bs.test_mode = ?", testMode).
-		Where("bs.trial_ends_at IS NOT NULL").
-		Exists(ctx)
+		Where("bs.trial_ends_at IS NOT NULL"))
 }
 
 func (r *billingRepository) ListForReconcile(ctx context.Context, testMode bool, afterID string, limit int) ([]models.BillingSubscription, error) {
@@ -343,13 +341,12 @@ func (r *billingRepository) ListFailedWebhookEvents(ctx context.Context, since t
 }
 
 func (r *billingRepository) HasUnresolvedSubscriptionEvent(ctx context.Context, provider, providerSubID string, eventNames []string) (bool, error) {
-	return r.db.NewSelect().Model((*models.BillingWebhookEvent)(nil)).
+	return RowsExist(ctx, r.db.NewSelect().Model((*models.BillingWebhookEvent)(nil)).
 		Where("bwe.provider = ?", provider).
 		Where("bwe.provider_object_id = ?", providerSubID).
 		Where("bwe.event_name IN (?)", bun.List(eventNames)).
 		Where("bwe.outcome = ?", models.WebhookOutcomeFailed).
-		Where("bwe.tenant_id IS NULL").
-		Exists(ctx)
+		Where("bwe.tenant_id IS NULL"))
 }
 
 func (r *billingRepository) DeleteWebhookEventsBefore(ctx context.Context, cutoff time.Time) (int, error) {

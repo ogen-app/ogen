@@ -482,13 +482,12 @@ func (r *postRepository) CountPendingByAccount(ctx context.Context, socialAccoun
 	// BeforeSelect adds the tenant predicate; the status filter is the set of
 	// states that would still attempt to publish against this account. draft /
 	// ready_for_publish are excluded — they're freely editable, not committed.
-	return r.db.NewSelect().Model((*models.Post)(nil)).
+	return CountRows(ctx, r.db.NewSelect().Model((*models.Post)(nil)).
 		Where("po.social_account_id = ?", socialAccountID).
 		Where("po.status IN (?)", bun.List([]models.PostStatus{
 			models.PostStatusScheduled,
 			models.PostStatusScheduledForManualPublish,
-		})).
-		Count(ctx)
+		})))
 }
 
 func (r *postRepository) UpdateScheduledAtBatch(ctx context.Context, posts []*models.Post) error {

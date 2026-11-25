@@ -132,12 +132,11 @@ func (r *notificationRepository) ReplaySince(ctx context.Context, userID string,
 }
 
 func (r *notificationRepository) UnreadCount(ctx context.Context, userID string) (int, error) {
-	return r.db.NewSelect().Model((*models.Notification)(nil)).
+	return CountRows(ctx, r.db.NewSelect().Model((*models.Notification)(nil)).
 		Where("n.user_id = ?", userID).
 		Where("n.read_at IS NULL").
 		Where("n.dismissed_at IS NULL").
-		Where("(n.expires_at IS NULL OR n.expires_at > now())").
-		Count(ctx)
+		Where("(n.expires_at IS NULL OR n.expires_at > now())"))
 }
 
 func (r *notificationRepository) Get(ctx context.Context, userID, id string) (*models.Notification, error) {
