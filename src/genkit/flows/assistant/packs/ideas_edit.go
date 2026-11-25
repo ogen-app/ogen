@@ -11,8 +11,10 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
 )
 
 // defineEditTools defines editIdea and similarIdeas.
@@ -59,7 +61,7 @@ const ideaReadOnlyCode = "idea_read_only"
 // PlanEdit changes an idea's plan field by field: nil keeps a field, ""
 // clears it.
 type PlanEdit struct {
-	PlatformID *string `json:"platformId,omitempty"`
+	PlatformID *string `json:"platformId,omitempty" jsonschema:"description=The platform's id, slug or name, e.g. threads"`
 	PostType   *string `json:"postType,omitempty"`
 	PhaseID    *string `json:"phaseId,omitempty"    jsonschema:"description=A phase of the idea's campaign's type"`
 	TargetDate *string `json:"targetDate,omitempty" jsonschema:"description=YYYY-MM-DD"`
@@ -118,6 +120,9 @@ func editedPlan(p models.IdeaPlan, e PlanEdit) (models.IdeaPlan, error) {
 		}
 	}
 	set(&p.PlatformID, e.PlatformID)
+	if p.PlatformID != nil {
+		p.PlatformID = new(planPlatform(*p.PlatformID))
+	}
 	set(&p.PostType, e.PostType)
 	set(&p.PhaseID, e.PhaseID)
 	if e.TargetDate != nil {
@@ -128,6 +133,20 @@ func editedPlan(p models.IdeaPlan, e PlanEdit) (models.IdeaPlan, error) {
 		p.TargetDate = date
 	}
 	return p, nil
+}
+
+// planPlatform is the platform id for a platform named by its id, slug or
+// name; one the catalog doesn't know is kept as given.
+func planPlatform(s string) string {
+	if zernio.LookupSupportedBySqid(s) != nil {
+		return s
+	}
+	for _, p := range zernio.SupportedPlatforms() {
+		if strings.EqualFold(p.ZernioID, s) || compose.NamesPlatform(p.Label, s) {
+			return p.OgenID
+		}
+	}
+	return s
 }
 
 // changedFields names the edit's fields from the columns it wrote.

@@ -28,7 +28,7 @@ func TestEditIdea(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := repo.byID["i1"]
-	if got.Title != "Five pricing myths" || *got.Plan.PlatformID != "linkedin" || got.Plan.TargetDate != nil || out.UndoID == "" {
+	if got.Title != "Five pricing myths" || *got.Plan.PlatformID != "AXqWG7U2qnpt" || got.Plan.TargetDate != nil || out.UndoID == "" {
 		t.Fatalf("edited = %+v, plan %+v; out %+v", got, got.Plan, out)
 	}
 	if !slices.Equal(out.Changed, []string{"title", "plan"}) || len(touched()) != 1 {
@@ -170,4 +170,14 @@ func (r similarIdeaRepo) Query(context.Context, models.IdeaQuery) (*models.IdeaQ
 		out = append(out, *r.byID[id])
 	}
 	return &models.IdeaQueryResult{Ideas: out}, nil
+}
+
+// A plan platform named by its slug or name is stored as the platform id.
+func TestEditedPlan_PlatformBySlugOrName(t *testing.T) {
+	for in, want := range map[string]string{"threads": "pQ4yxT3SuE57", "LinkedIn": "AXqWG7U2qnpt", "X": "81mUCmc2xsKd", "pQ4yxT3SuE57": "pQ4yxT3SuE57", "myspace": "myspace"} {
+		p, err := editedPlan(models.IdeaPlan{}, PlanEdit{PlatformID: new(in)})
+		if err != nil || p.PlatformID == nil || *p.PlatformID != want {
+			t.Errorf("%q: platform = %v, %v; want %q", in, p.PlatformID, err, want)
+		}
+	}
 }
