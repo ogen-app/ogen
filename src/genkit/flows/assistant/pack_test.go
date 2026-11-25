@@ -94,6 +94,33 @@ func TestTurn_SubjectPrefersTheOffers(t *testing.T) {
 	}
 }
 
+// On a list, the one selected item is the subject when nothing is in focus;
+// several selected are not one subject.
+func TestTurn_SubjectFromTheOneSelected(t *testing.T) {
+	view := viewOf(t, `{"version":1,"screen":"campaign.list","scope":{"kind":"campaign","id":"c1"}}`)
+	view.Selection, view.SelectionTotal = []viewresolve.Item{{Kind: viewcontext.KindPost, ID: "p3"}}, 1
+	turn := Turn{View: view}
+	if got := turn.Subject(models.AssistantScopePost); got != "p3" {
+		t.Fatalf("selected subject = %q, want p3", got)
+	}
+	if got := turn.Subject(models.AssistantScopeCampaign); got != "c1" {
+		t.Fatalf("thread subject = %q, want c1", got)
+	}
+	view.Focus = &viewresolve.Item{Kind: viewcontext.KindPost, ID: "p2"}
+	if got := turn.Subject(models.AssistantScopePost); got != "p2" {
+		t.Fatalf("focus over selection = %q, want p2", got)
+	}
+	view.Focus = nil
+	view.Selection, view.SelectionTotal = []viewresolve.Item{{Kind: viewcontext.KindPost, ID: "p3"}, {Kind: viewcontext.KindPost, ID: "p4"}}, 2
+	if got := turn.Subject(models.AssistantScopePost); got != "" {
+		t.Fatalf("two selected = %q, want none", got)
+	}
+	view.Selection, view.SelectionTotal = []viewresolve.Item{{Kind: viewcontext.KindPost, ID: "p3"}}, 40
+	if got := turn.Subject(models.AssistantScopePost); got != "" {
+		t.Fatalf("all matching = %q, want none", got)
+	}
+}
+
 func TestPacks_Defaults(t *testing.T) {
 	ps := packList{ideasPack(), campaignPack()}
 	if got := ps.defaults("campaign.ideas", models.AssistantScopeCampaign); !slices.Equal(got, []string{"ideas", "campaign"}) {
