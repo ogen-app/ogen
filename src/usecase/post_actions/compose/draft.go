@@ -145,7 +145,7 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 	}
 	// One more platform than the campaign has is enough to find one that
 	// isn't its own.
-	platforms := dedupe(in.PlatformIDs, len(campaign.TargetPlatforms))
+	platforms := dedupe(platformIDs(campaign, in.PlatformIDs), len(campaign.TargetPlatforms))
 	if err := checkAsked(campaign, platforms, in.PostType, in.PhaseID); err != nil {
 		return nil, err
 	}

@@ -548,7 +548,7 @@ type CompileIdeasInput struct {
 	IdeaIDs     []string `json:"ideaIds,omitempty"     jsonschema:"description=The ideas, in the order their theses should come; default the selected ideas, else the open one"`
 	Title       string   `json:"title,omitempty"       jsonschema:"description=The posts' title; defaults to the first idea's"`
 	CampaignID  string   `json:"campaignId,omitempty"  jsonschema:"description=The posts' campaign; defaults to the one the ideas share"`
-	PlatformIDs []string `json:"platformIds,omitempty" jsonschema:"description=One post per platform; default the ideas' suggested platform"`
+	PlatformIDs []string `json:"platformIds,omitempty" jsonschema:"description=One post per platform, each by id, slug or name (e.g. threads); default the ideas' suggested platform"`
 	PostType    string   `json:"postType,omitempty"    jsonschema:"description=Needs exactly one platform"`
 	TargetDate  string   `json:"targetDate,omitempty"  jsonschema:"description=YYYY-MM-DD; only when the user names a date or the ideas plan one, else the posts stay undated"`
 }
@@ -714,7 +714,7 @@ func orphaned(err error) bool {
 // DraftIdeasInput writes posts from ideas.
 type DraftIdeasInput struct {
 	IdeaIDs     []string `json:"ideaIds,omitempty"     jsonschema:"description=Default the ideas selected on screen, else the open one"`
-	PlatformIDs []string `json:"platformIds,omitempty" jsonschema:"description=Platforms to write for; default the ideas' suggested platform"`
+	PlatformIDs []string `json:"platformIds,omitempty" jsonschema:"description=Platforms to write for, each by id, slug or name (e.g. threads); default the ideas' suggested platform"`
 	PostType    string   `json:"postType,omitempty"    jsonschema:"description=Needs exactly one platform"`
 	Together    bool     `json:"together,omitempty"    jsonschema:"description=One post per platform from all the ideas, instead of one per idea"`
 	Instruction string   `json:"instruction,omitempty" jsonschema:"description=Steering for the writer, e.g. punchier, for CFOs"`

@@ -336,7 +336,7 @@ func compileTargets(in Input, ideas []models.Idea, campaign *models.Campaign) ([
 	plan := firstPlan(ideas, campaign.ID)
 	// One more platform than the campaign has is enough to find one that
 	// isn't its own.
-	platforms := dedupe(in.PlatformIDs, len(campaign.TargetPlatforms))
+	platforms := dedupe(platformIDs(campaign, in.PlatformIDs), len(campaign.TargetPlatforms))
 	if len(platforms) == 0 {
 		p, t, err := fitTarget(campaign, deref(plan.PlatformID), cmp.Or(in.PostType, deref(plan.PostType)), false, in.PostType != "")
 		return []target{{p, t}}, err
@@ -415,7 +415,7 @@ func fitTarget(c *models.Campaign, platformID, postType string, askedPlatform, a
 		i := slices.IndexFunc(c.TargetPlatforms, func(p models.CampaignPlatform) bool { return p.ID == platformID })
 		switch {
 		case i < 0 && askedPlatform:
-			return "", "", ErrNotTarget
+			return "", "", notTarget(c, platformID)
 		case i < 0:
 			platformID = ""
 		case postType != "" && len(c.TargetPlatforms[i].PostTypes) > 0 && !slices.Contains(c.TargetPlatforms[i].PostTypes, postType):
@@ -432,6 +432,50 @@ func fitTarget(c *models.Campaign, platformID, postType string, askedPlatform, a
 		postType = ""
 	}
 	return platformID, postType, nil
+}
+
+// platformIDs are the platforms asked for as the campaign's platform ids. A
+// platform may be named by its id, its slug or its name, in any case; one
+// that matches none of the campaign's is kept as given, for fitTarget to
+// refuse.
+func platformIDs(c *models.Campaign, asked []string) []string {
+	out := make([]string, len(asked))
+	for i, a := range asked {
+		a = strings.TrimSpace(a)
+		out[i] = a
+		for _, p := range c.Platforms {
+			if p.ID == a || strings.EqualFold(p.ZernioID, a) || NamesPlatform(p.Name, a) {
+				out[i] = p.ID
+				break
+			}
+		}
+	}
+	return out
+}
+
+// NamesPlatform reports whether s names the platform labelled label, in any
+// case: the whole label, or its name before a parenthesis, as "X" names
+// "X (Twitter)".
+func NamesPlatform(label, s string) bool {
+	short, _, _ := strings.Cut(label, " (")
+	return strings.EqualFold(label, s) || strings.EqualFold(short, s)
+}
+
+// notTarget refuses platformID, naming the campaign's platforms so the
+// caller can pick one of them.
+func notTarget(c *models.Campaign, platformID string) error {
+	names := make([]string, 0, len(c.TargetPlatforms))
+	for _, tp := range c.TargetPlatforms {
+		name := tp.ID
+		if i := slices.IndexFunc(c.Platforms, func(p models.Platform) bool { return p.ID == tp.ID }); i >= 0 {
+			name = c.Platforms[i].Name + " (" + cmp.Or(c.Platforms[i].ZernioID, tp.ID) + ")"
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("%w: %q; the campaign has no platforms yet", ErrNotTarget, platformID)
+	}
+	return fmt.Errorf("%w: %q; it posts to %s", ErrNotTarget, platformID, strings.Join(names, ", "))
 }
 
 // Thesis is one idea as a compiled post's thesis: its title, then the lines

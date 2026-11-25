@@ -262,3 +262,13 @@ func TestPlanDraft_EachIdeaItsOwnDate(t *testing.T) {
 		}
 	}
 }
+
+// A draft asked for a platform by name writes for the campaign's platform id.
+func TestPlanDraft_PlatformByName(t *testing.T) {
+	s, _ := draftService(idea("a", "c1", models.IdeaPlan{}))
+	s.campaigns = oneCampaign{byID: map[string]*models.Campaign{"c1": sqidCampaign()}}
+	plan, err := s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"a"}, PlatformIDs: []string{"Threads"}}, 5)
+	if err != nil || len(plan.Jobs) != 1 || plan.Jobs[0].Request.PlatformID != "Pd8w" {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+}

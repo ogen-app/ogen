@@ -299,3 +299,26 @@ func TestBuild_SeriesIdea(t *testing.T) {
 		}
 	}
 }
+
+// sqidCampaign targets its platforms by id, as a stored campaign does, with
+// the platform rows a read hydrates.
+func sqidCampaign() *models.Campaign {
+	c := spring()
+	c.TargetPlatforms = models.CampaignPlatforms{{ID: "Xk2q", PostTypes: []string{"carousel"}}, {ID: "Pd8w"}, {ID: "Tw9z"}}
+	c.Platforms = []models.Platform{{ID: "Xk2q", Name: "LinkedIn", ZernioID: "linkedin"}, {ID: "Pd8w", Name: "Threads", ZernioID: "threads"}, {ID: "Tw9z", Name: "X (Twitter)", ZernioID: "twitter"}}
+	return c
+}
+
+// A platform asked for by its id, slug or name, in any case, is the
+// campaign's platform id; a stranger is refused naming the campaign's.
+func TestCompileTargets_PlatformBySlugOrName(t *testing.T) {
+	got, err := compileTargets(Input{PlatformIDs: []string{"threads", " LinkedIn ", "Pd8w", "THREADS", "x"}}, nil, sqidCampaign())
+	if err != nil || !slices.Equal(got, []target{{"Pd8w", ""}, {"Xk2q", ""}, {"Tw9z", ""}}) {
+		t.Fatalf("targets = %+v, %v", got, err)
+	}
+	_, err = compileTargets(Input{PlatformIDs: []string{"myspace"}}, nil, sqidCampaign())
+	if !errors.Is(err, ErrNotTarget) || !IsValidation(err) ||
+		!strings.Contains(err.Error(), `"myspace"`) || !strings.Contains(err.Error(), "LinkedIn (linkedin), Threads (threads), X (Twitter) (twitter)") {
+		t.Fatalf("err = %v; want ErrNotTarget naming the campaign's platforms", err)
+	}
+}
