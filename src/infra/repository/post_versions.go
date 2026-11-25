@@ -123,10 +123,9 @@ func (r *postVersionRepository) GetByPostIDAndVersionNumber(ctx context.Context,
 }
 
 func (r *postVersionRepository) CountByPostID(ctx context.Context, postID string) (int, error) {
-	return r.db.NewSelect().
+	return CountRows(ctx, r.db.NewSelect().
 		Model((*models.PostVersion)(nil)).
-		Where("post_id = ?", postID).
-		Count(ctx)
+		Where("post_id = ?", postID))
 }
 
 func (r *postVersionRepository) EditedPostIDs(ctx context.Context, postIDs []string) ([]string, error) {

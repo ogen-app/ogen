@@ -102,7 +102,7 @@ func (r *userRepository) CountInTenant(ctx context.Context) (int64, error) {
 	if scoped {
 		q = q.Where("u.tenant_id = ?", tid)
 	}
-	n, err := q.Count(ctx)
+	n, err := CountRows(ctx, q)
 	return int64(n), err
 }
 

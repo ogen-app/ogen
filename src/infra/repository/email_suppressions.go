@@ -56,7 +56,7 @@ func (r *emailSuppressionRepository) IsSuppressed(ctx context.Context, email str
 	if kind != models.EmailKindMarketing {
 		q = q.Where("scope = ?", models.EmailSuppressionScopeAll)
 	}
-	return q.Exists(ctx)
+	return RowsExist(ctx, q)
 }
 
 func (r *emailSuppressionRepository) RemoveMarketing(ctx context.Context, email string) error {

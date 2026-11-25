@@ -189,8 +189,11 @@ func (r *tenantRepository) ListWithClassification(ctx context.Context, f TenantL
 	// across clusters regardless of their default collation: a locale collation
 	// sorts mixed-case Sqids case-insensitively (stable per-cluster but not
 	// portable across dev/CI/prod, and diverging from a bytewise sort.Strings).
-	total, err := q.OrderExpr(`tn.created_at ASC, tn.id COLLATE "C" ASC`).Limit(limit).Offset(offset).ScanAndCount(ctx)
+	total, err := CountRows(ctx, q.Clone())
 	if err != nil {
+		return nil, 0, err
+	}
+	if err := q.OrderExpr(`tn.created_at ASC, tn.id COLLATE "C" ASC`).Limit(limit).Offset(offset).Scan(ctx); err != nil {
 		return nil, 0, err
 	}
 	if err := r.hydrateClassification(ctx, tenants); err != nil {

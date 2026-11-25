@@ -53,10 +53,9 @@ func (r *loginAlertTokenRepository) Create(ctx context.Context, db bun.IDB, t *m
 }
 
 func (r *loginAlertTokenRepository) CountSince(ctx context.Context, db bun.IDB, accountID string, since time.Time) (int, error) {
-	return r.idb(db).NewSelect().Model((*models.LoginAlertToken)(nil)).
+	return CountRows(ctx, r.idb(db).NewSelect().Model((*models.LoginAlertToken)(nil)).
 		Where("account_id = ?", accountID).
-		Where("created_at >= ?", since).
-		Count(ctx)
+		Where("created_at >= ?", since))
 }
 
 func (r *loginAlertTokenRepository) GetByHash(ctx context.Context, tokenHash string) (*models.LoginAlertToken, error) {

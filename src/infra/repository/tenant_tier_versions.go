@@ -359,8 +359,8 @@ func retireSupersededTx(ctx context.Context, tx bun.Tx, draft lockedVersion, opt
 		return ErrSupersedeTargetNotActive
 	}
 	if !opts.Force && !opts.ReassignToPublished {
-		n, err := tx.NewSelect().Model((*models.TenantTierAssignment)(nil)).
-			Where("tier_version_id = ?", old.ID).Where("upper_inf(valid)").Count(ctx)
+		n, err := CountRows(ctx, tx.NewSelect().Model((*models.TenantTierAssignment)(nil)).
+			Where("tier_version_id = ?", old.ID).Where("upper_inf(valid)"))
 		if err != nil {
 			return err
 		}
@@ -436,8 +436,8 @@ func (r *tenantTierVersionRepository) Retire(ctx context.Context, id string, opt
 			}
 			reassigned = n
 		case !opts.Force:
-			n, err := tx.NewSelect().Model((*models.TenantTierAssignment)(nil)).
-				Where("tier_version_id = ?", id).Where("upper_inf(valid)").Count(ctx)
+			n, err := CountRows(ctx, tx.NewSelect().Model((*models.TenantTierAssignment)(nil)).
+				Where("tier_version_id = ?", id).Where("upper_inf(valid)"))
 			if err != nil {
 				return err
 			}
@@ -523,10 +523,9 @@ func migrateOpenAssignmentsTx(ctx context.Context, tx bun.Tx, fromID, targetID s
 }
 
 func (r *tenantTierVersionRepository) OpenAssignmentCount(ctx context.Context, versionID string) (int, error) {
-	return r.db.NewSelect().Model((*models.TenantTierAssignment)(nil)).
+	return CountRows(ctx, r.db.NewSelect().Model((*models.TenantTierAssignment)(nil)).
 		Where("tta.tier_version_id = ?", versionID).
-		Where("upper_inf(tta.valid)").
-		Count(ctx)
+		Where("upper_inf(tta.valid)"))
 }
 
 func (r *tenantTierVersionRepository) OpenAssignmentCounts(ctx context.Context, versionIDs []string) (map[string]int, error) {

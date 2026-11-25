@@ -80,14 +80,9 @@ func (r *autoPublishAllowlistRepository) Set(ctx context.Context, platformIDs []
 }
 
 func (r *autoPublishAllowlistRepository) Contains(ctx context.Context, platformID string) (bool, error) {
-	count, err := r.db.NewSelect().
+	return RowsExist(ctx, r.db.NewSelect().
 		Model((*models.AutoPublishAllowlistEntry)(nil)).
-		Where("platform_id = ?", platformID).
-		Count(ctx)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
+		Where("platform_id = ?", platformID))
 }
 
 func (r *autoPublishAllowlistRepository) ReplaceIf(ctx context.Context, db bun.IDB, from, to []string) (bool, error) {

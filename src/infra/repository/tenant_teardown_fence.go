@@ -108,7 +108,7 @@ func (f *TenantTeardownFence) RenewTeardownLease(ctx context.Context, tenantID s
 	if n, _ := res.RowsAffected(); n > 0 {
 		return true, nil
 	}
-	exists, err := f.db.NewSelect().Model((*models.Tenant)(nil)).Where("id = ?", tenantID).Exists(ctx)
+	exists, err := RowsExist(ctx, f.db.NewSelect().Model((*models.Tenant)(nil)).Where("id = ?", tenantID))
 	if err != nil {
 		return false, err
 	}

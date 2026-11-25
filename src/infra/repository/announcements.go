@@ -167,11 +167,10 @@ func (r *announcementRepository) RecordDismiss(ctx context.Context, announcement
 // Deliberately no active-window check: the contract permits interactions on any
 // published announcement (e.g. a stale client clicking just after ends_at).
 func (r *announcementRepository) recordInteraction(ctx context.Context, announcementID string, aud AnnouncementAudience, column string) (bool, error) {
-	eligible, err := r.db.NewSelect().Model((*models.Announcement)(nil)).
+	eligible, err := RowsExist(ctx, r.db.NewSelect().Model((*models.Announcement)(nil)).
 		Where("an.id = ?", announcementID).
 		Where("an.status = ?", models.AnnouncementStatusPublished).
-		WhereGroup(" AND ", targetingWhere(aud)).
-		Exists(ctx)
+		WhereGroup(" AND ", targetingWhere(aud)))
 	if err != nil {
 		return false, err
 	}
@@ -326,7 +325,7 @@ func (r *announcementRepository) Delete(ctx context.Context, id string) (found, 
 		return true, true, nil
 	}
 	// Nothing deleted: the id is either unknown or exists but isn't a draft.
-	exists, err := r.db.NewSelect().Model((*models.Announcement)(nil)).Where("an.id = ?", id).Exists(ctx)
+	exists, err := RowsExist(ctx, r.db.NewSelect().Model((*models.Announcement)(nil)).Where("an.id = ?", id))
 	if err != nil {
 		return false, false, err
 	}
@@ -373,7 +372,7 @@ func (r *announcementRepository) countInteractions(ctx context.Context, announce
 		err := q.ColumnExpr("COUNT(DISTINCT ai.tenant_id)").Scan(ctx, &n)
 		return n, err
 	}
-	return q.Count(ctx)
+	return CountRows(ctx, q)
 }
 
 // eligibleCounts computes how many active tenants (and their users) the
@@ -389,7 +388,7 @@ func (r *announcementRepository) eligibleCounts(ctx context.Context, an *models.
 	if frag != "" {
 		tq = tq.Where(frag, args...)
 	}
-	if tenants, err = tq.Count(ctx); err != nil {
+	if tenants, err = CountRows(ctx, tq); err != nil {
 		return 0, 0, err
 	}
 	uq := r.db.NewSelect().TableExpr("users AS u").
@@ -398,7 +397,7 @@ func (r *announcementRepository) eligibleCounts(ctx context.Context, an *models.
 	if frag != "" {
 		uq = uq.Where(frag, args...)
 	}
-	if users, err = uq.Count(ctx); err != nil {
+	if users, err = CountRows(ctx, uq); err != nil {
 		return 0, 0, err
 	}
 	return tenants, users, nil
