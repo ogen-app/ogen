@@ -437,11 +437,13 @@ func fitTarget(c *models.Campaign, platformID, postType string, askedPlatform, a
 // platformIDs are the platforms asked for as the campaign's platform ids. A
 // platform may be named by its id, its slug or its name, in any case; one
 // that matches none of the campaign's is kept as given, for fitTarget to
-// refuse.
+// refuse. A blank one stays blank, for dedupe to drop.
 func platformIDs(c *models.Campaign, asked []string) []string {
 	out := make([]string, len(asked))
 	for i, a := range asked {
-		a = strings.TrimSpace(a)
+		if a = strings.TrimSpace(a); a == "" {
+			continue
+		}
 		out[i] = a
 		for _, p := range c.Platforms {
 			if p.ID == a || strings.EqualFold(p.ZernioID, a) || NamesPlatform(p.Name, a) {
