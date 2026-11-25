@@ -316,6 +316,13 @@ func TestCompileTargets_PlatformBySlugOrName(t *testing.T) {
 	if err != nil || !slices.Equal(got, []target{{"Pd8w", ""}, {"Xk2q", ""}, {"Tw9z", ""}}) {
 		t.Fatalf("targets = %+v, %v", got, err)
 	}
+	// A blank platform is dropped, not matched to one without a slug.
+	noSlug := sqidCampaign()
+	noSlug.Platforms[1].ZernioID = ""
+	got, err = compileTargets(Input{PlatformIDs: []string{"Xk2q", " "}}, nil, noSlug)
+	if err != nil || !slices.Equal(got, []target{{"Xk2q", ""}}) {
+		t.Fatalf("blank: targets = %+v, %v", got, err)
+	}
 	_, err = compileTargets(Input{PlatformIDs: []string{"myspace"}}, nil, sqidCampaign())
 	if !errors.Is(err, ErrNotTarget) || !IsValidation(err) ||
 		!strings.Contains(err.Error(), `"myspace"`) || !strings.Contains(err.Error(), "LinkedIn (linkedin), Threads (threads), X (Twitter) (twitter)") {
