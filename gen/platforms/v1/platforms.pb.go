@@ -41,8 +41,12 @@ type Platform struct {
 	Usage              *PlatformUsage         `protobuf:"bytes,15,opt,name=usage,proto3" json:"usage,omitempty"` // read-only, populated on reads
 	CreatedAt          *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt          *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Recommended artwork size per media-bearing post type. Always set on reads.
+	// On UpdatePlatform an unset field keeps the stored canvases, so a client
+	// built before this field can't wipe them; a set field replaces them all.
+	PostTypeCanvases *PostTypeCanvases `protobuf:"bytes,18,opt,name=post_type_canvases,json=postTypeCanvases,proto3" json:"post_type_canvases,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Platform) Reset() {
@@ -194,6 +198,112 @@ func (x *Platform) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Platform) GetPostTypeCanvases() *PostTypeCanvases {
+	if x != nil {
+		return x.PostTypeCanvases
+	}
+	return nil
+}
+
+// PostTypeCanvases maps a post-type slug to its recommended canvas. A slug
+// with no entry has no recommendation.
+type PostTypeCanvases struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BySlug        map[string]*Canvas     `protobuf:"bytes,1,rep,name=by_slug,json=bySlug,proto3" json:"by_slug,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PostTypeCanvases) Reset() {
+	*x = PostTypeCanvases{}
+	mi := &file_platforms_v1_platforms_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PostTypeCanvases) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PostTypeCanvases) ProtoMessage() {}
+
+func (x *PostTypeCanvases) ProtoReflect() protoreflect.Message {
+	mi := &file_platforms_v1_platforms_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PostTypeCanvases.ProtoReflect.Descriptor instead.
+func (*PostTypeCanvases) Descriptor() ([]byte, []int) {
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PostTypeCanvases) GetBySlug() map[string]*Canvas {
+	if x != nil {
+		return x.BySlug
+	}
+	return nil
+}
+
+// Canvas is a pixel size; width and height are each 1..8192.
+type Canvas struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Width         int32                  `protobuf:"varint,1,opt,name=width,proto3" json:"width,omitempty"`
+	Height        int32                  `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Canvas) Reset() {
+	*x = Canvas{}
+	mi := &file_platforms_v1_platforms_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Canvas) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Canvas) ProtoMessage() {}
+
+func (x *Canvas) ProtoReflect() protoreflect.Message {
+	mi := &file_platforms_v1_platforms_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Canvas.ProtoReflect.Descriptor instead.
+func (*Canvas) Descriptor() ([]byte, []int) {
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Canvas) GetWidth() int32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *Canvas) GetHeight() int32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
 // PlatformUsage is read-only and drives the disable/delete guards.
 type PlatformUsage struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -205,7 +315,7 @@ type PlatformUsage struct {
 
 func (x *PlatformUsage) Reset() {
 	*x = PlatformUsage{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[1]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -217,7 +327,7 @@ func (x *PlatformUsage) String() string {
 func (*PlatformUsage) ProtoMessage() {}
 
 func (x *PlatformUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[1]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -230,7 +340,7 @@ func (x *PlatformUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlatformUsage.ProtoReflect.Descriptor instead.
 func (*PlatformUsage) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{1}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PlatformUsage) GetConnectedAccounts() int32 {
@@ -260,7 +370,7 @@ type ImageConstraints struct {
 
 func (x *ImageConstraints) Reset() {
 	*x = ImageConstraints{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[2]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -272,7 +382,7 @@ func (x *ImageConstraints) String() string {
 func (*ImageConstraints) ProtoMessage() {}
 
 func (x *ImageConstraints) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[2]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -285,7 +395,7 @@ func (x *ImageConstraints) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImageConstraints.ProtoReflect.Descriptor instead.
 func (*ImageConstraints) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{2}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ImageConstraints) GetMaxFileSizeBytes() int64 {
@@ -340,7 +450,7 @@ type VideoConstraints struct {
 
 func (x *VideoConstraints) Reset() {
 	*x = VideoConstraints{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[3]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -352,7 +462,7 @@ func (x *VideoConstraints) String() string {
 func (*VideoConstraints) ProtoMessage() {}
 
 func (x *VideoConstraints) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[3]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -365,7 +475,7 @@ func (x *VideoConstraints) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VideoConstraints.ProtoReflect.Descriptor instead.
 func (*VideoConstraints) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{3}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *VideoConstraints) GetMaxFileSizeBytes() int64 {
@@ -443,7 +553,7 @@ type PdfConstraints struct {
 
 func (x *PdfConstraints) Reset() {
 	*x = PdfConstraints{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[4]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -455,7 +565,7 @@ func (x *PdfConstraints) String() string {
 func (*PdfConstraints) ProtoMessage() {}
 
 func (x *PdfConstraints) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[4]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -468,7 +578,7 @@ func (x *PdfConstraints) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PdfConstraints.ProtoReflect.Descriptor instead.
 func (*PdfConstraints) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{4}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *PdfConstraints) GetMaxFileSizeBytes() int64 {
@@ -510,7 +620,7 @@ type TextConstraints struct {
 
 func (x *TextConstraints) Reset() {
 	*x = TextConstraints{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[5]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -522,7 +632,7 @@ func (x *TextConstraints) String() string {
 func (*TextConstraints) ProtoMessage() {}
 
 func (x *TextConstraints) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[5]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -535,7 +645,7 @@ func (x *TextConstraints) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TextConstraints.ProtoReflect.Descriptor instead.
 func (*TextConstraints) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{5}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *TextConstraints) GetMaxContentChars() int32 {
@@ -572,7 +682,7 @@ type GlobalLimits struct {
 
 func (x *GlobalLimits) Reset() {
 	*x = GlobalLimits{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[6]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -584,7 +694,7 @@ func (x *GlobalLimits) String() string {
 func (*GlobalLimits) ProtoMessage() {}
 
 func (x *GlobalLimits) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[6]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -597,7 +707,7 @@ func (x *GlobalLimits) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GlobalLimits.ProtoReflect.Descriptor instead.
 func (*GlobalLimits) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{6}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GlobalLimits) GetMaxImageUploadBytes() int64 {
@@ -644,7 +754,7 @@ type ListPlatformsRequest struct {
 
 func (x *ListPlatformsRequest) Reset() {
 	*x = ListPlatformsRequest{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[7]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -656,7 +766,7 @@ func (x *ListPlatformsRequest) String() string {
 func (*ListPlatformsRequest) ProtoMessage() {}
 
 func (x *ListPlatformsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[7]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -669,7 +779,7 @@ func (x *ListPlatformsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPlatformsRequest.ProtoReflect.Descriptor instead.
 func (*ListPlatformsRequest) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{7}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListPlatformsRequest) GetIncludeDisabled() bool {
@@ -688,7 +798,7 @@ type ListPlatformsResponse struct {
 
 func (x *ListPlatformsResponse) Reset() {
 	*x = ListPlatformsResponse{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[8]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -700,7 +810,7 @@ func (x *ListPlatformsResponse) String() string {
 func (*ListPlatformsResponse) ProtoMessage() {}
 
 func (x *ListPlatformsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[8]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -713,7 +823,7 @@ func (x *ListPlatformsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPlatformsResponse.ProtoReflect.Descriptor instead.
 func (*ListPlatformsResponse) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{8}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListPlatformsResponse) GetPlatforms() []*Platform {
@@ -732,7 +842,7 @@ type GetPlatformRequest struct {
 
 func (x *GetPlatformRequest) Reset() {
 	*x = GetPlatformRequest{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[9]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -744,7 +854,7 @@ func (x *GetPlatformRequest) String() string {
 func (*GetPlatformRequest) ProtoMessage() {}
 
 func (x *GetPlatformRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[9]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -757,7 +867,7 @@ func (x *GetPlatformRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlatformRequest.ProtoReflect.Descriptor instead.
 func (*GetPlatformRequest) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{9}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetPlatformRequest) GetId() string {
@@ -776,7 +886,7 @@ type GetPlatformResponse struct {
 
 func (x *GetPlatformResponse) Reset() {
 	*x = GetPlatformResponse{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[10]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -788,7 +898,7 @@ func (x *GetPlatformResponse) String() string {
 func (*GetPlatformResponse) ProtoMessage() {}
 
 func (x *GetPlatformResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[10]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -801,7 +911,7 @@ func (x *GetPlatformResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlatformResponse.ProtoReflect.Descriptor instead.
 func (*GetPlatformResponse) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{10}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetPlatformResponse) GetPlatform() *Platform {
@@ -820,7 +930,7 @@ type CreatePlatformRequest struct {
 
 func (x *CreatePlatformRequest) Reset() {
 	*x = CreatePlatformRequest{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[11]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -832,7 +942,7 @@ func (x *CreatePlatformRequest) String() string {
 func (*CreatePlatformRequest) ProtoMessage() {}
 
 func (x *CreatePlatformRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[11]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -845,7 +955,7 @@ func (x *CreatePlatformRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePlatformRequest.ProtoReflect.Descriptor instead.
 func (*CreatePlatformRequest) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{11}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CreatePlatformRequest) GetPlatform() *Platform {
@@ -864,7 +974,7 @@ type CreatePlatformResponse struct {
 
 func (x *CreatePlatformResponse) Reset() {
 	*x = CreatePlatformResponse{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[12]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -876,7 +986,7 @@ func (x *CreatePlatformResponse) String() string {
 func (*CreatePlatformResponse) ProtoMessage() {}
 
 func (x *CreatePlatformResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[12]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -889,7 +999,7 @@ func (x *CreatePlatformResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePlatformResponse.ProtoReflect.Descriptor instead.
 func (*CreatePlatformResponse) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{12}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CreatePlatformResponse) GetPlatform() *Platform {
@@ -908,7 +1018,7 @@ type UpdatePlatformRequest struct {
 
 func (x *UpdatePlatformRequest) Reset() {
 	*x = UpdatePlatformRequest{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[13]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -920,7 +1030,7 @@ func (x *UpdatePlatformRequest) String() string {
 func (*UpdatePlatformRequest) ProtoMessage() {}
 
 func (x *UpdatePlatformRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[13]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -933,7 +1043,7 @@ func (x *UpdatePlatformRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePlatformRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePlatformRequest) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{13}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *UpdatePlatformRequest) GetPlatform() *Platform {
@@ -952,7 +1062,7 @@ type UpdatePlatformResponse struct {
 
 func (x *UpdatePlatformResponse) Reset() {
 	*x = UpdatePlatformResponse{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[14]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -964,7 +1074,7 @@ func (x *UpdatePlatformResponse) String() string {
 func (*UpdatePlatformResponse) ProtoMessage() {}
 
 func (x *UpdatePlatformResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[14]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -977,7 +1087,7 @@ func (x *UpdatePlatformResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePlatformResponse.ProtoReflect.Descriptor instead.
 func (*UpdatePlatformResponse) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{14}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *UpdatePlatformResponse) GetPlatform() *Platform {
@@ -997,7 +1107,7 @@ type SetPlatformEnabledRequest struct {
 
 func (x *SetPlatformEnabledRequest) Reset() {
 	*x = SetPlatformEnabledRequest{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[15]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1009,7 +1119,7 @@ func (x *SetPlatformEnabledRequest) String() string {
 func (*SetPlatformEnabledRequest) ProtoMessage() {}
 
 func (x *SetPlatformEnabledRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[15]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1022,7 +1132,7 @@ func (x *SetPlatformEnabledRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPlatformEnabledRequest.ProtoReflect.Descriptor instead.
 func (*SetPlatformEnabledRequest) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{15}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SetPlatformEnabledRequest) GetId() string {
@@ -1048,7 +1158,7 @@ type SetPlatformEnabledResponse struct {
 
 func (x *SetPlatformEnabledResponse) Reset() {
 	*x = SetPlatformEnabledResponse{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[16]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1060,7 +1170,7 @@ func (x *SetPlatformEnabledResponse) String() string {
 func (*SetPlatformEnabledResponse) ProtoMessage() {}
 
 func (x *SetPlatformEnabledResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[16]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1073,7 +1183,7 @@ func (x *SetPlatformEnabledResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPlatformEnabledResponse.ProtoReflect.Descriptor instead.
 func (*SetPlatformEnabledResponse) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{16}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SetPlatformEnabledResponse) GetPlatform() *Platform {
@@ -1093,7 +1203,7 @@ type DeletePlatformRequest struct {
 
 func (x *DeletePlatformRequest) Reset() {
 	*x = DeletePlatformRequest{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[17]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1105,7 +1215,7 @@ func (x *DeletePlatformRequest) String() string {
 func (*DeletePlatformRequest) ProtoMessage() {}
 
 func (x *DeletePlatformRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[17]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1118,7 +1228,7 @@ func (x *DeletePlatformRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePlatformRequest.ProtoReflect.Descriptor instead.
 func (*DeletePlatformRequest) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{17}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DeletePlatformRequest) GetId() string {
@@ -1143,7 +1253,7 @@ type DeletePlatformResponse struct {
 
 func (x *DeletePlatformResponse) Reset() {
 	*x = DeletePlatformResponse{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[18]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1155,7 +1265,7 @@ func (x *DeletePlatformResponse) String() string {
 func (*DeletePlatformResponse) ProtoMessage() {}
 
 func (x *DeletePlatformResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[18]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1168,7 +1278,7 @@ func (x *DeletePlatformResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePlatformResponse.ProtoReflect.Descriptor instead.
 func (*DeletePlatformResponse) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{18}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{20}
 }
 
 type GetGlobalLimitsRequest struct {
@@ -1179,7 +1289,7 @@ type GetGlobalLimitsRequest struct {
 
 func (x *GetGlobalLimitsRequest) Reset() {
 	*x = GetGlobalLimitsRequest{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[19]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1191,7 +1301,7 @@ func (x *GetGlobalLimitsRequest) String() string {
 func (*GetGlobalLimitsRequest) ProtoMessage() {}
 
 func (x *GetGlobalLimitsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[19]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1204,7 +1314,7 @@ func (x *GetGlobalLimitsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGlobalLimitsRequest.ProtoReflect.Descriptor instead.
 func (*GetGlobalLimitsRequest) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{19}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{21}
 }
 
 type GetGlobalLimitsResponse struct {
@@ -1216,7 +1326,7 @@ type GetGlobalLimitsResponse struct {
 
 func (x *GetGlobalLimitsResponse) Reset() {
 	*x = GetGlobalLimitsResponse{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[20]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1228,7 +1338,7 @@ func (x *GetGlobalLimitsResponse) String() string {
 func (*GetGlobalLimitsResponse) ProtoMessage() {}
 
 func (x *GetGlobalLimitsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[20]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1241,7 +1351,7 @@ func (x *GetGlobalLimitsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGlobalLimitsResponse.ProtoReflect.Descriptor instead.
 func (*GetGlobalLimitsResponse) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{20}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetGlobalLimitsResponse) GetLimits() *GlobalLimits {
@@ -1260,7 +1370,7 @@ type UpdateGlobalLimitsRequest struct {
 
 func (x *UpdateGlobalLimitsRequest) Reset() {
 	*x = UpdateGlobalLimitsRequest{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[21]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1272,7 +1382,7 @@ func (x *UpdateGlobalLimitsRequest) String() string {
 func (*UpdateGlobalLimitsRequest) ProtoMessage() {}
 
 func (x *UpdateGlobalLimitsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[21]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1285,7 +1395,7 @@ func (x *UpdateGlobalLimitsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateGlobalLimitsRequest.ProtoReflect.Descriptor instead.
 func (*UpdateGlobalLimitsRequest) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{21}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *UpdateGlobalLimitsRequest) GetLimits() *GlobalLimits {
@@ -1304,7 +1414,7 @@ type UpdateGlobalLimitsResponse struct {
 
 func (x *UpdateGlobalLimitsResponse) Reset() {
 	*x = UpdateGlobalLimitsResponse{}
-	mi := &file_platforms_v1_platforms_proto_msgTypes[22]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1316,7 +1426,7 @@ func (x *UpdateGlobalLimitsResponse) String() string {
 func (*UpdateGlobalLimitsResponse) ProtoMessage() {}
 
 func (x *UpdateGlobalLimitsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_platforms_v1_platforms_proto_msgTypes[22]
+	mi := &file_platforms_v1_platforms_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1329,7 +1439,7 @@ func (x *UpdateGlobalLimitsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateGlobalLimitsResponse.ProtoReflect.Descriptor instead.
 func (*UpdateGlobalLimitsResponse) Descriptor() ([]byte, []int) {
-	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{22}
+	return file_platforms_v1_platforms_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *UpdateGlobalLimitsResponse) GetLimits() *GlobalLimits {
@@ -1343,7 +1453,7 @@ var File_platforms_v1_platforms_proto protoreflect.FileDescriptor
 
 const file_platforms_v1_platforms_proto_rawDesc = "" +
 	"\n" +
-	"\x1cplatforms/v1/platforms.proto\x12\fplatforms.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf7\x06\n" +
+	"\x1cplatforms/v1/platforms.proto\x12\fplatforms.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc5\a\n" +
 	"\bPlatform\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
@@ -1366,10 +1476,19 @@ const file_platforms_v1_platforms_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x1a<\n" +
+	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12L\n" +
+	"\x12post_type_canvases\x18\x12 \x01(\v2\x1e.platforms.v1.PostTypeCanvasesR\x10postTypeCanvases\x1a<\n" +
 	"\x0ePostTypesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa8\x01\n" +
+	"\x10PostTypeCanvases\x12C\n" +
+	"\aby_slug\x18\x01 \x03(\v2*.platforms.v1.PostTypeCanvases.BySlugEntryR\x06bySlug\x1aO\n" +
+	"\vBySlugEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12*\n" +
+	"\x05value\x18\x02 \x01(\v2\x14.platforms.v1.CanvasR\x05value:\x028\x01\"6\n" +
+	"\x06Canvas\x12\x14\n" +
+	"\x05width\x18\x01 \x01(\x05R\x05width\x12\x16\n" +
+	"\x06height\x18\x02 \x01(\x05R\x06height\"g\n" +
 	"\rPlatformUsage\x12-\n" +
 	"\x12connected_accounts\x18\x01 \x01(\x05R\x11connectedAccounts\x12'\n" +
 	"\x0fscheduled_posts\x18\x02 \x01(\x05R\x0escheduledPosts\"\x86\x02\n" +
@@ -1463,76 +1582,82 @@ func file_platforms_v1_platforms_proto_rawDescGZIP() []byte {
 	return file_platforms_v1_platforms_proto_rawDescData
 }
 
-var file_platforms_v1_platforms_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_platforms_v1_platforms_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_platforms_v1_platforms_proto_goTypes = []any{
 	(*Platform)(nil),                   // 0: platforms.v1.Platform
-	(*PlatformUsage)(nil),              // 1: platforms.v1.PlatformUsage
-	(*ImageConstraints)(nil),           // 2: platforms.v1.ImageConstraints
-	(*VideoConstraints)(nil),           // 3: platforms.v1.VideoConstraints
-	(*PdfConstraints)(nil),             // 4: platforms.v1.PdfConstraints
-	(*TextConstraints)(nil),            // 5: platforms.v1.TextConstraints
-	(*GlobalLimits)(nil),               // 6: platforms.v1.GlobalLimits
-	(*ListPlatformsRequest)(nil),       // 7: platforms.v1.ListPlatformsRequest
-	(*ListPlatformsResponse)(nil),      // 8: platforms.v1.ListPlatformsResponse
-	(*GetPlatformRequest)(nil),         // 9: platforms.v1.GetPlatformRequest
-	(*GetPlatformResponse)(nil),        // 10: platforms.v1.GetPlatformResponse
-	(*CreatePlatformRequest)(nil),      // 11: platforms.v1.CreatePlatformRequest
-	(*CreatePlatformResponse)(nil),     // 12: platforms.v1.CreatePlatformResponse
-	(*UpdatePlatformRequest)(nil),      // 13: platforms.v1.UpdatePlatformRequest
-	(*UpdatePlatformResponse)(nil),     // 14: platforms.v1.UpdatePlatformResponse
-	(*SetPlatformEnabledRequest)(nil),  // 15: platforms.v1.SetPlatformEnabledRequest
-	(*SetPlatformEnabledResponse)(nil), // 16: platforms.v1.SetPlatformEnabledResponse
-	(*DeletePlatformRequest)(nil),      // 17: platforms.v1.DeletePlatformRequest
-	(*DeletePlatformResponse)(nil),     // 18: platforms.v1.DeletePlatformResponse
-	(*GetGlobalLimitsRequest)(nil),     // 19: platforms.v1.GetGlobalLimitsRequest
-	(*GetGlobalLimitsResponse)(nil),    // 20: platforms.v1.GetGlobalLimitsResponse
-	(*UpdateGlobalLimitsRequest)(nil),  // 21: platforms.v1.UpdateGlobalLimitsRequest
-	(*UpdateGlobalLimitsResponse)(nil), // 22: platforms.v1.UpdateGlobalLimitsResponse
-	nil,                                // 23: platforms.v1.Platform.PostTypesEntry
-	nil,                                // 24: platforms.v1.TextConstraints.PerPostTypeEntry
-	(*timestamppb.Timestamp)(nil),      // 25: google.protobuf.Timestamp
+	(*PostTypeCanvases)(nil),           // 1: platforms.v1.PostTypeCanvases
+	(*Canvas)(nil),                     // 2: platforms.v1.Canvas
+	(*PlatformUsage)(nil),              // 3: platforms.v1.PlatformUsage
+	(*ImageConstraints)(nil),           // 4: platforms.v1.ImageConstraints
+	(*VideoConstraints)(nil),           // 5: platforms.v1.VideoConstraints
+	(*PdfConstraints)(nil),             // 6: platforms.v1.PdfConstraints
+	(*TextConstraints)(nil),            // 7: platforms.v1.TextConstraints
+	(*GlobalLimits)(nil),               // 8: platforms.v1.GlobalLimits
+	(*ListPlatformsRequest)(nil),       // 9: platforms.v1.ListPlatformsRequest
+	(*ListPlatformsResponse)(nil),      // 10: platforms.v1.ListPlatformsResponse
+	(*GetPlatformRequest)(nil),         // 11: platforms.v1.GetPlatformRequest
+	(*GetPlatformResponse)(nil),        // 12: platforms.v1.GetPlatformResponse
+	(*CreatePlatformRequest)(nil),      // 13: platforms.v1.CreatePlatformRequest
+	(*CreatePlatformResponse)(nil),     // 14: platforms.v1.CreatePlatformResponse
+	(*UpdatePlatformRequest)(nil),      // 15: platforms.v1.UpdatePlatformRequest
+	(*UpdatePlatformResponse)(nil),     // 16: platforms.v1.UpdatePlatformResponse
+	(*SetPlatformEnabledRequest)(nil),  // 17: platforms.v1.SetPlatformEnabledRequest
+	(*SetPlatformEnabledResponse)(nil), // 18: platforms.v1.SetPlatformEnabledResponse
+	(*DeletePlatformRequest)(nil),      // 19: platforms.v1.DeletePlatformRequest
+	(*DeletePlatformResponse)(nil),     // 20: platforms.v1.DeletePlatformResponse
+	(*GetGlobalLimitsRequest)(nil),     // 21: platforms.v1.GetGlobalLimitsRequest
+	(*GetGlobalLimitsResponse)(nil),    // 22: platforms.v1.GetGlobalLimitsResponse
+	(*UpdateGlobalLimitsRequest)(nil),  // 23: platforms.v1.UpdateGlobalLimitsRequest
+	(*UpdateGlobalLimitsResponse)(nil), // 24: platforms.v1.UpdateGlobalLimitsResponse
+	nil,                                // 25: platforms.v1.Platform.PostTypesEntry
+	nil,                                // 26: platforms.v1.PostTypeCanvases.BySlugEntry
+	nil,                                // 27: platforms.v1.TextConstraints.PerPostTypeEntry
+	(*timestamppb.Timestamp)(nil),      // 28: google.protobuf.Timestamp
 }
 var file_platforms_v1_platforms_proto_depIdxs = []int32{
-	23, // 0: platforms.v1.Platform.post_types:type_name -> platforms.v1.Platform.PostTypesEntry
-	2,  // 1: platforms.v1.Platform.image_constraints:type_name -> platforms.v1.ImageConstraints
-	3,  // 2: platforms.v1.Platform.video_constraints:type_name -> platforms.v1.VideoConstraints
-	4,  // 3: platforms.v1.Platform.pdf_constraints:type_name -> platforms.v1.PdfConstraints
-	5,  // 4: platforms.v1.Platform.text_constraints:type_name -> platforms.v1.TextConstraints
-	1,  // 5: platforms.v1.Platform.usage:type_name -> platforms.v1.PlatformUsage
-	25, // 6: platforms.v1.Platform.created_at:type_name -> google.protobuf.Timestamp
-	25, // 7: platforms.v1.Platform.updated_at:type_name -> google.protobuf.Timestamp
-	24, // 8: platforms.v1.TextConstraints.per_post_type:type_name -> platforms.v1.TextConstraints.PerPostTypeEntry
-	0,  // 9: platforms.v1.ListPlatformsResponse.platforms:type_name -> platforms.v1.Platform
-	0,  // 10: platforms.v1.GetPlatformResponse.platform:type_name -> platforms.v1.Platform
-	0,  // 11: platforms.v1.CreatePlatformRequest.platform:type_name -> platforms.v1.Platform
-	0,  // 12: platforms.v1.CreatePlatformResponse.platform:type_name -> platforms.v1.Platform
-	0,  // 13: platforms.v1.UpdatePlatformRequest.platform:type_name -> platforms.v1.Platform
-	0,  // 14: platforms.v1.UpdatePlatformResponse.platform:type_name -> platforms.v1.Platform
-	0,  // 15: platforms.v1.SetPlatformEnabledResponse.platform:type_name -> platforms.v1.Platform
-	6,  // 16: platforms.v1.GetGlobalLimitsResponse.limits:type_name -> platforms.v1.GlobalLimits
-	6,  // 17: platforms.v1.UpdateGlobalLimitsRequest.limits:type_name -> platforms.v1.GlobalLimits
-	6,  // 18: platforms.v1.UpdateGlobalLimitsResponse.limits:type_name -> platforms.v1.GlobalLimits
-	7,  // 19: platforms.v1.PlatformAdminService.ListPlatforms:input_type -> platforms.v1.ListPlatformsRequest
-	9,  // 20: platforms.v1.PlatformAdminService.GetPlatform:input_type -> platforms.v1.GetPlatformRequest
-	19, // 21: platforms.v1.PlatformAdminService.GetGlobalLimits:input_type -> platforms.v1.GetGlobalLimitsRequest
-	11, // 22: platforms.v1.PlatformAdminService.CreatePlatform:input_type -> platforms.v1.CreatePlatformRequest
-	13, // 23: platforms.v1.PlatformAdminService.UpdatePlatform:input_type -> platforms.v1.UpdatePlatformRequest
-	15, // 24: platforms.v1.PlatformAdminService.SetPlatformEnabled:input_type -> platforms.v1.SetPlatformEnabledRequest
-	17, // 25: platforms.v1.PlatformAdminService.DeletePlatform:input_type -> platforms.v1.DeletePlatformRequest
-	21, // 26: platforms.v1.PlatformAdminService.UpdateGlobalLimits:input_type -> platforms.v1.UpdateGlobalLimitsRequest
-	8,  // 27: platforms.v1.PlatformAdminService.ListPlatforms:output_type -> platforms.v1.ListPlatformsResponse
-	10, // 28: platforms.v1.PlatformAdminService.GetPlatform:output_type -> platforms.v1.GetPlatformResponse
-	20, // 29: platforms.v1.PlatformAdminService.GetGlobalLimits:output_type -> platforms.v1.GetGlobalLimitsResponse
-	12, // 30: platforms.v1.PlatformAdminService.CreatePlatform:output_type -> platforms.v1.CreatePlatformResponse
-	14, // 31: platforms.v1.PlatformAdminService.UpdatePlatform:output_type -> platforms.v1.UpdatePlatformResponse
-	16, // 32: platforms.v1.PlatformAdminService.SetPlatformEnabled:output_type -> platforms.v1.SetPlatformEnabledResponse
-	18, // 33: platforms.v1.PlatformAdminService.DeletePlatform:output_type -> platforms.v1.DeletePlatformResponse
-	22, // 34: platforms.v1.PlatformAdminService.UpdateGlobalLimits:output_type -> platforms.v1.UpdateGlobalLimitsResponse
-	27, // [27:35] is the sub-list for method output_type
-	19, // [19:27] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	25, // 0: platforms.v1.Platform.post_types:type_name -> platforms.v1.Platform.PostTypesEntry
+	4,  // 1: platforms.v1.Platform.image_constraints:type_name -> platforms.v1.ImageConstraints
+	5,  // 2: platforms.v1.Platform.video_constraints:type_name -> platforms.v1.VideoConstraints
+	6,  // 3: platforms.v1.Platform.pdf_constraints:type_name -> platforms.v1.PdfConstraints
+	7,  // 4: platforms.v1.Platform.text_constraints:type_name -> platforms.v1.TextConstraints
+	3,  // 5: platforms.v1.Platform.usage:type_name -> platforms.v1.PlatformUsage
+	28, // 6: platforms.v1.Platform.created_at:type_name -> google.protobuf.Timestamp
+	28, // 7: platforms.v1.Platform.updated_at:type_name -> google.protobuf.Timestamp
+	1,  // 8: platforms.v1.Platform.post_type_canvases:type_name -> platforms.v1.PostTypeCanvases
+	26, // 9: platforms.v1.PostTypeCanvases.by_slug:type_name -> platforms.v1.PostTypeCanvases.BySlugEntry
+	27, // 10: platforms.v1.TextConstraints.per_post_type:type_name -> platforms.v1.TextConstraints.PerPostTypeEntry
+	0,  // 11: platforms.v1.ListPlatformsResponse.platforms:type_name -> platforms.v1.Platform
+	0,  // 12: platforms.v1.GetPlatformResponse.platform:type_name -> platforms.v1.Platform
+	0,  // 13: platforms.v1.CreatePlatformRequest.platform:type_name -> platforms.v1.Platform
+	0,  // 14: platforms.v1.CreatePlatformResponse.platform:type_name -> platforms.v1.Platform
+	0,  // 15: platforms.v1.UpdatePlatformRequest.platform:type_name -> platforms.v1.Platform
+	0,  // 16: platforms.v1.UpdatePlatformResponse.platform:type_name -> platforms.v1.Platform
+	0,  // 17: platforms.v1.SetPlatformEnabledResponse.platform:type_name -> platforms.v1.Platform
+	8,  // 18: platforms.v1.GetGlobalLimitsResponse.limits:type_name -> platforms.v1.GlobalLimits
+	8,  // 19: platforms.v1.UpdateGlobalLimitsRequest.limits:type_name -> platforms.v1.GlobalLimits
+	8,  // 20: platforms.v1.UpdateGlobalLimitsResponse.limits:type_name -> platforms.v1.GlobalLimits
+	2,  // 21: platforms.v1.PostTypeCanvases.BySlugEntry.value:type_name -> platforms.v1.Canvas
+	9,  // 22: platforms.v1.PlatformAdminService.ListPlatforms:input_type -> platforms.v1.ListPlatformsRequest
+	11, // 23: platforms.v1.PlatformAdminService.GetPlatform:input_type -> platforms.v1.GetPlatformRequest
+	21, // 24: platforms.v1.PlatformAdminService.GetGlobalLimits:input_type -> platforms.v1.GetGlobalLimitsRequest
+	13, // 25: platforms.v1.PlatformAdminService.CreatePlatform:input_type -> platforms.v1.CreatePlatformRequest
+	15, // 26: platforms.v1.PlatformAdminService.UpdatePlatform:input_type -> platforms.v1.UpdatePlatformRequest
+	17, // 27: platforms.v1.PlatformAdminService.SetPlatformEnabled:input_type -> platforms.v1.SetPlatformEnabledRequest
+	19, // 28: platforms.v1.PlatformAdminService.DeletePlatform:input_type -> platforms.v1.DeletePlatformRequest
+	23, // 29: platforms.v1.PlatformAdminService.UpdateGlobalLimits:input_type -> platforms.v1.UpdateGlobalLimitsRequest
+	10, // 30: platforms.v1.PlatformAdminService.ListPlatforms:output_type -> platforms.v1.ListPlatformsResponse
+	12, // 31: platforms.v1.PlatformAdminService.GetPlatform:output_type -> platforms.v1.GetPlatformResponse
+	22, // 32: platforms.v1.PlatformAdminService.GetGlobalLimits:output_type -> platforms.v1.GetGlobalLimitsResponse
+	14, // 33: platforms.v1.PlatformAdminService.CreatePlatform:output_type -> platforms.v1.CreatePlatformResponse
+	16, // 34: platforms.v1.PlatformAdminService.UpdatePlatform:output_type -> platforms.v1.UpdatePlatformResponse
+	18, // 35: platforms.v1.PlatformAdminService.SetPlatformEnabled:output_type -> platforms.v1.SetPlatformEnabledResponse
+	20, // 36: platforms.v1.PlatformAdminService.DeletePlatform:output_type -> platforms.v1.DeletePlatformResponse
+	24, // 37: platforms.v1.PlatformAdminService.UpdateGlobalLimits:output_type -> platforms.v1.UpdateGlobalLimitsResponse
+	30, // [30:38] is the sub-list for method output_type
+	22, // [22:30] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_platforms_v1_platforms_proto_init() }
@@ -1546,7 +1671,7 @@ func file_platforms_v1_platforms_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_platforms_v1_platforms_proto_rawDesc), len(file_platforms_v1_platforms_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   25,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

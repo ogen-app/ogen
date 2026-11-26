@@ -557,10 +557,25 @@ func resolveMaxContentChars(slug string, p *models.Platform) *int {
 	return nil
 }
 
+// MaxCanvasSide caps a canvas's width and height, in pixels.
+const MaxCanvasSide = 8192
+
+// TakesArtwork reports whether slug's publish rule allows an image or a
+// video, which makes it a post type a canvas can be set for. A slug with no
+// rule takes none.
+func TakesArtwork(slug string) bool {
+	rule, ok := postTypeRules[slug]
+	return ok && takesArtwork(rule)
+}
+
+func takesArtwork(rule PostTypeRule) bool {
+	return slices.Contains(rule.AllowedKinds, KindImage) || slices.Contains(rule.AllowedKinds, KindVideo)
+}
+
 // resolveCanvas returns the platform's recommended canvas for slug, or nil
 // when the type takes no artwork or the catalog has no size for it.
 func resolveCanvas(slug string, rule PostTypeRule, p *models.Platform) *models.Canvas {
-	if !slices.Contains(rule.AllowedKinds, KindImage) && !slices.Contains(rule.AllowedKinds, KindVideo) {
+	if !takesArtwork(rule) {
 		return nil
 	}
 	c, ok := p.PostTypeCanvases[slug]
