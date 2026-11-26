@@ -343,24 +343,11 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 		if err != nil {
 			return err
 		}
-		// A newer snapshot (this change's webhook, or a later change) already
-		// landed and moved the mirror and the tier: the older answer must not
-		// undo it.
-		if snap.Status != "" && !snap.UpdatedAt.After(row.ProviderUpdatedAt) {
+		if !s.takeUpgradeAnswer(row, snap, products, productID, target) {
 			return nil
 		}
 		if err := s.cancelOpenChange(ctx, tx, row.ID, "replaced by a plan change"); err != nil {
 			return err
-		}
-		if snap.Status != "" {
-			s.copySnapshot(row, snap, products)
-			// The product was resolved to target before the switch; a
-			// mapping changed since must not detach the price the tier moves to.
-			if snap.ProductID == productID {
-				row.TierVersionPriceID = new(target.ID)
-			}
-		} else {
-			row.ProviderProductID, row.ProviderVariantID, row.TierVersionPriceID = productID, productID, new(target.ID)
 		}
 		row.UpdatedAt = s.now()
 		if err := s.d.Repo.UpdateSubscription(ctx, tx, row); err != nil {
@@ -383,6 +370,30 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 	s.recordPlanChange(ctx, req, "plan_changed", current, target)
 	s.publish(ctx, req.TenantID, true)
 	return nil
+}
+
+// takeUpgradeAnswer mirrors the provider's answer to an upgrade onto row and
+// reports whether it applies. A later change's snapshot that already landed
+// must not be undone by the older answer. This change's own, delivered first,
+// is kept, and so is the tier it moved, unless a mapping removed meanwhile
+// left it without the price the owner was charged for.
+func (s *Service) takeUpgradeAnswer(row *models.BillingSubscription, snap billingdom.Subscription, products billingdom.ProductMap, productID string, target billingdom.Price) bool {
+	switch {
+	case snap.Status == "":
+		row.ProviderProductID, row.ProviderVariantID, row.TierVersionPriceID = productID, productID, new(target.ID)
+	case snap.UpdatedAt.After(row.ProviderUpdatedAt):
+		s.copySnapshot(row, snap, products)
+		// The product was resolved to target before the switch; a mapping
+		// changed since must not detach the price the tier moves to.
+		if snap.ProductID == productID {
+			row.TierVersionPriceID = new(target.ID)
+		}
+	case snap.UpdatedAt.Equal(row.ProviderUpdatedAt) && row.ProviderProductID == productID && row.TierVersionPriceID == nil:
+		row.TierVersionPriceID = new(target.ID)
+	default:
+		return false
+	}
+	return true
 }
 
 // changeDuringTrial: the free month belongs to the marked tier only, so a tier

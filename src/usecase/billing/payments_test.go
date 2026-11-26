@@ -209,6 +209,19 @@ func TestReportedFeeIsConvertedFromItsOwnCurrency(t *testing.T) {
 	if r := rows[0]; *r.TotalUSD != 1200 || *r.FeeUSD != 180 || r.Fee != 150 || r.FeeIsEstimated {
 		t.Fatalf("fee = %d / %d USD, total %d USD", r.Fee, *r.FeeUSD, *r.TotalUSD)
 	}
+
+	// A later copy without the EUR rate knows the fee in USD only: the saved
+	// fee is kept on both sides.
+	if _, err := h.db.NewDelete().Model((*models.FXRate)(nil)).Where("true").Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.RecordPayments(ctx, []billingdom.Payment{p}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = h.listPayments(true, 0, "")
+	if r := rows[0]; r.TotalUSD == nil || *r.TotalUSD != 1200 || r.FeeUSD == nil || *r.FeeUSD != 180 || r.Fee != 150 || r.FeeIsEstimated {
+		t.Fatalf("saved fee lost: %+v", r)
+	}
 }
 
 func TestListPaymentsPagesAndBounds(t *testing.T) {

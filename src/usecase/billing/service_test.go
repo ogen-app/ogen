@@ -8,6 +8,7 @@ import (
 
 	billingdom "github.com/ogen-app/ogen/src/domain/billing"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
 func TestWebhookStartsSubscriptionAndLiftsGate(t *testing.T) {
@@ -85,7 +86,7 @@ func TestWebhookRedeliveryIsRecognisedByEventID(t *testing.T) {
 	if h.mirror("s1").Status != models.SubscriptionStatusActive {
 		t.Fatal("a redelivery was applied")
 	}
-	n, err := h.db.NewSelect().TableExpr("billing_webhook_events").Where("provider_event_id = ?", "evt_same").Count(t.Context())
+	n, err := repository.CountRows(t.Context(), h.db.NewSelect().TableExpr("billing_webhook_events").Where("provider_event_id = ?", "evt_same"))
 	if err != nil || n != 1 {
 		t.Fatalf("event rows = %d %v", n, err)
 	}
@@ -789,6 +790,38 @@ func TestStaleUpgradeAnswerDoesNotUndoANewerSnapshot(t *testing.T) {
 	}
 	if got := h.currentVersion(tenantID); !strings.HasPrefix(got, h.proPrice.TierVersionID) {
 		t.Fatalf("tier moved on a stale answer: %s", got)
+	}
+}
+
+func TestUpgradeCompletesItsOwnSnapshotWhenTheProductWasUnmapped(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, userID, _ := h.workspace("a")
+	subscribe(t, h, tenantID, models.SubscriptionStatusActive)
+	h.now = h.now.Add(time.Minute)
+	// While the upgrade is at the provider, Max is unmapped, and the change's
+	// own webhook lands before the answer with the same snapshot.
+	h.provider.duringChange = func() {
+		if _, err := h.svc.SetProductMapping(ctx, h.maxPrice.ID, true, "", "pulled"); err != nil {
+			t.Error(err)
+		}
+		own := h.provider.subs["s1"]
+		own.ProductID, own.UpdatedAt = maxProduct, h.now.Add(time.Duration(h.provider.seq+1)*time.Second)
+		if err := h.webhook("subscription.updated", own, nil); err != nil {
+			t.Error(err)
+		}
+		if m := h.mirror("s1"); m.TierVersionPriceID != nil {
+			t.Errorf("the webhook resolved an unmapped product: %s", *m.TierVersionPriceID)
+		}
+	}
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: Buyer{TenantID: tenantID, UserID: userID}, TierID: "max"}); err != nil {
+		t.Fatal(err)
+	}
+	if m := h.mirror("s1"); m.ProviderProductID != maxProduct || m.TierVersionPriceID == nil || *m.TierVersionPriceID != h.maxPrice.ID {
+		t.Fatalf("mirror = %s %v", m.ProviderProductID, m.TierVersionPriceID)
+	}
+	if got := h.currentVersion(tenantID); !strings.HasPrefix(got, h.maxPrice.TierVersionID) {
+		t.Fatalf("the charged upgrade kept the old tier: %s", got)
 	}
 }
 
