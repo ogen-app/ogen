@@ -563,7 +563,7 @@ func (s *Service) PricingFlags(ctx context.Context) (PricingFlags, error) {
 		// The checkout refuses an archived product. Pricing only reads the
 		// product cache, so it never waits on the provider: a product not
 		// read yet is left on offer, and the checkout decides.
-		if p, ok := s.cachedProductOnly(ctx, productID); ok && p.Archived {
+		if p, ok := s.cachedProductOnly(productID); ok && p.Archived {
 			continue
 		}
 		out.MappedPrices[id] = true

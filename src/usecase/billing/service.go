@@ -208,7 +208,7 @@ const productReadTimeout = 30 * time.Second
 // provider, for reads that must not wait on it (public pricing). A missing or
 // expired entry is refreshed in the background, and the stale entry, if any,
 // is served meanwhile; ok is false when nothing is known yet.
-func (s *Service) cachedProductOnly(ctx context.Context, id string) (billingdom.Product, bool) {
+func (s *Service) cachedProductOnly(id string) (billingdom.Product, bool) {
 	now := s.now()
 	s.productsMu.Lock()
 	c, cached := s.products[id]
@@ -220,7 +220,9 @@ func (s *Service) cachedProductOnly(ctx context.Context, id string) (billingdom.
 	s.productsMu.Unlock()
 	if start {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), productReadTimeout)
+			// Not the request's context: Fiber recycles it once the handler
+			// returns, while this read may still run.
+			ctx, cancel := context.WithTimeout(context.Background(), productReadTimeout)
 			defer cancel()
 			if _, err := s.product(ctx, id); err != nil {
 				slog.WarnContext(ctx, "billing: background product read failed", logging.AttrComponent, "billing", "product_id", id, logging.AttrError, err)

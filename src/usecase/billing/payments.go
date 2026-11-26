@@ -141,7 +141,8 @@ func (s *Service) paymentRow(p billingdom.Payment, table billingdom.FXTable) (mo
 // paymentFee sets the row's fee in its currency and in US cents. A fee the
 // provider reports is converted from its own currency, which may differ
 // from the payment's; otherwise the fee is estimated from the USD total.
-// Either side stays unknown while its rate is.
+// Either both sides are known or neither is, so a copy that could not be
+// converted keeps the fee of one that was.
 func (s *Service) paymentFee(row *models.BillingPayment, p billingdom.Payment, table billingdom.FXTable) error {
 	if p.Fee == nil {
 		if row.TotalUSD != nil {
@@ -165,6 +166,8 @@ func (s *Service) paymentFee(row *models.BillingPayment, p billingdom.Payment, t
 	case row.FeeUSD != nil && row.TotalUSD != nil:
 		// The fee in the payment's currency, at the payment's own rate.
 		row.Fee = billingdom.Share(*row.FeeUSD, p.Total, *row.TotalUSD)
+	default:
+		row.FeeUSD = nil
 	}
 	return nil
 }
