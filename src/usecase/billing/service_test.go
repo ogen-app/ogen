@@ -622,6 +622,91 @@ func TestKeepCurrentPlanClearsTheProviderEvenWhenTheMirrorMissedIt(t *testing.T)
 	}
 }
 
+func TestKeepCurrentPlanClearsAProviderChangeWithNoLocalRow(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, userID, _ := h.workspace("a")
+	// The provider holds a downgrade the database never recorded (its write
+	// failed after the provider took it); a later snapshot shows it.
+	snap := h.sub("s1", maxProduct, models.SubscriptionStatusActive, h.now)
+	snap.PendingProductID, snap.PendingEffectiveAt = proProduct, snap.RenewsAt
+	h.provider.subs["s1"] = snap
+	if err := h.webhook("subscription.created", snap, map[string]string{"tenant_id": tenantID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: Buyer{TenantID: tenantID, UserID: userID}, TierID: "max"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.provider.cancels) != 1 || h.provider.subs["s1"].PendingProductID != "" || h.mirror("s1").PendingProductID != "" {
+		t.Fatalf("provider still holds the downgrade: cancels %v", h.provider.cancels)
+	}
+}
+
+func TestDeclinedUpgradeCancelsTheDroppedDowngrade(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, userID, _ := h.workspace("a")
+	subscribe(t, h, tenantID, models.SubscriptionStatusActive)
+	h.now = h.now.Add(time.Minute)
+	// A downgrade the provider holds (its target does not matter here).
+	m := h.mirror("s1")
+	m.PendingProductID = maxProduct
+	if err := h.repo.UpdateSubscription(ctx, nil, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.InsertScheduledChange(ctx, nil, &models.BillingScheduledChange{ID: "sc1", TenantID: tenantID, BillingSubscriptionID: m.ID,
+		FromTierVersionPriceID: h.proPrice.ID, ToTierVersionPriceID: h.proPrice.ID, EffectiveAt: *m.RenewsAt,
+		Status: models.ScheduledChangeProviderApplied, CreatedAt: h.now, UpdatedAt: h.now}); err != nil {
+		t.Fatal(err)
+	}
+	h.provider.changeErrs = []error{billingdom.ErrPaymentFailed}
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: Buyer{TenantID: tenantID, UserID: userID}, TierID: "max"}); !errors.Is(err, ErrPaymentFailed) {
+		t.Fatalf("declined upgrade: %v", err)
+	}
+	if len(h.provider.cancels) != 1 {
+		t.Fatalf("provider cancels = %v", h.provider.cancels)
+	}
+	tb, _ := h.svc.TenantBilling(ctx, tenantID)
+	if len(tb.ScheduledChanges) != 1 || tb.ScheduledChanges[0].Status != models.ScheduledChangeCancelled {
+		t.Fatalf("the dropped downgrade is still open: %+v", tb.ScheduledChanges)
+	}
+}
+
+func TestPricingLeavesArchivedProductsOut(t *testing.T) {
+	h := newHarness(t)
+	h.provider.mu.Lock()
+	p := h.provider.products[maxProduct]
+	p.Archived = true
+	h.provider.products[maxProduct] = p
+	h.provider.mu.Unlock()
+	flags, err := h.svc.PricingFlags(t.Context())
+	if err != nil || !flags.MappedPrices[h.proPrice.ID] || flags.MappedPrices[h.maxPrice.ID] {
+		t.Fatalf("pricing flags = %+v %v", flags, err)
+	}
+}
+
+func TestUnknownStatusKeepsTheEndOfACancelledSubscription(t *testing.T) {
+	h := newHarness(t)
+	tenantID, _, _ := h.workspace("a")
+	snap := h.sub("s1", proProduct, models.SubscriptionStatusCancelled, h.now)
+	ends := h.now.Add(10 * 24 * time.Hour)
+	snap.RenewsAt, snap.EndsAt, snap.CancelAtPeriodEnd = nil, &ends, true
+	if err := h.webhook("subscription.canceled", snap, map[string]string{"tenant_id": tenantID}); err != nil {
+		t.Fatal(err)
+	}
+	snap.Status, snap.ProviderStatus, snap.EndsAt, snap.UpdatedAt = "", "something_new", nil, h.now.Add(time.Minute)
+	if err := h.webhook("subscription.updated", snap, nil); err != nil {
+		t.Fatal(err)
+	}
+	m := h.mirror("s1")
+	if m.Status != models.SubscriptionStatusCancelled || m.EndsAt == nil || !m.EndsAt.Equal(ends) {
+		t.Fatalf("mirror = %s ends %v", m.Status, m.EndsAt)
+	}
+	if live, _ := h.svc.HasLiveSubscription(t.Context(), tenantID); !live {
+		t.Fatal("the paid period was cut short")
+	}
+}
+
 func TestCancelAtPeriodEndCancelsDowngrade(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()

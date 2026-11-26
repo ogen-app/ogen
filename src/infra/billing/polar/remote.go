@@ -24,8 +24,8 @@ const (
 )
 
 // planBase is the base URL a planned request is built against; only the
-// path below it is kept.
-const planBase = "http://polar.plan"
+// path below it is kept, and nothing ever connects to it.
+const planBase = "https://polar.plan"
 
 var errCaptured = errors.New("polar: request captured")
 
