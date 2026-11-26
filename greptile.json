@@ -1,7 +1,7 @@
 {
   "strictness": 2,
   "commentTypes": ["logic", "syntax"],
-  "autoReview": ["open", "push"],
+  "autoReview": ["open", "push", "rebase"],
   "triggerOnDrafts": false,
   "includeBranches": ["main"],
   "summarySection": { "included": true, "collapsible": false },
@@ -18,7 +18,7 @@
         "rule": "Default to no comments. Only flag a missing comment when the WHY is non-obvious (a hidden constraint, a workaround, a subtle invariant). Comments must not reference ticket numbers or review bots."
       },
       {
-        "scope": ["src/handlers/**/*.go"],
+        "scope": ["src/transport/handlers/**/*.go"],
         "rule": "Authorization runs before any resource lookup. An unauthorized caller gets 403 whether or not the resource exists; never reveal existence via 404."
       },
       {
