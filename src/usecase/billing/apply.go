@@ -223,7 +223,10 @@ func (s *Service) applySnapshot(ctx context.Context, snap billingdom.Subscriptio
 				res.outcome = models.WebhookOutcomeIgnoredUnknown
 				return nil
 			}
-			snap.Status = prev.Status
+			// The adapter sets the dates from the status it maps; with none,
+			// the dates of the kept status stay too, so a cancelled
+			// subscription keeps its end.
+			snap.Status, snap.RenewsAt, snap.EndsAt = prev.Status, prev.RenewsAt, prev.EndsAt
 		}
 		if res.tenantID, err = s.resolveTenant(ctx, prev, snap); err != nil {
 			return err

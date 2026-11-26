@@ -321,6 +321,15 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 	if err := s.dropProviderChange(ctx, sub, open); err != nil {
 		return err
 	}
+	// The provider no longer holds the downgrade, so it is cancelled here
+	// too, whether or not the charge below goes through: a declined upgrade
+	// must not leave a downgrade on screen that the provider dropped.
+	if open != nil {
+		if _, err := s.d.Repo.SetScheduledChangeStatus(ctx, nil, open.ID, []string{open.Status}, models.ScheduledChangeCancelled, "replaced by a plan change", s.now()); err != nil {
+			return err
+		}
+		s.publish(ctx, sub.TenantID, true)
+	}
 	snap, err := s.changeAtProvider(ctx, sub, productID, opts)
 	if err != nil {
 		return err
@@ -451,11 +460,12 @@ func (s *Service) scheduleDowngrade(ctx context.Context, req PlanRequest, sub *m
 }
 
 // cancelPendingChange: choosing the current plan cancels a pending downgrade,
-// at the provider first.
+// at the provider first. The provider's is dropped even without a local row
+// (its write may have failed after the provider took the change).
 func (s *Service) cancelPendingChange(ctx context.Context, sub *models.BillingSubscription) error {
 	open, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return s.dropProviderChange(ctx, sub, nil)
 	}
 	if err != nil {
 		return err

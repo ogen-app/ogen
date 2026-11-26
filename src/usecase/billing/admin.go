@@ -540,7 +540,7 @@ const BillingStatusComplimentary = "complimentary"
 // PricingFlags is what the public pricing read adds per tier and price.
 type PricingFlags struct {
 	Enabled bool
-	// MappedPrices are prices with a provider product.
+	// MappedPrices are prices with a provider product that is not archived.
 	MappedPrices map[string]bool
 	// FreeTrialTierID is the marked tier when it can carry the free month.
 	FreeTrialTierID string
@@ -559,6 +559,12 @@ func (s *Service) PricingFlags(ctx context.Context) (PricingFlags, error) {
 		return out, err
 	}
 	for _, id := range products.PriceIDs() {
+		productID, _ := products.Product(id)
+		// The checkout refuses an archived product; a product that cannot
+		// be read now is left on offer, and the checkout decides.
+		if p, err := s.product(ctx, productID); err == nil && p.Archived {
+			continue
+		}
 		out.MappedPrices[id] = true
 	}
 	marked, err := s.d.Repo.FreeTrialTier(ctx)
