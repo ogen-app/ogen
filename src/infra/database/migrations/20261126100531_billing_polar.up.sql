@@ -17,7 +17,7 @@ ALTER TABLE billing_subscriptions
     ADD COLUMN cancel_at_period_end BOOLEAN     NOT NULL DEFAULT false,
     ADD COLUMN pending_product_id   TEXT        NOT NULL DEFAULT '',
     ADD COLUMN pending_effective_at TIMESTAMPTZ;
-UPDATE billing_subscriptions SET provider_product_id = provider_variant_id;
+UPDATE billing_subscriptions SET provider_product_id = provider_variant_id WHERE provider_product_id = '';
 
 -- Webhooks: Polar sends an event id (webhook-id), the same on every
 -- redelivery, so it is the dedupe key. body_sha256 stays unique for the
@@ -62,7 +62,7 @@ ALTER TABLE billing_payments
     ALTER COLUMN total_usd    DROP NOT NULL,
     ALTER COLUMN refunded_usd DROP NOT NULL,
     ALTER COLUMN fee_usd      DROP NOT NULL;
-UPDATE billing_payments SET provider_product_id = provider_variant_id;
+UPDATE billing_payments SET provider_product_id = provider_variant_id WHERE provider_product_id = '';
 
 -- Billing emails that name Lemon Squeezy or its test period. Boot seeds a
 -- template only when its row is absent, so the stale rows are dropped and the

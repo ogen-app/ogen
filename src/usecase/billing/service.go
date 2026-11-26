@@ -127,6 +127,8 @@ type Service struct {
 
 	productsMu sync.Mutex
 	products   map[string]cachedProduct
+	// refreshing are the products being read in the background.
+	refreshing map[string]bool
 }
 
 type cachedProduct struct {
@@ -147,7 +149,7 @@ func New(d Deps) *Service {
 	if d.Products == nil {
 		d.Products = NewProductStore(d.Repo, d.Settings.TestMode)
 	}
-	return &Service{d: d, products: map[string]cachedProduct{}}
+	return &Service{d: d, products: map[string]cachedProduct{}, refreshing: map[string]bool{}}
 }
 
 // Settings returns the billing settings.
@@ -197,6 +199,38 @@ func (s *Service) product(ctx context.Context, id string) (billingdom.Product, e
 	s.products[id] = cachedProduct{p: p, err: err, expires: now.Add(productTTL)}
 	s.productsMu.Unlock()
 	return p, err
+}
+
+// productReadTimeout bounds a background product read.
+const productReadTimeout = 30 * time.Second
+
+// cachedProductOnly returns a product from the cache without calling the
+// provider, for reads that must not wait on it (public pricing). A missing or
+// expired entry is refreshed in the background, and the stale entry, if any,
+// is served meanwhile; ok is false when nothing is known yet.
+func (s *Service) cachedProductOnly(ctx context.Context, id string) (billingdom.Product, bool) {
+	now := s.now()
+	s.productsMu.Lock()
+	c, cached := s.products[id]
+	stale := !cached || !now.Before(c.expires)
+	start := stale && !s.refreshing[id]
+	if start {
+		s.refreshing[id] = true
+	}
+	s.productsMu.Unlock()
+	if start {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), productReadTimeout)
+			defer cancel()
+			if _, err := s.product(ctx, id); err != nil {
+				slog.WarnContext(ctx, "billing: background product read failed", logging.AttrComponent, "billing", "product_id", id, logging.AttrError, err)
+			}
+			s.productsMu.Lock()
+			delete(s.refreshing, id)
+			s.productsMu.Unlock()
+		}()
+	}
+	return c.p, cached && c.err == nil
 }
 
 // publish tells the tenant's open tabs to refetch entitlements and billing.

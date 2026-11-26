@@ -560,9 +560,10 @@ func (s *Service) PricingFlags(ctx context.Context) (PricingFlags, error) {
 	}
 	for _, id := range products.PriceIDs() {
 		productID, _ := products.Product(id)
-		// The checkout refuses an archived product; a product that cannot
-		// be read now is left on offer, and the checkout decides.
-		if p, err := s.product(ctx, productID); err == nil && p.Archived {
+		// The checkout refuses an archived product. Pricing only reads the
+		// product cache, so it never waits on the provider: a product not
+		// read yet is left on offer, and the checkout decides.
+		if p, ok := s.cachedProductOnly(ctx, productID); ok && p.Archived {
 			continue
 		}
 		out.MappedPrices[id] = true
