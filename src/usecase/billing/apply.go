@@ -54,17 +54,32 @@ func (s *Service) HandleWebhook(ctx context.Context, h billingdom.WebhookHeaders
 	if err != nil {
 		return fmt.Errorf("billing webhook: %w", err)
 	}
-	// Payments are kept in both modes, apart by test_mode, and before the
-	// event is logged: a failure here makes the provider redeliver, and a
-	// redelivery of an applied event stops at the log below.
-	if err := s.recordWebhookPayments(ctx, ev); err != nil {
+	row, done, err := s.logWebhook(ctx, ev, body)
+	if err != nil || done {
 		return err
 	}
+	// Payments are kept in both modes, apart by test_mode. They are recorded
+	// first: a failure counts as the delivery failing, so the provider
+	// redelivers it and the redelivery records them again.
+	var (
+		outcome, tenantID string
+		applyErr          = s.recordWebhookPayments(ctx, ev)
+	)
+	if applyErr == nil {
+		outcome, tenantID, applyErr = s.applyEvent(ctx, ev)
+	}
+	return s.finishWebhook(ctx, row, ev, outcome, tenantID, applyErr)
+}
 
+// logWebhook records a delivery in the webhook log. done is true for a
+// redelivery of an event already applied, which needs nothing more; a
+// redelivery of a failed one returns its first row, whose receipt time the
+// retry window counts from.
+func (s *Service) logWebhook(ctx context.Context, ev billingdom.Event, body []byte) (*models.BillingWebhookEvent, bool, error) {
 	sum := sha256.Sum256(body)
 	id, err := models.NewID()
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	row := &models.BillingWebhookEvent{
 		ID: id, Provider: s.provider(), EventName: ev.Name, BodySHA256: hex.EncodeToString(sum[:]),
@@ -76,18 +91,23 @@ func (s *Service) HandleWebhook(ctx context.Context, h billingdom.WebhookHeaders
 	// The tenant is stamped only once applying resolved it: metadata is
 	// unverified input and may name a workspace that does not exist.
 	existing, inserted, err := s.d.Repo.InsertWebhookEvent(ctx, row)
-	if err != nil {
-		return err
+	switch {
+	case err != nil:
+		return nil, false, err
+	case inserted:
+		return row, false, nil
+	case existing.ProcessedAt != nil && existing.Outcome != models.WebhookOutcomeFailed:
+		webhooksDuplicate.Add(1)
+		return nil, true, nil
 	}
-	if !inserted {
-		if existing.ProcessedAt != nil && existing.Outcome != models.WebhookOutcomeFailed {
-			webhooksDuplicate.Add(1)
-			return nil // a redelivery of something already applied
-		}
-		row = existing
-	}
+	return existing, false, nil
+}
 
-	outcome, tenantID, applyErr := s.applyEvent(ctx, ev)
+// finishWebhook stores a delivery's outcome and decides the answer: an error
+// within the retry window makes the provider redeliver; after it the
+// delivery is acknowledged and left to the reconcile sweep and the payments
+// sync, which re-read subscriptions and payments on their own.
+func (s *Service) finishWebhook(ctx context.Context, row *models.BillingWebhookEvent, ev billingdom.Event, outcome, tenantID string, applyErr error) error {
 	errMsg := ""
 	if applyErr != nil {
 		outcome, errMsg = models.WebhookOutcomeFailed, applyErr.Error()
@@ -227,6 +247,11 @@ func (s *Service) applySnapshot(ctx context.Context, snap billingdom.Subscriptio
 			// the dates of the kept status stay too, so a cancelled
 			// subscription keeps its end.
 			snap.Status, snap.RenewsAt, snap.EndsAt = prev.Status, prev.RenewsAt, prev.EndsAt
+			// A trial end the snapshot leaves out is kept: it marks the
+			// account's free month as used.
+			if snap.TrialEndsAt == nil {
+				snap.TrialEndsAt = prev.TrialEndsAt
+			}
 		}
 		if res.tenantID, err = s.resolveTenant(ctx, prev, snap); err != nil {
 			return err

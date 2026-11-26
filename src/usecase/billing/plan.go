@@ -343,10 +343,16 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 		if err != nil {
 			return err
 		}
+		// A newer snapshot (this change's webhook, or a later change) already
+		// landed and moved the mirror and the tier: the older answer must not
+		// undo it.
+		if snap.Status != "" && !snap.UpdatedAt.After(row.ProviderUpdatedAt) {
+			return nil
+		}
 		if err := s.cancelOpenChange(ctx, tx, row.ID, "replaced by a plan change"); err != nil {
 			return err
 		}
-		if snap.UpdatedAt.After(row.ProviderUpdatedAt) && snap.Status != "" {
+		if snap.Status != "" {
 			s.copySnapshot(row, snap, products)
 			// The product was resolved to target before the switch; a
 			// mapping changed since must not detach the price the tier moves to.
@@ -403,8 +409,8 @@ func (s *Service) scheduleDowngrade(ctx context.Context, req PlanRequest, sub *m
 	}
 	open, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID)
 	switch {
-	case err == nil && open.ToTierVersionPriceID == target.ID:
-		return nil // already scheduled
+	case err == nil && open.ToTierVersionPriceID == target.ID && sub.PendingProductID == productID:
+		return nil // already scheduled, and the provider holds it
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return err
 	}
@@ -461,10 +467,21 @@ func (s *Service) scheduleDowngrade(ctx context.Context, req PlanRequest, sub *m
 
 // cancelPendingChange: choosing the current plan cancels a pending downgrade,
 // at the provider first. The provider's is dropped even without a local row
-// (its write may have failed after the provider took the change).
+// (its write may have failed after the provider took the change), and when
+// nothing local shows one the provider is asked.
 func (s *Service) cancelPendingChange(ctx context.Context, sub *models.BillingSubscription) error {
 	open, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID)
 	if errors.Is(err, sql.ErrNoRows) {
+		if sub.PendingProductID == "" {
+			snap, err := s.d.Provider.GetSubscription(ctx, sub.ProviderSubscriptionID)
+			if err != nil {
+				return providerErr(err)
+			}
+			if snap.PendingProductID == "" {
+				return nil
+			}
+			sub.PendingProductID = snap.PendingProductID
+		}
 		return s.dropProviderChange(ctx, sub, nil)
 	}
 	if err != nil {
@@ -489,7 +506,7 @@ func (s *Service) dropProviderChange(ctx context.Context, sub *models.BillingSub
 	if sub.PendingProductID == "" && !held {
 		return nil
 	}
-	snap, err := s.d.Provider.CancelScheduledChange(ctx, sub.ProviderSubscriptionID, sub.ProviderProductID)
+	snap, err := s.d.Provider.CancelScheduledChange(ctx, sub.ProviderSubscriptionID)
 	if err != nil {
 		countProviderError(err)
 		return providerErr(err)
@@ -511,38 +528,42 @@ func (s *Service) mirrorAfter(ctx context.Context, snap billingdom.Subscription,
 // provider holds may take to land before reconcile calls it failed.
 const scheduledChangeGrace = time.Hour
 
-// failOverdueChanges fails the downgrades that should have landed at renewal
-// but did not: past effective_at by the grace, the mirror is still on another
-// product and the provider holds nothing. The tier stays where it is; the
-// operator decides (Harbor attention: scheduled_change_failed).
-func (s *Service) failOverdueChanges(ctx context.Context) error {
-	changes, err := s.d.Repo.ListOverdueScheduledChanges(ctx, s.now().Add(-scheduledChangeGrace))
+// failIfOverdue fails a subscription's downgrade that should have landed at
+// renewal but did not. It runs right after a fresh read of the subscription
+// was applied, so the mirror is the provider's view: past effective_at by the
+// grace, still on another product and the provider holds nothing. The tier
+// stays where it is; the operator decides (Harbor attention:
+// scheduled_change_failed). A read that failed leaves the change for the
+// next tick.
+func (s *Service) failIfOverdue(ctx context.Context, providerSubID string) error {
+	sub, err := s.d.Repo.GetSubscriptionByProviderID(ctx, nil, s.provider(), providerSubID, false)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return err
+	}
+	if !s.ours(sub) || sub.PendingProductID != "" {
+		return nil
+	}
+	change, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if s.now().Before(change.EffectiveAt.Add(scheduledChangeGrace)) {
+		return nil
 	}
 	products, err := s.productMap(ctx)
 	if err != nil {
 		return err
 	}
-	var errs []error
-	for i := range changes {
-		c := &changes[i]
-		sub, err := s.d.Repo.GetSubscription(ctx, c.BillingSubscriptionID)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if !s.ours(sub) || sub.PendingProductID != "" {
-			continue
-		}
-		if target, ok := products.Product(c.ToTierVersionPriceID); ok && target == sub.ProviderProductID {
-			continue // landed; its snapshot marks it applied
-		}
-		if err := s.failChange(ctx, c, "the provider did not apply the downgrade at renewal"); err != nil {
-			errs = append(errs, err)
-		}
+	if target, ok := products.Product(change.ToTierVersionPriceID); ok && target == sub.ProviderProductID {
+		return nil // landed; its snapshot marks it applied
 	}
-	return errors.Join(errs...)
+	return s.failChange(ctx, change, "the provider did not apply the downgrade at renewal")
 }
 
 func (s *Service) failChange(ctx context.Context, change *models.BillingScheduledChange, why string) error {

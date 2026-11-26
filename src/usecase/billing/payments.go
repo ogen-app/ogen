@@ -18,14 +18,16 @@ import (
 
 // Payments are the provider's money movements, kept for Harbor's revenue
 // view. Webhooks record each order and refund as it happens; the payments
-// sync re-reads the whole history, which backfills what predates this table,
-// picks up refunds whose webhook was lost and converts payments whose
-// exchange rate was not known yet. Both paths upsert, so neither adds a row
-// the other wrote.
+// sync re-reads the whole history, which picks up payments and refunds whose
+// webhook was lost and converts payments whose exchange rate was not known
+// yet. Both paths upsert, so neither adds a row the other wrote.
 //
 // Polar reports amounts in the payment's currency only. A non-USD payment is
 // converted at the ECB reference rate of its day (billingdom.FXTable); until
-// that rate is stored its *_usd columns stay NULL.
+// that rate is stored its *_usd columns stay NULL. The sync stores the last
+// 90 business days of rates on every run, which covers every Polar payment
+// as long as the sync has not stopped for longer than that: billing on Polar
+// has no older payments.
 
 // ErrBadPageToken: a ListPayments page token that is not one this service
 // issued (400).
@@ -113,32 +115,58 @@ func (s *Service) paymentRow(p billingdom.Payment, table billingdom.FXTable) (mo
 		FeeIsEstimated: p.Fee == nil,
 		Status:         p.Status, OccurredAt: p.OccurredAt.UTC(), ProviderUpdatedAt: p.UpdatedAt.UTC(),
 	}
-	if p.Fee != nil {
-		row.Fee = *p.Fee
-	}
 	if p.TenantID != "" {
 		row.TenantID = new(p.TenantID)
 	}
 	conv, err := table.ToUSD(row.Currency, row.OccurredAt)
-	if errors.Is(err, billingdom.ErrNoRate) {
-		return row, nil // converted by a later sync, once the rate is stored
+	switch {
+	case errors.Is(err, billingdom.ErrNoRate):
+		// Converted by a later sync, once the rate is stored.
+	case err != nil:
+		return models.BillingPayment{}, err
+	default:
+		row.SubtotalUSD, row.DiscountUSD, row.TaxUSD = new(conv.Cents(p.Subtotal)), new(conv.Cents(p.Discount)), new(conv.Cents(p.Tax))
+		row.TotalUSD, row.RefundedUSD = new(conv.Cents(p.Total)), new(conv.Cents(p.Refunded))
+		row.FXRate, row.FXSource = new(conv.RateString()), new(conv.Source)
+		if !conv.Date.IsZero() {
+			row.FXDate = new(conv.Date)
+		}
 	}
-	if err != nil {
+	if err := s.paymentFee(&row, p, table); err != nil {
 		return models.BillingPayment{}, err
 	}
-	row.SubtotalUSD, row.DiscountUSD, row.TaxUSD = new(conv.Cents(p.Subtotal)), new(conv.Cents(p.Discount)), new(conv.Cents(p.Tax))
-	row.TotalUSD, row.RefundedUSD = new(conv.Cents(p.Total)), new(conv.Cents(p.Refunded))
-	row.FXRate, row.FXSource = new(conv.RateString()), new(conv.Source)
-	if !conv.Date.IsZero() {
-		row.FXDate = new(conv.Date)
-	}
-	if p.Fee != nil {
-		row.FeeUSD = new(conv.Cents(*p.Fee))
-	} else {
-		fee, feeUSD := s.d.Fees.Estimate(p.Kind, p.Total, *row.TotalUSD)
-		row.Fee, row.FeeUSD = fee, new(feeUSD)
-	}
 	return row, nil
+}
+
+// paymentFee sets the row's fee in its currency and in US cents. A fee the
+// provider reports is converted from its own currency, which may differ
+// from the payment's; otherwise the fee is estimated from the USD total.
+// Either side stays unknown while its rate is.
+func (s *Service) paymentFee(row *models.BillingPayment, p billingdom.Payment, table billingdom.FXTable) error {
+	if p.Fee == nil {
+		if row.TotalUSD != nil {
+			fee, feeUSD := s.d.Fees.Estimate(p.Kind, p.Total, *row.TotalUSD)
+			row.Fee, row.FeeUSD = fee, new(feeUSD)
+		}
+		return nil
+	}
+	feeCurrency := cmp.Or(strings.ToUpper(p.FeeCurrency), row.Currency)
+	feeConv, err := table.ToUSD(feeCurrency, row.OccurredAt)
+	switch {
+	case errors.Is(err, billingdom.ErrNoRate):
+	case err != nil:
+		return err
+	default:
+		row.FeeUSD = new(feeConv.Cents(*p.Fee))
+	}
+	switch {
+	case feeCurrency == row.Currency:
+		row.Fee = *p.Fee
+	case row.FeeUSD != nil && row.TotalUSD != nil:
+		// The fee in the payment's currency, at the payment's own rate.
+		row.Fee = billingdom.Share(*row.FeeUSD, p.Total, *row.TotalUSD)
+	}
+	return nil
 }
 
 // RecordFXRates stores reference rates for the conversions.

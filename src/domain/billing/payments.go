@@ -37,9 +37,10 @@ type Payment struct {
 	Currency      string
 
 	Subtotal, Discount, Tax, Total, Refunded int64
-	// Fee is the provider's own fee in Currency, when the payload reports
-	// it; nil means it is estimated.
-	Fee *int64
+	// Fee is the provider's own fee, when the payload reports it, in
+	// FeeCurrency ("" means Currency); nil means it is estimated.
+	Fee         *int64
+	FeeCurrency string
 
 	Status     string
 	OccurredAt time.Time

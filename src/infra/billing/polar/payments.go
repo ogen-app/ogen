@@ -33,9 +33,10 @@ type orderJSON struct {
 	ProductID      *string       `json:"product_id"`
 	Customer       *customerJSON `json:"customer"`
 	Metadata       metadata      `json:"metadata"`
-	// PlatformFeeAmount is Polar's fee, when the API reports it (spike: the
-	// field name).
-	PlatformFeeAmount *int64 `json:"platform_fee_amount"`
+	// PlatformFeeAmount is Polar's fee, in PlatformFeeCurrency, which may
+	// differ from the order's (a USD fee on a EUR order).
+	PlatformFeeAmount   *int64  `json:"platform_fee_amount"`
+	PlatformFeeCurrency *string `json:"platform_fee_currency"`
 }
 
 // refundJSON is the subset of the refund object a payment needs.
@@ -88,7 +89,8 @@ func (o orderJSON) payment(testMode bool) (billing.Payment, bool) {
 		SubscriptionID: str(o.SubscriptionID), ProductID: str(o.ProductID), BillingReason: billingReasons[o.BillingReason],
 		Currency: strings.ToUpper(o.Currency),
 		Subtotal: o.SubtotalAmount, Discount: o.DiscountAmount, Tax: o.TaxAmount, Total: o.TotalAmount, Refunded: o.RefundedAmount,
-		Fee: o.PlatformFeeAmount, Status: status, OccurredAt: o.CreatedAt.UTC(), UpdatedAt: o.CreatedAt.UTC(),
+		Fee: o.PlatformFeeAmount, FeeCurrency: strings.ToUpper(str(o.PlatformFeeCurrency)),
+		Status: status, OccurredAt: o.CreatedAt.UTC(), UpdatedAt: o.CreatedAt.UTC(),
 	}
 	if o.ModifiedAt != nil {
 		p.UpdatedAt = o.ModifiedAt.UTC()

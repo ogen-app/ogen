@@ -95,10 +95,12 @@ func (v *ProductStore) Current(ctx context.Context) (billingdom.ProductMap, erro
 	return m, nil
 }
 
-// Invalidate makes the next Current reload.
+// Invalidate makes the next Current reload, after a mapping was saved. The
+// map from before the edit is no longer a good fallback, so until a reload
+// succeeds Current fails rather than sell through it.
 func (v *ProductStore) Invalidate() {
 	v.mu.Lock()
-	v.expires = time.Time{}
+	v.expires, v.loaded = time.Time{}, false
 	v.mu.Unlock()
 }
 

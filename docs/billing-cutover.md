@@ -18,7 +18,8 @@ Settings involved:
 | env | `POLAR_API_VERSION` | `2026-10` | `2026-10` |
 | env | `BILLING_TRIAL_TEARDOWN_LIVE` | `false`, then `true` once verified | `true` |
 | Harbor → Secrets | `polar_access_token` | sandbox Organization Access Token | production token |
-| Harbor → Secrets | `polar_webhook_secret` | sandbox endpoint's secret | production endpoint's secret |
+| Harbor → Secrets | `polar_webhook_secret_sandbox` | sandbox endpoint's secret | (kept, unused) |
+| Harbor → Secrets | `polar_webhook_secret_production` | not needed | production endpoint's secret |
 | Harbor → Secrets | `polar_access_token_live` | production token, `products:read` only (optional) | not needed |
 | Harbor → Billing → Product mapping | sandbox map | sandbox product ids | (kept, unused) |
 | Harbor → Billing → Product mapping | live map | prepared ahead | production product ids |
@@ -95,7 +96,9 @@ organization, and another environment's events would show up as unresolved.
    `subscription.past_due`, `subscription.paused`, `subscription.resumed`,
    `order.paid`, `order.updated`, `order.refunded`, `refund.created`,
    `refund.updated`, `checkout.expired`. Set its secret as
-   `polar_webhook_secret` and send a test event: it should get 2xx.
+   `polar_webhook_secret_sandbox` and send a test event: it should get 2xx.
+   Each mode has its own secret name, so a replica only accepts deliveries of
+   the mode it runs in.
 6. In **Harbor → Billing → Product mapping** (sandbox), accept the suggestions or
    pick each price's product. Every row should read *Matches*.
 7. Check Harbor → Billing settings shows *configured*. Boot logs a warning for a
@@ -117,13 +120,18 @@ change or re-read them. Once Polar is configured:
 
 1. In Harbor, run **InvalidateSubscriptions** with scope *Provider switch* and
    *dry run*, and check the list holds exactly the Lemon Squeezy workspaces.
-2. Run it for real. Each Lemon Squeezy subscription is invalidated
+2. In the Lemon Squeezy dashboard, cancel each of those workspaces'
+   subscriptions. Ogen does not call Lemon Squeezy and only
+   invalidates its own records, so a subscription left active there would
+   keep renewing next to the Polar one (on the test store this charges
+   nothing, but cancel it all the same).
+3. Run step 1 for real. Each Lemon Squeezy subscription is invalidated
    (`provider_switch`), its open scheduled change cancelled, its workspace put
    behind the gate (a complimentary one never is), and its owners get an in-app
    notice and the `billing_reentry_required` email. Their Zernio profiles are
    kept. A second run finds nothing.
-3. A free month taken with Lemon Squeezy does not count against the Polar one.
-4. Turn the Lemon Squeezy webhook off in the Lemon Squeezy dashboard.
+4. A free month taken with Lemon Squeezy does not count against the Polar one.
+5. Turn the Lemon Squeezy webhook off in the Lemon Squeezy dashboard.
 
 ## 3. Rehearse on staging (sandbox)
 
@@ -164,15 +172,16 @@ change or re-read them. Once Polar is configured:
 4. In one maintenance window, back to back:
    1. Add the production webhook endpoint (same URL, events and version) and,
       in **Harbor → Secrets**, set the production `polar_access_token` and
-      `polar_webhook_secret`. The replica that served the change uses them at
-      once; the others within **60 s** (secret cache).
+      `polar_webhook_secret_production`. The replica that served the change
+      uses the token at once; the others within **60 s** (secret cache).
    2. In the **env**, set `BILLING_TEST_MODE=false` and `POLAR_ORGANIZATION_ID`
       to the production organization, then deploy. The restart clears every
       replica's secret cache and switches every replica to the live map.
 
-   Until both are done the token and the mode disagree, and a delivery signed
-   with the new secret that reaches a replica still holding the old one gets 401
-   (Polar retries it).
+   Until both are done the token and the mode disagree. A replica still in the
+   sandbox verifies with `polar_webhook_secret_sandbox`, so it answers a
+   production delivery with 401 and Polar retries it on a production replica;
+   a production delivery is never recorded as a test one.
 5. When the deploy is healthy, run **ResyncSubscription** in Harbor for any
    workspace that checked out during the window, or wait one reconcile tick
    (river-service's `BILLING_RECONCILE_INTERVAL`).
@@ -204,6 +213,11 @@ change or re-read them. Once Polar is configured:
   failed is re-read by the reconcile sweep for 24 hours.
 - Credit from a downgrade, if any arises, stays in the customer's Polar balance:
   Polar does not refund it to the card.
+- Rolling back to the release before Polar: that release reads a payment
+  whose USD amounts are not known yet (no ECB rate for its day) as 0 USD.
+  Such a payment only exists for the hours before the day's rate is fetched;
+  once the Polar release is back, the next payments sync converts it and
+  Harbor's ledger, which upserts by payment id, picks up the real amounts.
 - Non-USD payments are converted at the ECB reference rate of their day; until
   that rate is fetched (by `billing_sync_payments`) their USD amounts are empty
   and Harbor skips them. The actual payout rate is reconciled separately.

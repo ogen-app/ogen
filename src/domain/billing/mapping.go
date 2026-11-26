@@ -40,6 +40,8 @@ func CheckMapping(p Price, prod Product, testMode, freeTrialTier bool) (status, 
 	switch {
 	case prod.Archived:
 		return MappingProductArchived, fmt.Sprintf("Product %s is archived; unarchive it or map another product.", prod.ID)
+	case prod.VariablePricing:
+		return MappingPriceMismatch, fmt.Sprintf("Product %s bills more than a fixed price (seats, usage or a custom amount); map a product with fixed prices only.", prod.ID)
 	case prod.TestMode != testMode:
 		return MappingModeMismatch, fmt.Sprintf("Product %s is a %s product; this is the %s map.", prod.ID, modeName(prod.TestMode), modeName(testMode))
 	case prod.Interval != p.Interval || max(prod.IntervalCount, 1) != 1:

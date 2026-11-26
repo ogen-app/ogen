@@ -45,8 +45,8 @@ func (s *Service) Reconcile(ctx context.Context) error {
 }
 
 // PlanReconcile does the part of a reconcile pass that needs no provider
-// call (failing overdue downgrades, catching unpaid trial expiries) and lists
-// the subscriptions to re-read. Only a failure to list the live subscriptions
+// call (catching unpaid trial expiries) and lists the subscriptions to
+// re-read; each re-read also checks the subscription's overdue downgrade. Only a failure to list the live subscriptions
 // is returned; the other failures are logged and left to the next tick.
 func (s *Service) PlanReconcile(ctx context.Context) (billingdom.ReconcilePlan, error) {
 	var plan billingdom.ReconcilePlan
@@ -88,9 +88,6 @@ func (s *Service) PlanReconcile(ctx context.Context) (billingdom.ReconcilePlan, 
 		plan.Subscriptions = append(plan.Subscriptions, subID)
 	}
 
-	if err := s.failOverdueChanges(ctx); err != nil {
-		errs = append(errs, err)
-	}
 	if err := s.sweepUnpaidExpired(ctx); err != nil {
 		errs = append(errs, err)
 	}
@@ -131,7 +128,7 @@ func (s *Service) ApplyResync(ctx context.Context, providerSubID string, snap bi
 	if res.changed {
 		reconcileCorrections.Add(1)
 	}
-	return nil
+	return s.failIfOverdue(ctx, providerSubID)
 }
 
 // ResyncTenant re-reads every non-invalidated subscription of one workspace.
