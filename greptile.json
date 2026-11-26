@@ -1,0 +1,34 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax"],
+  "autoReview": ["open", "push"],
+  "triggerOnDrafts": false,
+  "includeBranches": ["main"],
+  "summarySection": { "included": true, "collapsible": false },
+  "instructions": "Be terse. Skip preamble and pleasantries. State the issue, why it matters, and the fix. Prefer suggested diffs over prose.",
+  "ignorePatterns": "gen/**\nogen-data/**\nogen-keys/**\ntmp/**\ncoverage.out\n**/*.pdf\n**/.DS_Store",
+  "customContext": {
+    "rules": [
+      {
+        "scope": ["src/**/*.go"],
+        "rule": "Prefer minimal diffs. Do not add error handling, fallbacks, or validation for cases that cannot happen at internal call sites; validate only at system boundaries (HTTP input, external APIs). Avoid speculative abstractions; three similar lines beat a premature helper."
+      },
+      {
+        "scope": ["src/**/*.go"],
+        "rule": "Default to no comments. Only flag a missing comment when the WHY is non-obvious (a hidden constraint, a workaround, a subtle invariant). Comments must not reference ticket numbers or review bots."
+      },
+      {
+        "scope": ["src/handlers/**/*.go"],
+        "rule": "Authorization runs before any resource lookup. An unauthorized caller gets 403 whether or not the resource exists; never reveal existence via 404."
+      },
+      {
+        "scope": ["src/**/*.go"],
+        "rule": "Queries must stay tenant-scoped. Flag bun's Count, Exists and ScanAndCount (they skip the TenantScoped BeforeSelect hook; use repository.CountRows / RowsExist), and raw bun.Conn SQL using $1 placeholders instead of ?."
+      },
+      {
+        "scope": ["**/*.md"],
+        "rule": "Skip stylistic prose nits. Only flag factual errors, broken code samples, or stale references (renamed files, removed flags, deleted endpoints)."
+      }
+    ]
+  }
+}
