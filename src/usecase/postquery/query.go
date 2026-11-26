@@ -6,10 +6,14 @@ package postquery
 import (
 	"net/url"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ogen-app/ogen/src/domain/listquery"
 	"github.com/ogen-app/ogen/src/domain/models"
 )
+
+// maxTextLen caps the text searched for, in runes.
+const maxTextLen = 200
 
 // ParseQuery reads the posts list parameters. It rejects an unknown value with
 // a *listquery.Error; parameters it does not know are ignored.
@@ -44,6 +48,10 @@ func ParseQuery(v url.Values) (models.PostQuery, error) {
 	}
 	if q.Scheduled == models.PostScheduledNo && (q.ScheduledAfter != nil || q.ScheduledBefore != nil) {
 		return q, listquery.Invalid("scheduled", "no cannot be combined with scheduled_after or scheduled_before")
+	}
+	q.Text = listquery.Single(v, "text")
+	if utf8.RuneCountInString(q.Text) > maxTextLen {
+		return q, listquery.Invalid("text", "must be at most %d characters", maxTextLen)
 	}
 	return q, nil
 }

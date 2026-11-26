@@ -412,7 +412,7 @@ func plural(kind viewcontext.EntityKind, n int) string {
 
 // postsFilterSyntax is the posts list's and the calendar's filter syntax, for
 // setFilter's guide.
-const postsFilterSyntax = `On a posts list or the calendar the syntax is status=planned|draft|ready_for_publish|scheduled|scheduled_for_manual_publishing|failed|published|not_published, platform=<platform id>, post_type=<type>, campaign_id=<id> (comma-separate values; add _not to exclude), scheduled=yes|no (whether a post has a date), scheduled_after=YYYY-MM-DD (inclusive), scheduled_before=YYYY-MM-DD (exclusive), tz=<IANA zone> — e.g. status=failed&platform=linkedin. On the calendar the window on screen narrows it.`
+const postsFilterSyntax = `On a posts list or the calendar the syntax is status=planned|draft|ready_for_publish|scheduled|scheduled_for_manual_publishing|failed|published|not_published, platform=<platform id>, post_type=<type>, campaign_id=<id> (comma-separate values; add _not to exclude), scheduled=yes|no (whether a post has a date), scheduled_after=YYYY-MM-DD (inclusive), scheduled_before=YYYY-MM-DD (exclusive), tz=<IANA zone>, text=<words> (posts whose title, content or a thread segment contains the words, ignoring case: "the posts about pricing" is text=pricing) — e.g. status=failed&platform=linkedin, text=pricing&status=draft. On the calendar the window on screen narrows it.`
 
 // screenList is navigate's guide line of every screen.
 func screenList() string {

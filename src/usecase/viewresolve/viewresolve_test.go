@@ -206,11 +206,11 @@ func TestResolve_AllMatchingPosts(t *testing.T) {
 	r := New(ti, &fakeIdeas{}, &fakeAssets{}, posts)
 	got, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"campaign.list",
 		"scope":{"kind":"campaign","id":"c1"},
-		"selection":{"kind":"post","allMatching":true},"filter":"status=failed"}`))
+		"selection":{"kind":"post","allMatching":true},"filter":"status=failed&text=pricing"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if posts.got.ScopeCampaign != "c1" || !slices.Equal(posts.got.Status.Any, []string{"failed"}) {
+	if posts.got.ScopeCampaign != "c1" || !slices.Equal(posts.got.Status.Any, []string{"failed"}) || posts.got.Text != "pricing" {
 		t.Fatalf("query = %+v", posts.got)
 	}
 	if !slices.Equal(itemIDs(got.Selection), []string{"p1", "p2"}) || got.SelectionTotal != 2 {

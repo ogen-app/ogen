@@ -84,5 +84,11 @@ func postFilter(sel *bun.SelectQuery, q models.PostQuery) *bun.SelectQuery {
 	if q.ScheduledBefore != nil {
 		sel = sel.Where("po.scheduled_at < ?", *q.ScheduledBefore)
 	}
+	if q.Text != "" {
+		like := "%" + escapeLike(q.Text) + "%"
+		sel = sel.Where(`(po.title ILIKE ? ESCAPE '\' OR po.content ILIKE ? ESCAPE '\'
+			OR EXISTS (SELECT 1 FROM jsonb_array_elements(po.thread_segments) AS seg
+				WHERE seg->>'content' ILIKE ? ESCAPE '\'))`, like, like, like)
+	}
 	return sel
 }

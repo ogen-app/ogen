@@ -565,7 +565,7 @@ func defineTools(g *genkit.Genkit, deps Repos, packs []Pack) (*toolSet, error) {
 		spec(genkit.DefineTool(g, "setFilter",
 			"Sets the filter of the Ideas, Assets or posts list or the calendar on the user's screen, as a URL query string in the list's syntax. An empty filter clears it.",
 			assistantkit.Wrap(t.setFilter)),
-			`Call this when the user asks to see a subset of the list on screen — e.g. "show me ideas from analyses", "only undecided ones", "just the failed posts". It applies to the list on screen, or to the one you just navigated to. Build on the current filter (getFocus) unless the user starts over. `+postsFilterSyntax),
+			`Call this when the user asks to see a subset of the list on screen — e.g. "show me ideas from analyses", "only undecided ones", "just the failed posts", "the posts about pricing". It applies to the list on screen, or to the one you just navigated to. Build on the current filter (getFocus) unless the user starts over. `+postsFilterSyntax),
 		spec(genkit.DefineTool(g, "select",
 			"Selects items on the list on the user's screen — the Ideas, Assets or posts list, the calendar, or the Foundation's voices, audiences, facts or series — replacing the selection. Takes their ids.",
 			assistantkit.Wrap(t.selectItems)),
