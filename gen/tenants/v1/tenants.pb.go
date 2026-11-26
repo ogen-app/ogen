@@ -205,7 +205,7 @@ type Tenant struct {
 	// reported whether or not billing is on); ” when billing is off
 	// (BILLING_PROVIDER=none); not_required (grandfathered or exempted);
 	// awaiting_checkout (gated, never
-	// subscribed); otherwise the Lemon Squeezy status of the workspace's current
+	// subscribed); otherwise the Ogen status of the workspace's current
 	// subscription (on_trial | active | past_due | unpaid | paused | cancelled |
 	// expired).
 	BillingStatus string `protobuf:"bytes,10,opt,name=billing_status,json=billingStatus,proto3" json:"billing_status,omitempty"`

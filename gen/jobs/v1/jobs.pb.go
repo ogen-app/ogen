@@ -319,6 +319,7 @@ func (x *EnqueueRequest) GetReanalyzeCampaign() *ReanalyzeCampaignArgs {
 	return nil
 }
 
+// Deprecated: Marked as deprecated in jobs/v1/jobs.proto.
 func (x *EnqueueRequest) GetBillingApplyScheduledChange() *BillingApplyScheduledChangeArgs {
 	if x != nil {
 		if x, ok := x.Args.(*EnqueueRequest_BillingApplyScheduledChange); ok {
@@ -458,6 +459,10 @@ type EnqueueRequest_ReanalyzeCampaign struct {
 }
 
 type EnqueueRequest_BillingApplyScheduledChange struct {
+	// Deprecated (CON-523): Polar schedules downgrades itself; ogen no longer
+	// enqueues this kind and drains any left in the queue as a no-op.
+	//
+	// Deprecated: Marked as deprecated in jobs/v1/jobs.proto.
 	BillingApplyScheduledChange *BillingApplyScheduledChangeArgs `protobuf:"bytes,18,opt,name=billing_apply_scheduled_change,json=billingApplyScheduledChange,proto3,oneof"`
 }
 
@@ -2221,11 +2226,12 @@ func (x *BuildWeeklyReportArgs) GetWeekStart() string {
 	return ""
 }
 
-// BillingApplyScheduledChangeArgs advances a scheduled plan change: an hour
-// before it takes effect the provider moves to the new variant, and at the
-// effective time the workspace moves to the new tier. ogen picks the due step
-// from the change's status. Both steps are queued when the change is made,
-// each with its own scheduled_at.
+// BillingApplyScheduledChangeArgs advanced a Lemon Squeezy scheduled plan
+// change in two timed steps. Deprecated (CON-523): Polar holds a downgrade as
+// a pending update and applies it at renewal, so no job is queued; the
+// message stays until queued jobs have drained.
+//
+// Deprecated: Marked as deprecated in jobs/v1/jobs.proto.
 type BillingApplyScheduledChangeArgs struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ChangeId      string                 `protobuf:"bytes,1,opt,name=change_id,json=changeId,proto3" json:"change_id,omitempty"`
@@ -2274,7 +2280,7 @@ var File_jobs_v1_jobs_proto protoreflect.FileDescriptor
 
 const file_jobs_v1_jobs_proto_rawDesc = "" +
 	"\n" +
-	"\x12jobs/v1/jobs.proto\x12\ajobs.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x84\x0f\n" +
+	"\x12jobs/v1/jobs.proto\x12\ajobs.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x88\x0f\n" +
 	"\x0eEnqueueRequest\x12T\n" +
 	"\x15submit_post_to_zernio\x18\x01 \x01(\v2\x1f.jobs.v1.SubmitPostToZernioArgsH\x00R\x12submitPostToZernio\x12M\n" +
 	"\x12poll_zernio_status\x18\x02 \x01(\v2\x1d.jobs.v1.PollZernioStatusArgsH\x00R\x10pollZernioStatus\x12J\n" +
@@ -2296,8 +2302,8 @@ const file_jobs_v1_jobs_proto_rawDesc = "" +
 	"\rprocess_audio\x18\x0e \x01(\v2\x19.jobs.v1.ProcessAudioArgsH\x00R\fprocessAudio\x12@\n" +
 	"\rreembed_image\x18\x0f \x01(\v2\x19.jobs.v1.ReembedImageArgsH\x00R\freembedImage\x12@\n" +
 	"\ranalyze_asset\x18\x10 \x01(\v2\x19.jobs.v1.AnalyzeAssetArgsH\x00R\fanalyzeAsset\x12O\n" +
-	"\x12reanalyze_campaign\x18\x11 \x01(\v2\x1e.jobs.v1.ReanalyzeCampaignArgsH\x00R\x11reanalyzeCampaign\x12o\n" +
-	"\x1ebilling_apply_scheduled_change\x18\x12 \x01(\v2(.jobs.v1.BillingApplyScheduledChangeArgsH\x00R\x1bbillingApplyScheduledChange\x12@\n" +
+	"\x12reanalyze_campaign\x18\x11 \x01(\v2\x1e.jobs.v1.ReanalyzeCampaignArgsH\x00R\x11reanalyzeCampaign\x12s\n" +
+	"\x1ebilling_apply_scheduled_change\x18\x12 \x01(\v2(.jobs.v1.BillingApplyScheduledChangeArgsB\x02\x18\x01H\x00R\x1bbillingApplyScheduledChange\x12@\n" +
 	"\rdistill_brand\x18\x13 \x01(\v2\x19.jobs.v1.DistillBrandArgsH\x00R\fdistillBrand\x12P\n" +
 	"\x13distill_asset_ideas\x18\x14 \x01(\v2\x1e.jobs.v1.DistillAssetIdeasArgsH\x00R\x11distillAssetIdeas\x12P\n" +
 	"\x13build_weekly_report\x18\x15 \x01(\v2\x1e.jobs.v1.BuildWeeklyReportArgsH\x00R\x11buildWeeklyReport\x12o\n" +
@@ -2430,9 +2436,9 @@ const file_jobs_v1_jobs_proto_rawDesc = "" +
 	"\x15BuildWeeklyReportArgs\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
-	"week_start\x18\x02 \x01(\tR\tweekStart\">\n" +
+	"week_start\x18\x02 \x01(\tR\tweekStart\"B\n" +
 	"\x1fBillingApplyScheduledChangeArgs\x12\x1b\n" +
-	"\tchange_id\x18\x01 \x01(\tR\bchangeId*\xe9\x01\n" +
+	"\tchange_id\x18\x01 \x01(\tR\bchangeId:\x02\x18\x01*\xe9\x01\n" +
 	"\bJobState\x12\x19\n" +
 	"\x15JOB_STATE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13JOB_STATE_AVAILABLE\x10\x01\x12\x17\n" +

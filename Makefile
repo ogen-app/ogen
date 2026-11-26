@@ -110,7 +110,10 @@ lint:
 # weekly-report kinds in v1.21.0 and BuildWeeklyReportArgs in v1.22.0 (CON-332);
 # receipts.v1 (ReceiptService), billing.v1 ListPayments and the jobs.v1
 # receipt-notification args in v1.23.0 (CON-415); vendorcost.v1
-# (VendorCostService) in v1.24.0 (CON-435)
+# (VendorCostService) in v1.24.0 (CON-435); billing.v1 product mapping,
+# InvalidateSubscriptions(scope), Payment FX fields and optional USD amounts,
+# and the jobs.v1 billing_apply_scheduled_change deprecation in v1.26.0
+# (CON-531, Polar)
 # — publish the proto repo tag before `make proto` can resolve it. To try an untagged change, generate from a local checkout:
 # make proto PROTO_SOURCE=../proto/proto
 PROTO_MODULE  := buf.build/ogen-app/proto
