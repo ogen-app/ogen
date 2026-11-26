@@ -5,8 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -120,11 +120,11 @@ type PlanResult struct {
 
 // ChangePlan applies the owner's plan choice. A complimentary workspace with
 // no live subscription switches at once, with no checkout and no provider
-// call. Otherwise, without a live subscription it
-// opens a checkout. With one: an upgrade lands now with proration; a
-// downgrade is scheduled for the renewal; choosing the current plan cancels a
-// pending downgrade; and any tier change during the free month ends it and
-// charges the new tier now. Nothing local changes before the provider agrees.
+// call. Otherwise, without a live subscription it opens a checkout. With
+// one: an upgrade lands now with proration; a downgrade is held by the
+// provider for the renewal; choosing the current plan cancels a pending
+// downgrade; and any tier change during the free month ends it and charges
+// the new tier now. Nothing local changes before the provider agrees.
 func (s *Service) ChangePlan(ctx context.Context, req PlanRequest) (PlanResult, error) {
 	// A complimentary workspace switches for free, billing on or off.
 	if comp, err := s.compChangeApplies(ctx, req.TenantID); err != nil {
@@ -138,7 +138,7 @@ func (s *Service) ChangePlan(ctx context.Context, req PlanRequest) (PlanResult, 
 	if err := s.tenantExists(ctx, req.TenantID); err != nil {
 		return PlanResult{}, err
 	}
-	target, variantID, err := s.resolveTarget(ctx, req.TierID, req.PriceID)
+	target, productID, err := s.resolveTarget(ctx, req.TierID, req.PriceID)
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -148,7 +148,7 @@ func (s *Service) ChangePlan(ctx context.Context, req PlanRequest) (PlanResult, 
 	}
 	sub := s.liveSubscription(subs)
 	if sub == nil {
-		co, err := s.startCheckout(ctx, req.Buyer, target, variantID)
+		co, err := s.startCheckout(ctx, req.Buyer, target, productID)
 		if err != nil {
 			return PlanResult{}, err
 		}
@@ -158,7 +158,7 @@ func (s *Service) ChangePlan(ctx context.Context, req PlanRequest) (PlanResult, 
 		return PlanResult{}, ErrNotChangeable
 	}
 	// While a downgrade is pending the workspace is still on the plan it is
-	// leaving, even if the provider already carries the cheaper variant.
+	// leaving.
 	currentID := *sub.TierVersionPriceID
 	if open, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID); err == nil {
 		currentID = open.FromTierVersionPriceID
@@ -177,18 +177,19 @@ func (s *Service) ChangePlan(ctx context.Context, req PlanRequest) (PlanResult, 
 	dir := billingdom.Direction(current, target)
 	switch {
 	case dir == billingdom.DirectionSame:
-		return PlanResult{}, s.cancelPendingChange(ctx, sub, current)
+		return PlanResult{}, s.cancelPendingChange(ctx, sub)
 	case sub.Status == models.SubscriptionStatusOnTrial:
-		return PlanResult{}, s.changeDuringTrial(ctx, req, sub, current, target, variantID)
+		return PlanResult{}, s.changeDuringTrial(ctx, req, sub, current, target, productID)
 	case dir == billingdom.DirectionUpgrade:
-		return PlanResult{}, s.upgradeNow(ctx, req, sub, current, target, variantID, billingdom.ChangeOpts{InvoiceNow: true}, models.AssignmentReasonUpgrade)
+		return PlanResult{}, s.upgradeNow(ctx, req, sub, current, target, productID, billingdom.ChangeOpts{Timing: billingdom.ChargeNow}, models.AssignmentReasonUpgrade)
 	default:
-		return PlanResult{}, s.scheduleDowngrade(ctx, req, sub, current, target)
+		return PlanResult{}, s.scheduleDowngrade(ctx, req, sub, current, target, productID)
 	}
 }
 
-// resolveTarget finds the version and price the owner picked and the variant
-// that sells it.
+// resolveTarget finds the version and price the owner picked and the product
+// that sells it. A price whose product is unmapped or archived cannot be
+// bought.
 func (s *Service) resolveTarget(ctx context.Context, tierOrVersionID, priceID string) (billingdom.Price, string, error) {
 	version, err := s.d.TierVersions.GetByID(ctx, tierOrVersionID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -220,19 +221,22 @@ func (s *Service) resolveTarget(ctx context.Context, tierOrVersionID, priceID st
 		}
 		return billingdom.Price{}, "", ErrPriceMismatch
 	}
-	variants, err := s.variantMap(ctx)
+	products, err := s.productMap(ctx)
 	if err != nil {
 		return billingdom.Price{}, "", err
 	}
-	variantID, ok := variants.Variant(priceID)
+	productID, ok := products.Product(priceID)
 	if !ok {
+		return billingdom.Price{}, "", ErrTierNotAvailable
+	}
+	if p, err := s.product(ctx, productID); err == nil && p.Archived {
 		return billingdom.Price{}, "", ErrTierNotAvailable
 	}
 	prices, err := s.d.Repo.Prices(ctx, []string{priceID})
 	if err != nil {
 		return billingdom.Price{}, "", err
 	}
-	return prices[priceID], variantID, nil
+	return prices[priceID], productID, nil
 }
 
 // defaultPrice is the monthly default-country price, else the first monthly,
@@ -252,17 +256,76 @@ func defaultPrice(rows []models.TenantTierVersionPrice) string {
 	return cmp.Or(monthly, first)
 }
 
-// upgradeNow switches the provider first, then mirrors the answer and moves the
-// tier in one transaction.
-func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.BillingSubscription, current, target billingdom.Price, variantID string, opts billingdom.ChangeOpts, reason string) error {
-	snap, err := s.d.Provider.ChangePlan(ctx, sub.ProviderSubscriptionID, variantID, opts)
-	if err != nil {
-		if opts.EndTrialNow && !billingdom.IsRetryable(err) {
-			return ErrTrialChangeUnavailable
+// lockedRetryDelay spaces the one retry of a change the provider refused
+// because another change of the subscription was in flight.
+var lockedRetryDelay = time.Second
+
+// changeAtProvider makes a plan change at the provider and maps its refusals:
+// a declined or unauthenticated charge is ErrPaymentFailed, a subscription
+// the provider already cancelled is ErrNotChangeable (and the mirror is
+// re-read), a locked subscription is retried once.
+func (s *Service) changeAtProvider(ctx context.Context, sub *models.BillingSubscription, productID string, opts billingdom.ChangeOpts) (billingdom.Subscription, error) {
+	snap, err := s.d.Provider.ChangePlan(ctx, sub.ProviderSubscriptionID, productID, opts)
+	if locked(err) {
+		select {
+		case <-ctx.Done():
+			return billingdom.Subscription{}, ctx.Err()
+		case <-time.After(lockedRetryDelay):
 		}
-		return providerErr(err)
+		snap, err = s.d.Provider.ChangePlan(ctx, sub.ProviderSubscriptionID, productID, opts)
 	}
-	variants, err := s.variantMap(ctx)
+	switch {
+	case err == nil:
+		return snap, nil
+	case errors.Is(err, billingdom.ErrPaymentFailed):
+		return billingdom.Subscription{}, ErrPaymentFailed
+	case errors.Is(err, billingdom.ErrAlreadyCanceled):
+		s.refresh(ctx, sub.ProviderSubscriptionID)
+		return billingdom.Subscription{}, ErrNotChangeable
+	case opts.EndTrialNow && !billingdom.IsRetryable(err):
+		return billingdom.Subscription{}, ErrTrialChangeUnavailable
+	}
+	countProviderError(err)
+	return billingdom.Subscription{}, providerErr(err)
+}
+
+// locked reports whether the provider refused a change because another one
+// was in flight.
+func locked(err error) bool {
+	l, ok := errors.AsType[interface {
+		error
+		Locked() bool
+	}](err)
+	return ok && l.Locked()
+}
+
+// refresh re-reads a subscription and mirrors it; a failure is only logged,
+// the reconcile sweep catches up.
+func (s *Service) refresh(ctx context.Context, providerSubID string) {
+	snap, err := s.d.Provider.GetSubscription(ctx, providerSubID)
+	if err != nil {
+		slog.WarnContext(ctx, "billing: re-read after a refused change failed", logging.AttrComponent, "billing", "subscription", providerSubID, logging.AttrError, err)
+		return
+	}
+	s.mirrorAfter(ctx, snap, "refused change")
+}
+
+// upgradeNow switches the provider first, then mirrors the answer and moves the
+// tier in one transaction. A downgrade still pending is cancelled at the
+// provider before, so two changes are never held at once.
+func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.BillingSubscription, current, target billingdom.Price, productID string, opts billingdom.ChangeOpts, reason string) error {
+	open, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err := s.dropProviderChange(ctx, sub, open); err != nil {
+		return err
+	}
+	snap, err := s.changeAtProvider(ctx, sub, productID, opts)
+	if err != nil {
+		return err
+	}
+	products, err := s.productMap(ctx)
 	if err != nil {
 		return err
 	}
@@ -274,15 +337,15 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 		if err := s.cancelOpenChange(ctx, tx, row.ID, "replaced by a plan change"); err != nil {
 			return err
 		}
-		if snap.UpdatedAt.After(row.ProviderUpdatedAt) {
-			s.copySnapshot(row, snap, variants)
-			// The variant was resolved to target before the switch; a
+		if snap.UpdatedAt.After(row.ProviderUpdatedAt) && snap.Status != "" {
+			s.copySnapshot(row, snap, products)
+			// The product was resolved to target before the switch; a
 			// mapping changed since must not detach the price the tier moves to.
-			if snap.VariantID == variantID {
+			if snap.ProductID == productID {
 				row.TierVersionPriceID = new(target.ID)
 			}
 		} else {
-			row.ProviderVariantID, row.TierVersionPriceID = variantID, new(target.ID)
+			row.ProviderProductID, row.ProviderVariantID, row.TierVersionPriceID = productID, productID, new(target.ID)
 		}
 		row.UpdatedAt = s.now()
 		if err := s.d.Repo.UpdateSubscription(ctx, tx, row); err != nil {
@@ -310,63 +373,73 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 // changeDuringTrial: the free month belongs to the marked tier only, so a tier
 // change ends it and charges the new tier now. A month/year switch on the same
 // tier keeps the trial.
-func (s *Service) changeDuringTrial(ctx context.Context, req PlanRequest, sub *models.BillingSubscription, current, target billingdom.Price, variantID string) error {
+func (s *Service) changeDuringTrial(ctx context.Context, req PlanRequest, sub *models.BillingSubscription, current, target billingdom.Price, productID string) error {
 	reason := models.AssignmentReasonUpgrade
 	if billingdom.Direction(current, target) == billingdom.DirectionDowngrade {
 		reason = models.AssignmentReasonDowngrade
 	}
-	opts := billingdom.ChangeOpts{InvoiceNow: true, EndTrialNow: true}
+	opts := billingdom.ChangeOpts{Timing: billingdom.ChargeNow, EndTrialNow: true}
 	if current.TierID == target.TierID {
-		opts = billingdom.ChangeOpts{NoProration: true}
+		opts = billingdom.ChangeOpts{Timing: billingdom.NoCharge}
 	}
-	return s.upgradeNow(ctx, req, sub, current, target, variantID, opts, reason)
+	return s.upgradeNow(ctx, req, sub, current, target, productID, opts, reason)
 }
 
-// scheduleDowngrade records the downgrade for the renewal date and schedules
-// its two steps.
-func (s *Service) scheduleDowngrade(ctx context.Context, req PlanRequest, sub *models.BillingSubscription, current, target billingdom.Price) error {
+// scheduleDowngrade has the provider hold the downgrade for the renewal, then
+// records it. The provider applies it at renewal and the renewal's snapshot
+// moves the tier; no job runs. Picking another lower plan replaces it.
+func (s *Service) scheduleDowngrade(ctx context.Context, req PlanRequest, sub *models.BillingSubscription, current, target billingdom.Price, productID string) error {
 	if sub.RenewsAt == nil {
 		return ErrNotChangeable
 	}
+	open, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID)
+	switch {
+	case err == nil && open.ToTierVersionPriceID == target.ID:
+		return nil // already scheduled
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return err
+	}
+	snap, err := s.changeAtProvider(ctx, sub, productID, billingdom.ChangeOpts{Timing: billingdom.NextPeriod})
+	if err != nil {
+		return err
+	}
 	effective := *sub.RenewsAt
-	err := s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		open, err := s.d.Repo.OpenScheduledChange(ctx, tx, sub.ID)
-		switch {
-		case err == nil && open.ToTierVersionPriceID == target.ID:
-			return nil // already scheduled
-		case err == nil:
-			if open.Status == models.ScheduledChangeProviderApplied {
-				// The provider already carries the earlier target; the new
-				// change's own step re-points it before the renewal.
-				slog.InfoContext(ctx, "billing: replacing a provider-applied downgrade", logging.AttrComponent, "billing", "change_id", open.ID)
-			}
-			if _, err := s.d.Repo.SetScheduledChangeStatus(ctx, tx, open.ID, []string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied}, models.ScheduledChangeCancelled, "replaced by a new downgrade", s.now()); err != nil {
-				return err
-			}
-		case !errors.Is(err, sql.ErrNoRows):
+	switch {
+	case snap.PendingEffectiveAt != nil:
+		effective = *snap.PendingEffectiveAt
+	case snap.RenewsAt != nil:
+		effective = *snap.RenewsAt
+	}
+	products, err := s.productMap(ctx)
+	if err != nil {
+		return err
+	}
+	err = s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		row, err := s.d.Repo.GetSubscriptionByProviderID(ctx, tx, sub.Provider, sub.ProviderSubscriptionID, true)
+		if err != nil {
+			return err
+		}
+		if err := s.cancelOpenChange(ctx, tx, row.ID, "replaced by a new downgrade"); err != nil {
 			return err
 		}
 		id, err := models.NewID()
 		if err != nil {
 			return err
 		}
-		change := &models.BillingScheduledChange{
-			ID: id, TenantID: req.TenantID, BillingSubscriptionID: sub.ID,
+		if err := s.d.Repo.InsertScheduledChange(ctx, tx, &models.BillingScheduledChange{
+			ID: id, TenantID: req.TenantID, BillingSubscriptionID: row.ID,
 			FromTierVersionPriceID: current.ID, ToTierVersionPriceID: target.ID,
-			EffectiveAt: effective, Status: models.ScheduledChangePending, CreatedBy: req.UserID,
+			EffectiveAt: effective, Status: models.ScheduledChangeProviderApplied, CreatedBy: req.UserID,
 			CreatedAt: s.now(), UpdatedAt: s.now(),
-		}
-		if err := s.d.Repo.InsertScheduledChange(ctx, tx, change); err != nil {
+		}); err != nil {
 			return err
 		}
-		providerStep := effective.Add(-scheduledChangeLead)
-		if providerStep.Before(s.now()) {
-			providerStep = s.now()
+		if !snap.UpdatedAt.After(row.ProviderUpdatedAt) || snap.Status == "" {
+			return nil
 		}
-		if err := s.d.Jobs.EnqueueScheduledChangeStepTx(ctx, tx.Tx, id, providerStep); err != nil {
-			return err
-		}
-		return s.d.Jobs.EnqueueScheduledChangeStepTx(ctx, tx.Tx, id, effective)
+		s.copySnapshot(row, snap, products)
+		row.UpdatedAt = s.now()
+		return s.d.Repo.UpdateSubscription(ctx, tx, row)
 	})
 	if err != nil {
 		return err
@@ -377,229 +450,89 @@ func (s *Service) scheduleDowngrade(ctx context.Context, req PlanRequest, sub *m
 	return nil
 }
 
-// cancelPendingChange: choosing the current plan cancels a pending downgrade.
-// If the provider was already switched, it is switched back first.
-func (s *Service) cancelPendingChange(ctx context.Context, sub *models.BillingSubscription, current billingdom.Price) error {
-	// The T-1h push can switch the provider between our read and our write, so
-	// the cancel only moves the change from the status it saw; a miss re-reads
-	// it and reverts the provider if the push got there first.
-	for range cancelAttempts {
-		open, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		var snap billingdom.Subscription
-		reverted := open.Status == models.ScheduledChangeProviderApplied
-		if reverted {
-			if snap, err = s.revertProvider(ctx, sub, open); err != nil {
-				return err
-			}
-		}
-		ok, err := s.d.Repo.SetScheduledChangeStatus(ctx, nil, open.ID, []string{open.Status}, models.ScheduledChangeCancelled, "kept the current plan", s.now())
-		if err != nil {
-			return err
-		}
-		if !ok {
-			continue
-		}
-		if reverted {
-			s.mirrorAfter(ctx, snap, "revert")
-		}
-		s.publish(ctx, sub.TenantID, true)
+// cancelPendingChange: choosing the current plan cancels a pending downgrade,
+// at the provider first.
+func (s *Service) cancelPendingChange(ctx context.Context, sub *models.BillingSubscription) error {
+	open, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
-	return ErrNotChangeable
+	if err != nil {
+		return err
+	}
+	if err := s.dropProviderChange(ctx, sub, open); err != nil {
+		return err
+	}
+	if _, err := s.d.Repo.SetScheduledChangeStatus(ctx, nil, open.ID, []string{open.Status}, models.ScheduledChangeCancelled, "kept the current plan", s.now()); err != nil {
+		return err
+	}
+	s.publish(ctx, sub.TenantID, true)
+	return nil
 }
 
-// cancelAttempts bounds the cancel's re-reads; each miss means the change
-// moved one step (pending → provider_applied → applied), so three cover it.
-const cancelAttempts = 3
-
-// revertProvider puts the subscription back on the change's original price,
-// without proration.
-func (s *Service) revertProvider(ctx context.Context, sub *models.BillingSubscription, change *models.BillingScheduledChange) (billingdom.Subscription, error) {
-	variants, err := s.variantMap(ctx)
+// dropProviderChange clears the change the provider holds for the
+// subscription's next period, when the mirror shows one or a downgrade the
+// provider holds is open (the mirror may not have caught up), and mirrors the
+// answer.
+func (s *Service) dropProviderChange(ctx context.Context, sub *models.BillingSubscription, open *models.BillingScheduledChange) error {
+	held := open != nil && open.Status == models.ScheduledChangeProviderApplied
+	if sub.PendingProductID == "" && !held {
+		return nil
+	}
+	snap, err := s.d.Provider.CancelScheduledChange(ctx, sub.ProviderSubscriptionID, sub.ProviderProductID)
 	if err != nil {
-		return billingdom.Subscription{}, err
+		countProviderError(err)
+		return providerErr(err)
 	}
-	variantID, ok := variants.Variant(change.FromTierVersionPriceID)
-	if !ok {
-		return billingdom.Subscription{}, ErrTierNotAvailable
-	}
-	snap, err := s.d.Provider.ChangePlan(ctx, sub.ProviderSubscriptionID, variantID, billingdom.ChangeOpts{NoProration: true})
-	if err != nil {
-		return billingdom.Subscription{}, providerErr(err)
-	}
-	return snap, nil
+	s.mirrorAfter(ctx, snap, "cancelled downgrade")
+	sub.PendingProductID, sub.PendingEffectiveAt = snap.PendingProductID, snap.PendingEffectiveAt
+	return nil
 }
 
 // mirrorAfter applies a provider snapshot taken after our own change; a
 // failure is only logged because the webhook for that change re-applies it.
 func (s *Service) mirrorAfter(ctx context.Context, snap billingdom.Subscription, step string) {
-	if _, err := s.applySnapshot(ctx, snap, nil); err != nil {
+	if _, err := s.applySnapshot(ctx, snap); err != nil {
 		slog.WarnContext(ctx, "billing: mirror after "+step+" failed; the next webhook fixes it", logging.AttrComponent, "billing", logging.AttrError, err)
 	}
 }
 
-// RunScheduledChange advances one scheduled downgrade: at effective_at - 1h
-// it switches the provider without proration (so the renewal charges the new
-// price); at effective_at it moves the tier. Each step is idempotent, so a
-// duplicate job or the reconcile sweep re-driving it is harmless. It calls the
-// provider directly; the billing_apply_scheduled_change job runs the same
-// pieces through river-service, which knows the attempt.
-func (s *Service) RunScheduledChange(ctx context.Context, changeID string) error {
-	call, err := s.NextScheduledChange(ctx, changeID)
-	if err != nil || call == nil {
+// scheduledChangeGrace is how long after its effective time a downgrade the
+// provider holds may take to land before reconcile calls it failed.
+const scheduledChangeGrace = time.Hour
+
+// failOverdueChanges fails the downgrades that should have landed at renewal
+// but did not: past effective_at by the grace, the mirror is still on another
+// product and the provider holds nothing. The tier stays where it is; the
+// operator decides (Harbor attention: scheduled_change_failed).
+func (s *Service) failOverdueChanges(ctx context.Context) error {
+	changes, err := s.d.Repo.ListOverdueScheduledChanges(ctx, s.now().Add(-scheduledChangeGrace))
+	if err != nil {
 		return err
 	}
-	snap, callErr := s.d.Provider.ChangePlan(ctx, call.SubscriptionID, call.VariantID, call.Opts())
-	revert, err := s.ScheduledChangePushed(ctx, changeID, snap, callErr, false)
-	if err != nil || revert == nil {
+	products, err := s.productMap(ctx)
+	if err != nil {
 		return err
 	}
-	snap, callErr = s.d.Provider.ChangePlan(ctx, revert.SubscriptionID, revert.VariantID, revert.Opts())
-	return s.ScheduledChangeReverted(ctx, snap, callErr)
-}
-
-// NextScheduledChange does the due step of a scheduled change that needs no
-// provider call (moving the tier at effective_at, failing a change whose
-// price lost its variant) and returns the provider switch the push at
-// effective_at - 1h needs. nil means nothing is due.
-func (s *Service) NextScheduledChange(ctx context.Context, changeID string) (*billingdom.PlanSwitch, error) {
-	if !s.Enabled() {
-		return nil, nil
-	}
-	change, err := s.d.Repo.GetScheduledChange(ctx, nil, changeID, false)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	now := s.now()
-	switch {
-	case change.Status == models.ScheduledChangePending && !now.Before(change.EffectiveAt.Add(-scheduledChangeLead)):
-		sub, err := s.d.Repo.GetSubscription(ctx, change.BillingSubscriptionID)
+	var errs []error
+	for i := range changes {
+		c := &changes[i]
+		sub, err := s.d.Repo.GetSubscription(ctx, c.BillingSubscriptionID)
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
+			continue
 		}
-		variants, err := s.variantMap(ctx)
-		if err != nil {
-			return nil, err
+		if !s.ours(sub) || sub.PendingProductID != "" {
+			continue
 		}
-		variantID, ok := variants.Variant(change.ToTierVersionPriceID)
-		if !ok {
-			return nil, s.failChange(ctx, change, "target price has no variant")
+		if target, ok := products.Product(c.ToTierVersionPriceID); ok && target == sub.ProviderProductID {
+			continue // landed; its snapshot marks it applied
 		}
-		return &billingdom.PlanSwitch{SubscriptionID: sub.ProviderSubscriptionID, VariantID: variantID}, nil
-	case change.Status == models.ScheduledChangeProviderApplied && !now.Before(change.EffectiveAt):
-		return nil, s.landScheduledChange(ctx, change)
-	default:
-		return nil, nil // not due yet, or already done
-	}
-}
-
-// ScheduledChangePushed records the push's outcome. A failed push is retried,
-// or on the last attempt or a terminal error fails the change. A push that
-// landed after the change left pending (the owner kept the plan, or it
-// failed) returns the switch that puts the provider back on the original
-// price.
-func (s *Service) ScheduledChangePushed(ctx context.Context, changeID string, snap billingdom.Subscription, callErr error, lastAttempt bool) (*billingdom.PlanSwitch, error) {
-	change, err := s.d.Repo.GetScheduledChange(ctx, nil, changeID, false)
-	if err != nil {
-		return nil, err
-	}
-	if callErr != nil {
-		if lastAttempt || !billingdom.IsRetryable(callErr) {
-			return nil, s.failChange(ctx, change, callErr.Error())
+		if err := s.failChange(ctx, c, "the provider did not apply the downgrade at renewal"); err != nil {
+			errs = append(errs, err)
 		}
-		return nil, callErr
 	}
-	ok, err := s.d.Repo.SetScheduledChangeStatus(ctx, nil, change.ID, []string{models.ScheduledChangePending}, models.ScheduledChangeProviderApplied, "", s.now())
-	if err != nil {
-		return nil, err
-	}
-	if ok {
-		// The open change now matches the new variant, so mirroring does not
-		// move the tier early.
-		s.mirrorAfter(ctx, snap, "scheduled push")
-		return nil, nil
-	}
-	return s.missedPush(ctx, change.ID)
-}
-
-// missedPush handles a push whose provider switch landed after the change
-// left pending. A duplicate push already marked it provider_applied and
-// needs nothing; an owner who kept the plan, or a failed change, needs the
-// provider back on the original price.
-func (s *Service) missedPush(ctx context.Context, changeID string) (*billingdom.PlanSwitch, error) {
-	change, err := s.d.Repo.GetScheduledChange(ctx, nil, changeID, false)
-	if err != nil {
-		return nil, err
-	}
-	if change.Status != models.ScheduledChangeCancelled && change.Status != models.ScheduledChangeFailed {
-		return nil, nil
-	}
-	sub, err := s.d.Repo.GetSubscription(ctx, change.BillingSubscriptionID)
-	if err != nil {
-		return nil, err
-	}
-	variants, err := s.variantMap(ctx)
-	if err != nil {
-		return nil, err
-	}
-	variantID, ok := variants.Variant(change.FromTierVersionPriceID)
-	if !ok {
-		return nil, ErrTierNotAvailable
-	}
-	return &billingdom.PlanSwitch{SubscriptionID: sub.ProviderSubscriptionID, VariantID: variantID}, nil
-}
-
-// ScheduledChangeReverted mirrors the provider after a missed push was put
-// back.
-func (s *Service) ScheduledChangeReverted(ctx context.Context, snap billingdom.Subscription, callErr error) error {
-	if callErr != nil {
-		return providerErr(callErr)
-	}
-	s.mirrorAfter(ctx, snap, "revert of a cancelled push")
-	return nil
-}
-
-func (s *Service) landScheduledChange(ctx context.Context, change *models.BillingScheduledChange) error {
-	var moved bool
-	err := s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		locked, err := s.d.Repo.GetScheduledChange(ctx, tx, change.ID, true)
-		if err != nil {
-			return err
-		}
-		if locked.Status != models.ScheduledChangeProviderApplied {
-			return nil
-		}
-		prices, err := s.d.Repo.Prices(ctx, []string{locked.ToTierVersionPriceID})
-		if err != nil {
-			return err
-		}
-		to, ok := prices[locked.ToTierVersionPriceID]
-		if !ok {
-			return fmt.Errorf("billing: scheduled change %s targets a missing price", locked.ID)
-		}
-		if _, err := s.d.Assignments.ReassignTx(ctx, tx, locked.TenantID, to.TierID, &to.TierVersionID, models.AssignmentReasonDowngrade, locked.EffectiveAt); err != nil {
-			return err
-		}
-		moved = true
-		_, err = s.d.Repo.SetScheduledChangeStatus(ctx, tx, locked.ID, []string{models.ScheduledChangeProviderApplied}, models.ScheduledChangeApplied, "", s.now())
-		return err
-	})
-	if err != nil || !moved {
-		return err
-	}
-	s.publish(ctx, change.TenantID, true)
-	s.emit(ctx, []notice{{tenantID: change.TenantID, subID: change.BillingSubscriptionID, typ: "plan_changed", episode: change.ID, level: models.NotificationLevelInfo,
-		title: "Your plan changed", body: "Your downgrade took effect with this billing period."}})
-	return nil
+	return errors.Join(errs...)
 }
 
 func (s *Service) failChange(ctx context.Context, change *models.BillingScheduledChange, why string) error {
@@ -619,4 +552,16 @@ func (s *Service) recordPlanChange(ctx context.Context, req PlanRequest, typ str
 	s.d.Activity.Record(tenantctx.With(ctx, req.TenantID), activity.CategoryBilling, typ,
 		activity.WithUser(req.UserID), activity.WithSource(activity.SourceAPI),
 		activity.WithPayload(map[string]any{"from_price_id": from.ID, "to_price_id": to.ID}))
+}
+
+// countProviderError counts a provider failure by HTTP status, when it has one.
+func countProviderError(err error) {
+	key := "transport"
+	if st, ok := errors.AsType[interface {
+		error
+		HTTPStatus() int
+	}](err); ok {
+		key = strconv.Itoa(st.HTTPStatus())
+	}
+	providerErrors.Add(key, 1)
 }

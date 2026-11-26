@@ -46,8 +46,8 @@ func TestRetireRiverMovesLiveJobs(t *testing.T) {
 	}
 
 	moved, err := queues.RetireRiver(ctx, db.DB)
-	if err != nil || moved != 4 {
-		t.Fatalf("RetireRiver = %d, %v; want 4 moved", moved, err)
+	if err != nil || moved != 3 {
+		t.Fatalf("RetireRiver = %d, %v; want 3 moved", moved, err)
 	}
 	var scheduled time.Time
 	if err := db.DB.QueryRowContext(ctx, `SELECT (payload->>'scheduledAt')::timestamptz FROM job_outbox
@@ -63,12 +63,8 @@ func TestRetireRiverMovesLiveJobs(t *testing.T) {
 	if n := count(t, db, `SELECT count(*) FROM job_outbox WHERE kind = 'build_weekly_report' AND payload->'buildWeeklyReport'->>'weekStart' = '2026-10-26'`); n != 1 {
 		t.Errorf("moved build_weekly_report rows = %d, want 1", n)
 	}
-	if err := db.DB.QueryRowContext(ctx, `SELECT (payload->>'scheduledAt')::timestamptz FROM job_outbox
-		WHERE kind = 'billing_apply_scheduled_change' AND payload->'billingApplyScheduledChange'->>'changeId' = 'ch1'`).Scan(&scheduled); err != nil || !scheduled.Equal(at) {
-		t.Errorf("moved scheduled change: %v at %v, want %v", err, scheduled, at)
-	}
-	if n := count(t, db, `SELECT count(*) FROM job_outbox WHERE payload->'submitPostToZernio'->>'postId' = 'p-done' OR kind = 'cleanup_post_logs'`); n != 0 {
-		t.Errorf("finished or periodic jobs moved: %d rows", n)
+	if n := count(t, db, `SELECT count(*) FROM job_outbox WHERE payload->'submitPostToZernio'->>'postId' = 'p-done' OR kind IN ('cleanup_post_logs', 'billing_apply_scheduled_change')`); n != 0 {
+		t.Errorf("finished, periodic or retired jobs moved: %d rows", n)
 	}
 	if n := count(t, db, `
 		SELECT (SELECT count(*) FROM pg_class WHERE relname LIKE 'river\_%')

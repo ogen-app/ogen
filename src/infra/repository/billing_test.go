@@ -4,11 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"testing"
 	"time"
 
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/billing"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/pgtest"
@@ -31,7 +33,7 @@ func newBillingAccount(t *testing.T, db *bun.DB, id string) {
 
 func newSub(tenantID, providerID string) *models.BillingSubscription {
 	return &models.BillingSubscription{
-		ID: "bs-" + providerID, TenantID: tenantID, Provider: models.BillingProviderLemonSqueezy,
+		ID: "bs-" + providerID, TenantID: tenantID, Provider: models.BillingProviderPolar,
 		ProviderSubscriptionID: providerID, Status: models.SubscriptionStatusActive, TestMode: true,
 		ProviderUpdatedAt: time.Now().UTC(),
 	}
@@ -76,11 +78,11 @@ func TestBillingGateAndSubscriptions(t *testing.T) {
 		t.Fatal("invalidated subscription did not re-gate")
 	}
 
-	got, err := repo.GetSubscriptionByProviderID(ctx, nil, models.BillingProviderLemonSqueezy, "9", false)
+	got, err := repo.GetSubscriptionByProviderID(ctx, nil, models.BillingProviderPolar, "9", false)
 	if err != nil || got.InvalidatedReason != models.InvalidatedReasonModeCutover || got.Status != models.SubscriptionStatusExpired {
 		t.Fatalf("by provider id: %+v %v", got, err)
 	}
-	if _, err := repo.GetSubscriptionByProviderID(ctx, nil, models.BillingProviderLemonSqueezy, "nope", false); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := repo.GetSubscriptionByProviderID(ctx, nil, models.BillingProviderPolar, "nope", false); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("missing sub err = %v", err)
 	}
 	if err := repo.InsertSubscription(ctx, nil, newSub("t-free", "9")); err == nil {
@@ -92,6 +94,25 @@ func TestBillingGateAndSubscriptions(t *testing.T) {
 	}
 	if g, _ := repo.Gated(ctx, "t-free"); !g {
 		t.Fatal("billing_required not applied")
+	}
+
+	// RequireBilling gates a grandfathered workspace but never a
+	// complimentary one.
+	newBillingTenant(t, db, "t-old", false)
+	newBillingTenant(t, db, "t-comp", false)
+	if ok, err := repo.SetComplimentary(ctx, "t-comp", true, time.Now()); err != nil || !ok {
+		t.Fatalf("complimentary: %v %v", ok, err)
+	}
+	for _, id := range []string{"t-old", "t-comp"} {
+		if err := repo.RequireBilling(ctx, nil, id, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if g, _ := repo.Gated(ctx, "t-old"); !g {
+		t.Fatal("RequireBilling did not gate")
+	}
+	if g, _ := repo.Gated(ctx, "t-comp"); g {
+		t.Fatal("RequireBilling gated a complimentary workspace")
 	}
 }
 
@@ -109,11 +130,14 @@ func TestBillingTrialUsedAndReconcileListing(t *testing.T) {
 	if err := repo.InsertSubscription(ctx, nil, trial); err != nil {
 		t.Fatal(err)
 	}
-	if used, _ := repo.TrialUsed(ctx, "acc-1", true); !used {
+	if used, _ := repo.TrialUsed(ctx, "acc-1", models.BillingProviderPolar, true); !used {
 		t.Fatal("trial not counted in its mode")
 	}
-	if used, _ := repo.TrialUsed(ctx, "acc-1", false); used {
+	if used, _ := repo.TrialUsed(ctx, "acc-1", models.BillingProviderPolar, false); used {
 		t.Fatal("test-mode trial counted in live mode")
+	}
+	if used, _ := repo.TrialUsed(ctx, "acc-1", models.BillingProviderLemonSqueezy, true); used {
+		t.Fatal("a Polar trial counted for another provider")
 	}
 
 	expired := newSub("t1", "2")
@@ -121,25 +145,36 @@ func TestBillingTrialUsedAndReconcileListing(t *testing.T) {
 	if err := repo.InsertSubscription(ctx, nil, expired); err != nil {
 		t.Fatal(err)
 	}
-	list, err := repo.ListForReconcile(ctx, true, "", 10)
+	ls := newSub("t1", "3")
+	ls.Provider = models.BillingProviderLemonSqueezy
+	if err := repo.InsertSubscription(ctx, nil, ls); err != nil {
+		t.Fatal(err)
+	}
+	list, err := repo.ListForReconcile(ctx, models.BillingProviderPolar, true, "", 10)
 	if err != nil || len(list) != 1 || list[0].ID != trial.ID {
 		t.Fatalf("reconcile list = %+v %v", list, err)
 	}
-	// The workspace's live trial still entitles it: nothing to tear down.
-	if unpaid, err := repo.ListUnpaidExpired(ctx, true, 10); err != nil || len(unpaid) != 0 {
+	// The workspace's live subscriptions still entitle it: nothing to tear
+	// down.
+	if unpaid, err := repo.ListUnpaidExpired(ctx, models.BillingProviderPolar, true, 10); err != nil || len(unpaid) != 0 {
 		t.Fatalf("unpaid expired with a live subscription = %+v %v", unpaid, err)
 	}
-	trial.Status = models.SubscriptionStatusExpired
-	if err := repo.UpdateSubscription(ctx, nil, trial); err != nil {
-		t.Fatal(err)
+	trial.Status, ls.Status = models.SubscriptionStatusExpired, models.SubscriptionStatusExpired
+	for _, s := range []*models.BillingSubscription{trial, ls} {
+		if err := repo.UpdateSubscription(ctx, nil, s); err != nil {
+			t.Fatal(err)
+		}
 	}
-	unpaid, err := repo.ListUnpaidExpired(ctx, true, 10)
+	unpaid, err := repo.ListUnpaidExpired(ctx, models.BillingProviderPolar, true, 10)
 	if err != nil || len(unpaid) != 2 {
 		t.Fatalf("unpaid expired = %+v %v", unpaid, err)
 	}
-	live, err := repo.ListTestModeLive(ctx)
-	if err != nil || len(live) != 2 {
-		t.Fatalf("test-mode live = %d %v", len(live), err)
+	if all, err := repo.ListToInvalidate(ctx, "", true); err != nil || len(all) != 3 {
+		t.Fatalf("test-mode to invalidate = %d %v", len(all), err)
+	}
+	others, err := repo.ListToInvalidate(ctx, models.BillingProviderPolar, false)
+	if err != nil || len(others) != 1 || others[0].ID != ls.ID {
+		t.Fatalf("other providers = %+v %v", others, err)
 	}
 }
 
@@ -158,6 +193,16 @@ func TestBillingWebhookEvents(t *testing.T) {
 	if err != nil || inserted || existing == nil || existing.ID != "we-1" {
 		t.Fatalf("duplicate insert: %+v %v %v", existing, inserted, err)
 	}
+	// A Polar redelivery is the same event id with any body.
+	evID := "evt_1"
+	polarEv := &models.BillingWebhookEvent{ID: "we-3", Provider: models.BillingProviderPolar, EventName: "subscription.created", BodySHA256: "def", ProviderEventID: &evID, Payload: json.RawMessage(`{}`)}
+	if _, inserted, err := repo.InsertWebhookEvent(ctx, polarEv); err != nil || !inserted {
+		t.Fatalf("polar insert: %v %v", inserted, err)
+	}
+	redelivery := &models.BillingWebhookEvent{ID: "we-4", Provider: models.BillingProviderPolar, EventName: "subscription.created", BodySHA256: "ghi", ProviderEventID: &evID, Payload: json.RawMessage(`{}`)}
+	if existing, inserted, err := repo.InsertWebhookEvent(ctx, redelivery); err != nil || inserted || existing.ID != "we-3" {
+		t.Fatalf("polar redelivery: %+v %v %v", existing, inserted, err)
+	}
 	tid := "t1"
 	if err := repo.FinishWebhookEvent(ctx, "we-1", models.WebhookOutcomeFailed, "boom", &tid, time.Now()); err != nil {
 		t.Fatal(err)
@@ -169,7 +214,7 @@ func TestBillingWebhookEvents(t *testing.T) {
 	if failed, _ := repo.ListFailedWebhookEvents(ctx, time.Now().Add(-time.Hour), true); len(failed) != 0 {
 		t.Fatal("resolved failure listed as unresolved")
 	}
-	if n, err := repo.DeleteWebhookEventsBefore(ctx, time.Now().Add(time.Minute)); err != nil || n != 1 {
+	if n, err := repo.DeleteWebhookEventsBefore(ctx, time.Now().Add(time.Minute)); err != nil || n != 2 {
 		t.Fatalf("delete = %d %v", n, err)
 	}
 }
@@ -230,7 +275,7 @@ func TestBillingScheduledChanges(t *testing.T) {
 	}
 	prices, _ := repository.NewTenantTierVersionRepository(db).PricesByVersion(ctx, "ttv-trial-v1")
 	now := time.Now().UTC()
-	c := &models.BillingScheduledChange{ID: "sc-1", TenantID: "t1", BillingSubscriptionID: sub.ID, FromTierVersionPriceID: prices[0].ID, ToTierVersionPriceID: prices[0].ID, EffectiveAt: now.Add(30 * time.Minute), Status: models.ScheduledChangePending}
+	c := &models.BillingScheduledChange{ID: "sc-1", TenantID: "t1", BillingSubscriptionID: sub.ID, FromTierVersionPriceID: prices[0].ID, ToTierVersionPriceID: prices[0].ID, EffectiveAt: now.Add(30 * time.Minute), Status: models.ScheduledChangeProviderApplied}
 	if err := repo.InsertScheduledChange(ctx, nil, c); err != nil {
 		t.Fatal(err)
 	}
@@ -239,18 +284,11 @@ func TestBillingScheduledChanges(t *testing.T) {
 	if err := repo.InsertScheduledChange(ctx, nil, &second); err == nil {
 		t.Fatal("two open changes on one subscription accepted")
 	}
-	due, err := repo.ListDueScheduledChanges(ctx, now, time.Hour)
-	if err != nil || len(due) != 1 {
-		t.Fatalf("due (pending within lead) = %+v %v", due, err)
+	if overdue, err := repo.ListOverdueScheduledChanges(ctx, now); err != nil || len(overdue) != 0 {
+		t.Fatalf("overdue before effective_at = %+v %v", overdue, err)
 	}
-	if moved, _ := repo.SetScheduledChangeStatus(ctx, nil, "sc-1", []string{models.ScheduledChangePending}, models.ScheduledChangeProviderApplied, "", now); !moved {
-		t.Fatal("pending → provider_applied did not move")
-	}
-	if due, _ := repo.ListDueScheduledChanges(ctx, now, time.Hour); len(due) != 0 {
-		t.Fatal("provider_applied change due before effective_at")
-	}
-	if due, _ := repo.ListDueScheduledChanges(ctx, now.Add(time.Hour), time.Hour); len(due) != 1 {
-		t.Fatal("provider_applied change not due after effective_at")
+	if overdue, _ := repo.ListOverdueScheduledChanges(ctx, now.Add(time.Hour)); len(overdue) != 1 {
+		t.Fatal("change not overdue after effective_at")
 	}
 	if moved, _ := repo.SetScheduledChangeStatus(ctx, nil, "sc-1", []string{models.ScheduledChangePending}, models.ScheduledChangeCancelled, "", now); moved {
 		t.Fatal("status guard ignored")
@@ -282,5 +320,76 @@ func TestGetForAuthReportsBillingGate(t *testing.T) {
 	}
 	if _, m, _ = sessions.GetForAuth(ctx, "sess-1", ""); m == nil || m.BillingGated {
 		t.Fatalf("membership after checkout = %+v", m)
+	}
+}
+
+func TestBillingProductMappings(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	repo := repository.NewBillingRepository(db)
+	vr := repository.NewTenantTierVersionRepository(db)
+	prices, err := vr.PricesByVersion(ctx, "ttv-trial-v1")
+	if err != nil || len(prices) == 0 {
+		t.Fatalf("seeded prices: %v %v", prices, err)
+	}
+	other := &models.TenantTierVersion{ID: "ttv-x", TierID: "pro", Version: 50, Status: models.TierVersionStatusDraft, Entitlements: map[string]any{}}
+	if err := vr.Create(ctx, other, []models.TenantTierVersionPrice{
+		{ID: "px-eur", TierVersionID: "ttv-x", Currency: "EUR", BillingInterval: "month", NetMinor: 100},
+		{ID: "px-usd", TierVersionID: "ttv-x", Currency: "USD", BillingInterval: "month", NetMinor: 100},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := func(price, currency string) *models.BillingProductMapping {
+		return &models.BillingProductMapping{TierVersionPriceID: price, TestMode: true, ProductID: "prod_1", Currency: currency, UpdatedAt: time.Now(), UpdatedBy: models.ProductMappingByHarbor}
+	}
+	if err := repo.UpsertProductMapping(ctx, m("px-eur", "EUR")); err != nil {
+		t.Fatal(err)
+	}
+	// One product sells one price per currency.
+	if err := repo.UpsertProductMapping(ctx, m("px-usd", "USD")); err != nil {
+		t.Fatalf("a second currency: %v", err)
+	}
+	if err := repo.UpsertProductMapping(ctx, m(prices[0].ID, "EUR")); !errors.Is(err, repository.ErrProductTaken) {
+		t.Fatalf("a second EUR price on one product: %v", err)
+	}
+	rows, err := repo.ListProductMappings(ctx, true)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("mappings = %+v %v", rows, err)
+	}
+	if ok, err := repo.DeleteProductMapping(ctx, "px-usd", true); err != nil || !ok {
+		t.Fatalf("delete: %v %v", ok, err)
+	}
+	if rows, _ := repo.ListProductMappings(ctx, false); len(rows) != 0 {
+		t.Fatalf("live mappings = %+v", rows)
+	}
+}
+
+func TestBillingFXRates(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	repo := repository.NewBillingRepository(db)
+	day := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	rate := func(s string) *big.Rat { r, _ := new(big.Rat).SetString(s); return r }
+	if err := repo.UpsertFXRates(ctx, []billing.FXRate{
+		{Date: day, Currency: "usd", PerEUR: rate("1.05")},
+		{Date: day, Currency: "GBP", PerEUR: rate("0.84")},
+		{Date: day.AddDate(0, 0, -10), Currency: "USD", PerEUR: rate("1.01")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A refreshed day replaces its rate.
+	if err := repo.UpsertFXRates(ctx, []billing.FXRate{{Date: day, Currency: "USD", PerEUR: rate("1.0512")}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.FXRates(ctx, []string{"gbp"}, day.AddDate(0, 0, -1))
+	if err != nil || len(got) != 2 {
+		t.Fatalf("rates = %+v %v", got, err)
+	}
+	byCurrency := map[string]string{}
+	for _, r := range got {
+		byCurrency[r.Currency] = r.PerEUR.FloatString(4)
+	}
+	if byCurrency["USD"] != "1.0512" || byCurrency["GBP"] != "0.8400" {
+		t.Fatalf("rates = %v", byCurrency)
 	}
 }

@@ -12,72 +12,75 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/billing"
 )
 
-func (s *billingAdminService) ListProviderVariants(ctx context.Context, req *billingv1.ListProviderVariantsRequest) (*billingv1.ListProviderVariantsResponse, error) {
-	variants, err := s.svc.ProviderVariants(ctx, req.GetTestMode())
+func (s *billingAdminService) ListProviderProducts(ctx context.Context, req *billingv1.ListProviderProductsRequest) (*billingv1.ListProviderProductsResponse, error) {
+	products, err := s.svc.ProviderProducts(ctx, req.GetTestMode())
 	if err != nil {
 		return nil, billingStatusErr(err)
 	}
-	out := &billingv1.ListProviderVariantsResponse{}
-	for _, v := range variants {
-		out.Variants = append(out.Variants, toProviderVariantProto(v))
+	out := &billingv1.ListProviderProductsResponse{}
+	for _, p := range products {
+		out.Products = append(out.Products, toProviderProductProto(p))
 	}
 	return out, nil
 }
 
-func (s *billingAdminService) ListVariantMappings(ctx context.Context, req *billingv1.ListVariantMappingsRequest) (*billingv1.ListVariantMappingsResponse, error) {
-	list, err := s.svc.VariantMappingList(ctx, req.GetTestMode())
+func (s *billingAdminService) ListProductMappings(ctx context.Context, req *billingv1.ListProductMappingsRequest) (*billingv1.ListProductMappingsResponse, error) {
+	list, err := s.svc.ProductMappingList(ctx, req.GetTestMode())
 	if err != nil {
 		return nil, billingStatusErr(err)
 	}
-	out := &billingv1.ListVariantMappingsResponse{TestMode: list.TestMode, Checked: list.Checked}
+	out := &billingv1.ListProductMappingsResponse{TestMode: list.TestMode, Checked: list.Checked}
 	for _, m := range list.Mappings {
-		out.Mappings = append(out.Mappings, toVariantMappingProto(m))
+		out.Mappings = append(out.Mappings, toProductMappingProto(m))
 	}
 	return out, nil
 }
 
-func (s *billingAdminService) SetVariantMapping(ctx context.Context, req *billingv1.SetVariantMappingRequest) (*billingv1.SetVariantMappingResponse, error) {
+func (s *billingAdminService) SetProductMapping(ctx context.Context, req *billingv1.SetProductMappingRequest) (*billingv1.SetProductMappingResponse, error) {
 	priceID := strings.TrimSpace(req.GetTierVersionPriceId())
 	if priceID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tier_version_price_id is required")
 	}
-	m, err := s.svc.SetVariantMapping(ctx, priceID, req.GetTestMode(), req.GetVariantId(), req.GetReason())
+	m, err := s.svc.SetProductMapping(ctx, priceID, req.GetTestMode(), req.GetProductId(), req.GetReason())
 	if err != nil {
 		return nil, billingStatusErr(err)
 	}
-	return &billingv1.SetVariantMappingResponse{Mapping: toVariantMappingProto(m)}, nil
+	return &billingv1.SetProductMappingResponse{Mapping: toProductMappingProto(m)}, nil
 }
 
-func (s *billingAdminService) SuggestVariantMappings(ctx context.Context, req *billingv1.SuggestVariantMappingsRequest) (*billingv1.SuggestVariantMappingsResponse, error) {
-	suggestions, err := s.svc.SuggestVariantMappings(ctx, req.GetTestMode())
+func (s *billingAdminService) SuggestProductMappings(ctx context.Context, req *billingv1.SuggestProductMappingsRequest) (*billingv1.SuggestProductMappingsResponse, error) {
+	suggestions, err := s.svc.SuggestProductMappings(ctx, req.GetTestMode())
 	if err != nil {
 		return nil, billingStatusErr(err)
 	}
-	out := &billingv1.SuggestVariantMappingsResponse{}
+	out := &billingv1.SuggestProductMappingsResponse{}
 	for _, sg := range suggestions {
-		out.Suggestions = append(out.Suggestions, &billingv1.VariantSuggestion{TierVersionPriceId: sg.PriceID, Variant: toProviderVariantProto(sg.Variant)})
+		out.Suggestions = append(out.Suggestions, &billingv1.ProductSuggestion{TierVersionPriceId: sg.PriceID, Product: toProviderProductProto(sg.Product)})
 	}
 	return out, nil
 }
 
-func toProviderVariantProto(v billing.ProviderVariant) *billingv1.ProviderVariant {
-	return &billingv1.ProviderVariant{
-		Id: v.ID, ProductId: v.ProductID, ProductName: v.ProductName, Name: v.Name,
-		PriceMinor: v.PriceMinor, Currency: v.Currency, Interval: v.Interval,
-		HasFreeTrial: v.HasFreeTrial, TrialInterval: v.TrialInterval, TrialIntervalCount: int32(v.TrialIntervalCount),
-		Status: v.Status, TestMode: v.TestMode, MappedPriceId: v.MappedPriceID,
+func toProviderProductProto(p billing.ProviderProduct) *billingv1.ProviderProduct {
+	out := &billingv1.ProviderProduct{
+		Id: p.ID, Name: p.Name, Interval: p.Interval, IntervalCount: int32(max(p.IntervalCount, 1)),
+		HasFreeTrial: p.HasFreeTrial, TrialInterval: p.TrialInterval, TrialIntervalCount: int32(p.TrialIntervalCount),
+		Archived: p.Archived, TestMode: p.TestMode, MappedPriceIds: p.MappedPriceIDs,
 	}
+	for _, pr := range p.Prices {
+		out.Prices = append(out.Prices, &billingv1.ProductPrice{Currency: pr.Currency, AmountMinor: pr.AmountMinor})
+	}
+	return out
 }
 
-func toVariantMappingProto(m billing.VariantMapping) *billingv1.VariantMapping {
-	p := &billingv1.VariantMapping{
+func toProductMappingProto(m billing.ProductMappingView) *billingv1.ProductMapping {
+	p := &billingv1.ProductMapping{
 		TierVersionPriceId: m.Price.ID, TierId: m.Price.TierID, TierName: m.Price.TierName,
 		TierVersionId: m.Price.TierVersionID, TierVersion: int32(m.Price.TierVersion),
 		Interval: m.Price.Interval, NetMinor: m.Price.NetMinor, Currency: m.Price.Currency, CountryCode: m.Price.CountryCode,
-		FreeTrialTier: m.FreeTrialTier, VariantId: m.VariantID, Status: m.Status, Message: m.Message,
+		FreeTrialTier: m.FreeTrialTier, ProductId: m.ProductID, Status: m.Status, Message: m.Message,
 	}
-	if m.Variant != nil {
-		p.Variant = toProviderVariantProto(*m.Variant)
+	if m.Product != nil {
+		p.Product = toProviderProductProto(*m.Product)
 	}
 	if m.Row != nil {
 		p.UpdatedAt, p.UpdatedBy = timestamppb.New(m.Row.UpdatedAt), m.Row.UpdatedBy

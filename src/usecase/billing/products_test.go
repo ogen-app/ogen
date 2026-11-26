@@ -15,50 +15,65 @@ import (
 
 type fakeLister struct {
 	mu    sync.Mutex
-	rows  []models.BillingVariantMapping
+	rows  []models.BillingProductMapping
 	err   error
 	calls int
 }
 
-func (f *fakeLister) ListVariantMappings(context.Context, bool) ([]models.BillingVariantMapping, error) {
+func (f *fakeLister) ListProductMappings(context.Context, bool) ([]models.BillingProductMapping, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	return f.rows, f.err
 }
 
-func TestVariantStoreCachesAndKeepsLastGoodMap(t *testing.T) {
+// product builds a recurring EUR product; trial adds a one-month trial.
+func product(id, name, interval string, amount int64, trial, testMode bool) billingdom.Product {
+	p := billingdom.Product{ID: id, Name: name, Interval: interval, IntervalCount: 1, Prices: []billingdom.ProductPrice{{Currency: "EUR", AmountMinor: amount}}, TestMode: testMode}
+	if trial {
+		p.HasFreeTrial, p.TrialInterval, p.TrialIntervalCount = true, "month", 1
+	}
+	return p
+}
+
+func mapped(m billingdom.ProductMap, priceID string) string {
+	id, _ := m.Product(priceID)
+	return id
+}
+
+func TestProductStoreCachesAndKeepsLastGoodMap(t *testing.T) {
 	ctx := t.Context()
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
-	lister := &fakeLister{rows: []models.BillingVariantMapping{{TierVersionPriceID: "p1", VariantID: "101"}}}
-	store := NewVariantStore(lister, true)
+	row := func(product string) []models.BillingProductMapping {
+		return []models.BillingProductMapping{{TierVersionPriceID: "p1", ProductID: product, Currency: "EUR"}}
+	}
+	lister := &fakeLister{rows: row("prod_1")}
+	store := NewProductStore(lister, true)
 	store.now = func() time.Time { return now }
 
-	if _, err := NewVariantStore(&fakeLister{err: errors.New("down")}, true).Current(ctx); err == nil {
+	if _, err := NewProductStore(&fakeLister{err: errors.New("down")}, true).Current(ctx); err == nil {
 		t.Fatal("a store that never loaded served a map")
 	}
 	m, err := store.Current(ctx)
-	if v, _ := m.Variant("p1"); err != nil || v != "101" {
+	if err != nil || mapped(m, "p1") != "prod_1" {
 		t.Fatalf("first load: %v %v", m, err)
 	}
 
 	// Within the TTL a change in the table is not seen; after it, it is.
-	lister.rows = []models.BillingVariantMapping{{TierVersionPriceID: "p1", VariantID: "102"}}
-	now = now.Add(variantMapTTL - time.Second)
-	if m, _ := store.Current(ctx); m.Len() != 1 {
-		t.Fatal("map lost")
-	} else if v, _ := m.Variant("p1"); v != "101" || lister.calls != 1 {
-		t.Fatalf("reloaded inside the TTL: %s after %d loads", v, lister.calls)
+	lister.rows = row("prod_2")
+	now = now.Add(productMapTTL - time.Second)
+	if m, _ := store.Current(ctx); mapped(m, "p1") != "prod_1" || lister.calls != 1 {
+		t.Fatalf("reloaded inside the TTL after %d loads", lister.calls)
 	}
 	now = now.Add(2 * time.Second)
-	if m, _ := store.Current(ctx); func() string { v, _ := m.Variant("p1"); return v }() != "102" {
+	if m, _ := store.Current(ctx); mapped(m, "p1") != "prod_2" {
 		t.Fatal("not reloaded after the TTL")
 	}
 
 	// Invalidate reloads at once.
-	lister.rows = []models.BillingVariantMapping{{TierVersionPriceID: "p1", VariantID: "103"}}
+	lister.rows = row("prod_3")
 	store.Invalidate()
-	if m, _ := store.Current(ctx); func() string { v, _ := m.Variant("p1"); return v }() != "103" {
+	if m, _ := store.Current(ctx); mapped(m, "p1") != "prod_3" {
 		t.Fatal("not reloaded after Invalidate")
 	}
 
@@ -66,67 +81,26 @@ func TestVariantStoreCachesAndKeepsLastGoodMap(t *testing.T) {
 	lister.err = errors.New("db down")
 	store.Invalidate()
 	m, err = store.Current(ctx)
-	if v, _ := m.Variant("p1"); err != nil || v != "103" {
-		t.Fatalf("failed reload: %v %v", v, err)
+	if err != nil || mapped(m, "p1") != "prod_3" {
+		t.Fatalf("failed reload: %v %v", mapped(m, "p1"), err)
 	}
 	lister.err = nil
 	lister.rows = nil
-	now = now.Add(variantMapRetry + time.Second)
+	now = now.Add(productMapRetry + time.Second)
 	if m, _ := store.Current(ctx); m.Len() != 0 {
 		t.Fatal("no retry after the failure")
 	}
 }
 
-func TestSeedVariantsImportsEnvOnce(t *testing.T) {
-	h := newHarness(t, func(s *billingdom.Settings) {
-		s.VariantSeed = `{"price-pro-m":"301","price-max-m":"302","price-gone":"303"}`
-	})
-	ctx := t.Context()
-
-	// The harness already mapped the test mode, so the env is ignored.
-	if err := h.svc.SeedVariants(ctx); err != nil {
-		t.Fatal(err)
-	}
-	// Rows sort by price id: price-max-m, then price-pro-m.
-	if rows, _ := h.repo.ListVariantMappings(ctx, true); len(rows) != 2 || rows[0].VariantID != maxVariant || rows[1].VariantID != proVariant {
-		t.Fatalf("seed overwrote Harbor's map: %+v", rows)
-	}
-
-	// An empty mode is seeded; unknown prices are skipped.
-	if _, err := h.db.NewDelete().Model((*models.BillingVariantMapping)(nil)).Where("true").Exec(ctx); err != nil {
-		t.Fatal(err)
-	}
-	h.svc.d.Variants.Invalidate()
-	if err := h.svc.SeedVariants(ctx); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := h.repo.ListVariantMappings(ctx, true)
-	if err != nil || len(rows) != 2 {
-		t.Fatalf("seeded rows = %+v %v", rows, err)
-	}
-	for _, r := range rows {
-		if r.UpdatedBy != models.VariantMappingByEnvSeed || !r.TestMode {
-			t.Fatalf("seeded row = %+v", r)
-		}
-	}
-	if n, err := h.svc.MappedPriceCount(ctx); err != nil || n != 2 {
-		t.Fatalf("store after seed: %d %v", n, err)
-	}
-	// Live mode is untouched.
-	if rows, _ := h.repo.ListVariantMappings(ctx, false); len(rows) != 0 {
-		t.Fatalf("live rows = %+v", rows)
-	}
-}
-
-func TestSetVariantMappingSellsAtOnce(t *testing.T) {
+func TestSetProductMappingSellsAtOnce(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()
 	versions := repository.NewTenantTierVersionRepository(h.db)
 	yearly := h.publishPrice(versions, "pro", "y2", "year", 29000, true)
-	h.provider.variants["111"] = billingdom.Variant{ID: "111", ProductName: "Pro", Name: "Yearly", Status: billingdom.VariantPublished, PriceMinor: 29000, Interval: "year", IntervalCount: 1, HasFreeTrial: true, TrialInterval: "month", TrialIntervalCount: 1, TestMode: true}
-	h.provider.variants["112"] = billingdom.Variant{ID: "112", ProductName: "Pro", Name: "Yearly old", Status: billingdom.VariantPublished, PriceMinor: 28000, Interval: "year", IntervalCount: 1, TestMode: true}
+	h.provider.products["prod_pro_y"] = product("prod_pro_y", "Pro yearly", "year", 29000, true, true)
+	h.provider.products["prod_pro_y_old"] = product("prod_pro_y_old", "Pro yearly old", "year", 28000, false, true)
 
-	list, err := h.svc.VariantMappingList(ctx, true)
+	list, err := h.svc.ProductMappingList(ctx, true)
 	if err != nil || !list.Checked {
 		t.Fatalf("list: %+v %v", list, err)
 	}
@@ -143,31 +117,31 @@ func TestSetVariantMappingSellsAtOnce(t *testing.T) {
 	}
 
 	// The wrong amount is refused with a readable reason, and nothing is saved.
-	_, err = h.svc.SetVariantMapping(ctx, yearly, true, "112", "new yearly price")
+	_, err = h.svc.SetProductMapping(ctx, yearly, true, "prod_pro_y_old", "new yearly price")
 	refused, ok := errors.AsType[*MappingRefusedError](err)
 	if !ok || refused.Status != billingdom.MappingPriceMismatch || !strings.Contains(refused.Message, "280.00 EUR") || !strings.Contains(refused.Message, "290.00 EUR") {
 		t.Fatalf("mismatch: %v", err)
 	}
-	if _, err := h.svc.SetVariantMapping(ctx, yearly, true, proVariant, "x"); !isRefused(err, billingdom.MappingVariantTaken) {
-		t.Fatalf("a variant selling two prices: %v", err)
+	if _, err := h.svc.SetProductMapping(ctx, yearly, true, proProduct, "x"); !isRefused(err, billingdom.MappingProductTaken) {
+		t.Fatalf("a product selling two prices in one currency: %v", err)
 	}
-	if _, err := h.svc.SetVariantMapping(ctx, yearly, true, "999", "x"); !isRefused(err, billingdom.MappingVariantMissing) {
-		t.Fatalf("unknown variant: %v", err)
+	if _, err := h.svc.SetProductMapping(ctx, yearly, true, "prod_nope", "x"); !isRefused(err, billingdom.MappingProductMissing) {
+		t.Fatalf("unknown product: %v", err)
 	}
-	if _, err := h.svc.SetVariantMapping(ctx, yearly, true, "111", ""); !errors.Is(err, ErrReasonRequired) {
+	if _, err := h.svc.SetProductMapping(ctx, yearly, true, "prod_pro_y", ""); !errors.Is(err, ErrReasonRequired) {
 		t.Fatalf("no reason: %v", err)
 	}
-	if _, err := h.svc.SetVariantMapping(ctx, "nope", true, "111", "x"); !errors.Is(err, ErrUnknownPrice) {
+	if _, err := h.svc.SetProductMapping(ctx, "nope", true, "prod_pro_y", "x"); !errors.Is(err, ErrUnknownPrice) {
 		t.Fatalf("unknown price: %v", err)
 	}
 	draft := h.publishPrice(versions, "max", "draft", "year", 79000, false)
-	if _, err := h.svc.SetVariantMapping(ctx, draft, true, "111", "x"); !errors.Is(err, ErrPriceNotSellable) {
+	if _, err := h.svc.SetProductMapping(ctx, draft, true, "prod_pro_y", "x"); !errors.Is(err, ErrPriceNotSellable) {
 		t.Fatalf("draft price: %v", err)
 	}
 
-	// The right variant is saved and sold through at once on this replica.
-	m, err := h.svc.SetVariantMapping(ctx, yearly, true, "111", "new yearly price")
-	if err != nil || m.Status != billingdom.MappingOK || m.Row == nil || m.Row.Reason != "new yearly price" || m.Row.UpdatedBy != models.VariantMappingByHarbor {
+	// The right product is saved and sold through at once on this replica.
+	m, err := h.svc.SetProductMapping(ctx, yearly, true, "prod_pro_y", "new yearly price")
+	if err != nil || m.Status != billingdom.MappingOK || m.Row == nil || m.Row.Reason != "new yearly price" || m.Row.UpdatedBy != models.ProductMappingByHarbor || m.Row.Currency != "EUR" {
 		t.Fatalf("set: %+v %v", m, err)
 	}
 	tenantID, userID, accountID := h.workspace("y")
@@ -176,15 +150,29 @@ func TestSetVariantMappingSellsAtOnce(t *testing.T) {
 	if _, err := h.svc.ChangePlan(ctx, req); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.provider.checkouts[len(h.provider.checkouts)-1].VariantID; got != "111" {
-		t.Fatalf("checkout variant = %s", got)
+	if got := h.provider.checkouts[len(h.provider.checkouts)-1].ProductID; got != "prod_pro_y" {
+		t.Fatalf("checkout product = %s", got)
 	}
 	if items, _, _ := h.svc.Attention(ctx, 50, ""); len(items) != 0 {
 		t.Fatalf("attention after mapping = %+v", items)
 	}
 
+	// An archived product cannot be bought, and the price shows as unmapped.
+	h.provider.mu.Lock()
+	p := h.provider.products["prod_pro_y"]
+	p.Archived = true
+	h.provider.products["prod_pro_y"] = p
+	h.provider.mu.Unlock()
+	h.svc.products = map[string]cachedProduct{}
+	if _, err := h.svc.ChangePlan(ctx, req); !errors.Is(err, ErrTierNotAvailable) {
+		t.Fatalf("checkout of an archived product: %v", err)
+	}
+	if items, _, _ := h.svc.Attention(ctx, 50, ""); len(items) != 1 || items[0].PriceID != yearly {
+		t.Fatalf("attention for an archived product = %+v", items)
+	}
+
 	// Unmapping makes the price unsellable again.
-	if m, err := h.svc.SetVariantMapping(ctx, yearly, true, "", "pulled"); err != nil || m.Status != billingdom.MappingUnmapped {
+	if m, err := h.svc.SetProductMapping(ctx, yearly, true, "", "pulled"); err != nil || m.Status != billingdom.MappingUnmapped {
 		t.Fatalf("unmap: %+v %v", m, err)
 	}
 	if _, err := h.svc.ChangePlan(ctx, req); !errors.Is(err, ErrTierNotAvailable) {
@@ -192,35 +180,75 @@ func TestSetVariantMappingSellsAtOnce(t *testing.T) {
 	}
 }
 
-func TestSetVariantMappingFreeMonthTier(t *testing.T) {
+func TestProductSellsOnePricePerCurrency(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	versions := repository.NewTenantTierVersionRepository(h.db)
+	// A second Pro price in USD on its own version, sold by the same product.
+	usd := "price-pro-usd"
+	v := &models.TenantTierVersion{ID: "ttv-pro-usd", TierID: "pro", Version: 99, Status: models.TierVersionStatusDraft, Purchasable: true, Entitlements: map[string]any{}}
+	if err := versions.Create(ctx, v, []models.TenantTierVersionPrice{{ID: usd, TierVersionID: v.ID, Currency: "USD", BillingInterval: "month", NetMinor: 3200}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := versions.Publish(ctx, v.ID, "test", h.supersedeOnSale(versions, "pro"), h.now); err != nil {
+		t.Fatal(err)
+	}
+	h.provider.mu.Lock()
+	p := h.provider.products[proProduct]
+	p.Prices = append(p.Prices, billingdom.ProductPrice{Currency: "USD", AmountMinor: 3200})
+	h.provider.products[proProduct] = p
+	h.provider.mu.Unlock()
+
+	if _, err := h.svc.SetProductMapping(ctx, usd, true, proProduct, "usd price"); err != nil {
+		t.Fatalf("a second currency of one product: %v", err)
+	}
+	products, err := h.svc.ProviderProducts(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range products {
+		if p.ID == proProduct && len(p.MappedPriceIDs) != 2 {
+			t.Fatalf("pro sells %v", p.MappedPriceIDs)
+		}
+	}
+	m, _ := h.svc.productMap(ctx)
+	if eur, _ := m.Price(proProduct, "EUR"); eur != h.proPrice.ID {
+		t.Fatalf("EUR resolves to %s", eur)
+	}
+	if got, _ := m.Price(proProduct, "usd"); got != usd {
+		t.Fatalf("USD resolves to %s", got)
+	}
+}
+
+func TestSetProductMappingFreeMonthTier(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()
 	if _, err := h.svc.SetFreeTrialTier(ctx, "pro", "launch"); err != nil {
 		t.Fatal(err)
 	}
-	h.provider.variants["121"] = billingdom.Variant{ID: "121", ProductName: "Pro", Name: "Monthly no trial", Status: billingdom.VariantPublished, PriceMinor: 2900, Interval: "month", IntervalCount: 1, TestMode: true}
-	if _, err := h.svc.SetVariantMapping(ctx, h.proPrice.ID, true, "121", "swap"); !isRefused(err, billingdom.MappingTrialMissing) {
+	h.provider.products["prod_pro_nt"] = product("prod_pro_nt", "Pro monthly no trial", "month", 2900, false, true)
+	if _, err := h.svc.SetProductMapping(ctx, h.proPrice.ID, true, "prod_pro_nt", "swap"); !isRefused(err, billingdom.MappingTrialMissing) {
 		t.Fatalf("free-month tier without a trial: %v", err)
 	}
-	// Remapping a price to the variant it already has is fine.
-	if _, err := h.svc.SetVariantMapping(ctx, h.proPrice.ID, true, proVariant, "same"); err != nil {
+	// Remapping a price to the product it already has is fine.
+	if _, err := h.svc.SetProductMapping(ctx, h.proPrice.ID, true, proProduct, "same"); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestVariantMappingListReportsDrift(t *testing.T) {
+func TestProductMappingListReportsDrift(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()
-	// An LS dashboard edit after mapping: Max's variant changed price, Pro's
-	// variant was deleted.
+	// A dashboard edit after mapping: Max's product changed price, Pro's was
+	// deleted.
 	h.provider.mu.Lock()
-	v := h.provider.variants[maxVariant]
-	v.PriceMinor = 8900
-	h.provider.variants[maxVariant] = v
-	delete(h.provider.variants, proVariant)
+	p := h.provider.products[maxProduct]
+	p.Prices = []billingdom.ProductPrice{{Currency: "EUR", AmountMinor: 8900}}
+	h.provider.products[maxProduct] = p
+	delete(h.provider.products, proProduct)
 	h.provider.mu.Unlock()
 
-	list, err := h.svc.VariantMappingList(ctx, true)
+	list, err := h.svc.ProductMappingList(ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,21 +256,21 @@ func TestVariantMappingListReportsDrift(t *testing.T) {
 	for _, m := range list.Mappings {
 		got[m.Price.ID] = m.Status
 	}
-	if got[h.proPrice.ID] != billingdom.MappingVariantMissing || got[h.maxPrice.ID] != billingdom.MappingPriceMismatch {
+	if got[h.proPrice.ID] != billingdom.MappingProductMissing || got[h.maxPrice.ID] != billingdom.MappingPriceMismatch {
 		t.Fatalf("statuses = %v", got)
 	}
-	if bad, err := h.svc.CheckVariants(ctx); err != nil || bad != 2 {
-		t.Fatalf("CheckVariants = %d %v", bad, err)
+	if bad, err := h.svc.CheckProducts(ctx); err != nil || bad != 2 {
+		t.Fatalf("CheckProducts = %d %v", bad, err)
 	}
 
 	// An unreachable provider leaves the rows unchecked rather than failing.
 	h.provider.catalogErr = errors.New("timeout")
-	list, err = h.svc.VariantMappingList(ctx, true)
+	list, err = h.svc.ProductMappingList(ctx, true)
 	if err != nil || list.Checked || list.Mappings[0].Status != billingdom.MappingUnchecked {
 		t.Fatalf("unreachable: %+v %v", list, err)
 	}
-	if _, err := h.svc.CheckVariants(ctx); err == nil {
-		t.Fatal("CheckVariants hid an unreachable provider")
+	if _, err := h.svc.CheckProducts(ctx); err == nil {
+		t.Fatal("CheckProducts hid an unreachable provider")
 	}
 }
 
@@ -250,80 +278,74 @@ func TestLiveMapPreparedBeforeTheSwitch(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()
 
-	// Without the live key, live variants cannot be listed and a live
-	// mapping is saved unchecked.
-	if _, err := h.svc.ProviderVariants(ctx, false); !errors.Is(err, ErrModeUnreadable) || !strings.Contains(err.Error(), "lemonsqueezy_api_key_live") {
-		t.Fatalf("live variants without a key: %v", err)
+	// Without the live token, production products cannot be listed and a
+	// live mapping is saved unchecked.
+	if _, err := h.svc.ProviderProducts(ctx, false); !errors.Is(err, ErrModeUnreadable) || !strings.Contains(err.Error(), "polar_access_token_live") {
+		t.Fatalf("live products without a token: %v", err)
 	}
-	m, err := h.svc.SetVariantMapping(ctx, h.proPrice.ID, false, "901", "prepare live")
+	m, err := h.svc.SetProductMapping(ctx, h.proPrice.ID, false, "prod_live_pro", "prepare live")
 	if err != nil || m.Status != billingdom.MappingUnchecked {
 		t.Fatalf("unchecked live mapping: %+v %v", m, err)
 	}
-	// It does not leak into the test map that sells today.
+	// It does not leak into the sandbox map that sells today.
 	if n, _ := h.svc.MappedPriceCount(ctx); n != 2 {
-		t.Fatalf("test map = %d prices", n)
+		t.Fatalf("sandbox map = %d prices", n)
 	}
-	if v, _ := h.svc.variantMap(ctx); func() string { id, _ := v.Variant(h.proPrice.ID); return id }() != proVariant {
-		t.Fatal("live mapping changed the test map")
+	if pm, _ := h.svc.productMap(ctx); mapped(pm, h.proPrice.ID) != proProduct {
+		t.Fatal("live mapping changed the sandbox map")
 	}
 
-	// With the live key, live variants are checked and suggested.
+	// With the live token, production products are checked and suggested.
 	h.provider.mu.Lock()
 	h.provider.liveKey = true
-	h.provider.variants["901"] = billingdom.Variant{ID: "901", ProductName: "Pro", Name: "Monthly", Status: billingdom.VariantPublished, PriceMinor: 2900, Interval: "month", IntervalCount: 1, HasFreeTrial: true, TrialInterval: "month", TrialIntervalCount: 1}
-	h.provider.variants["902"] = billingdom.Variant{ID: "902", ProductName: "Max", Name: "Monthly", Status: billingdom.VariantPublished, PriceMinor: 7900, Interval: "month", IntervalCount: 1}
+	h.provider.products["prod_live_pro"] = product("prod_live_pro", "Pro monthly", "month", 2900, true, false)
+	h.provider.products["prod_live_max"] = product("prod_live_max", "Max monthly", "month", 7900, false, false)
 	h.provider.mu.Unlock()
-	list, err := h.svc.VariantMappingList(ctx, false)
+	list, err := h.svc.ProductMappingList(ctx, false)
 	if err != nil || !list.Checked {
 		t.Fatalf("live list: %+v %v", list, err)
 	}
-	vs, err := h.svc.ProviderVariants(ctx, false)
-	if err != nil || len(vs) != 2 || vs[0].MappedPriceID != h.proPrice.ID || vs[1].MappedPriceID != "" {
-		t.Fatalf("live variants = %+v %v", vs, err)
+	ps, err := h.svc.ProviderProducts(ctx, false)
+	if err != nil || len(ps) != 2 || ps[0].ID != "prod_live_max" || len(ps[0].MappedPriceIDs) != 0 || ps[1].MappedPriceIDs[0] != h.proPrice.ID {
+		t.Fatalf("live products = %+v %v", ps, err)
 	}
-	sg, err := h.svc.SuggestVariantMappings(ctx, false)
-	if err != nil || len(sg) != 1 || sg[0].PriceID != h.maxPrice.ID || sg[0].Variant.ID != "902" {
+	sg, err := h.svc.SuggestProductMappings(ctx, false)
+	if err != nil || len(sg) != 1 || sg[0].PriceID != h.maxPrice.ID || sg[0].Product.ID != "prod_live_max" {
 		t.Fatalf("live suggestions = %+v %v", sg, err)
 	}
-	// A mismatching live variant is now refused.
-	h.provider.variants["903"] = billingdom.Variant{ID: "903", Status: billingdom.VariantPublished, PriceMinor: 100, Interval: "month"}
-	if _, err := h.svc.SetVariantMapping(ctx, h.maxPrice.ID, false, "903", "x"); !isRefused(err, billingdom.MappingPriceMismatch) {
+	// A mismatching live product is now refused.
+	h.provider.products["prod_live_bad"] = product("prod_live_bad", "Bad", "month", 100, false, false)
+	if _, err := h.svc.SetProductMapping(ctx, h.maxPrice.ID, false, "prod_live_bad", "x"); !isRefused(err, billingdom.MappingPriceMismatch) {
 		t.Fatalf("live mismatch: %v", err)
 	}
 }
 
-func TestSuggestVariantMappingsBreaksTiesByName(t *testing.T) {
+func TestSuggestProductMappingsBreaksTiesByName(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()
 	versions := repository.NewTenantTierVersionRepository(h.db)
 	proYear := h.publishPrice(versions, "pro", "y2", "year", 29000, true)
 	maxYear := h.publishPrice(versions, "max", "y2", "year", 29000, true)
-	for id, v := range map[string]billingdom.Variant{
-		"131": {ProductName: "Pro", Name: "Yearly"},
-		"132": {ProductName: "Max", Name: "Annual"},
-	} {
-		v.ID, v.Status, v.PriceMinor, v.Interval, v.IntervalCount, v.TestMode = id, billingdom.VariantPublished, 29000, "year", 1, true
-		v.HasFreeTrial, v.TrialInterval, v.TrialIntervalCount = true, "month", 1
-		h.provider.variants[id] = v
-	}
-	sg, err := h.svc.SuggestVariantMappings(ctx, true)
+	h.provider.products["prod_a"] = product("prod_a", "Pro yearly", "year", 29000, true, true)
+	h.provider.products["prod_b"] = product("prod_b", "Max annual", "year", 29000, true, true)
+	sg, err := h.svc.SuggestProductMappings(ctx, true)
 	if err != nil || len(sg) != 2 {
 		t.Fatalf("suggestions = %+v %v", sg, err)
 	}
-	want := map[string]string{proYear: "131", maxYear: "132"}
+	want := map[string]string{proYear: "prod_a", maxYear: "prod_b"}
 	for _, s := range sg {
-		if want[s.PriceID] != s.Variant.ID {
-			t.Fatalf("suggested %s for %s", s.Variant.ID, s.PriceID)
+		if want[s.PriceID] != s.Product.ID {
+			t.Fatalf("suggested %s for %s", s.Product.ID, s.PriceID)
 		}
 	}
 
 	// Names that do not tell them apart: no guess.
-	for _, id := range []string{"131", "132"} {
-		v := h.provider.variants[id]
-		v.ProductName, v.Name = "Plan", "Annual"
-		h.provider.variants[id] = v
+	for _, id := range []string{"prod_a", "prod_b"} {
+		p := h.provider.products[id]
+		p.Name = "Plan annual"
+		h.provider.products[id] = p
 	}
-	if sg, err := h.svc.SuggestVariantMappings(ctx, true); err != nil || len(sg) != 0 {
+	if sg, err := h.svc.SuggestProductMappings(ctx, true); err != nil || len(sg) != 0 {
 		t.Fatalf("ambiguous suggestions = %+v %v", sg, err)
 	}
 }
@@ -337,7 +359,7 @@ func TestUpgradeKeepsTargetPriceWhenUnmappedMidway(t *testing.T) {
 
 	// Harbor unmaps the target while the provider switch is in flight.
 	h.provider.duringChange = func() {
-		if _, err := h.svc.SetVariantMapping(ctx, h.maxPrice.ID, true, "", "pulled"); err != nil {
+		if _, err := h.svc.SetProductMapping(ctx, h.maxPrice.ID, true, "", "pulled"); err != nil {
 			t.Error(err)
 		}
 	}
@@ -345,8 +367,8 @@ func TestUpgradeKeepsTargetPriceWhenUnmappedMidway(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := h.mirror("s1")
-	if m.ProviderVariantID != maxVariant || m.TierVersionPriceID == nil || *m.TierVersionPriceID != h.maxPrice.ID {
-		t.Fatalf("mirror after upgrade = variant %s price %v", m.ProviderVariantID, m.TierVersionPriceID)
+	if m.ProviderProductID != maxProduct || m.ProviderVariantID != maxProduct || m.TierVersionPriceID == nil || *m.TierVersionPriceID != h.maxPrice.ID {
+		t.Fatalf("mirror after upgrade = product %s price %v", m.ProviderProductID, m.TierVersionPriceID)
 	}
 	if got := h.currentVersion(tenantID); got != h.maxPrice.TierVersionID+"/"+models.AssignmentReasonUpgrade {
 		t.Fatalf("assignment = %s", got)

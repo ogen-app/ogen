@@ -11,7 +11,7 @@ func TestRenderBillingNotices(t *testing.T) {
 	data := Data{Name: "Jane", WorkspaceName: "Acme", AppURL: "https://app.example"}
 	cases := map[string][]string{
 		KeyBillingPaymentFailed:   {"Jane", "Acme", "https://app.example/plans", "retried"},
-		KeyBillingReentryRequired: {"Jane", "Acme", "https://app.example/plans", "test period"},
+		KeyBillingReentryRequired: {"Jane", "Acme", "https://app.example/plans", "carry over"},
 	}
 	for key, wants := range cases {
 		tmpl := defaultByKey(t, key)

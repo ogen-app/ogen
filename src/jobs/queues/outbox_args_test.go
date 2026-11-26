@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/descriptorpb"
+
 	jobsv1 "github.com/ogen-app/ogen/gen/jobs/v1"
 	"github.com/ogen-app/ogen/src/domain/models"
 )
@@ -33,7 +35,6 @@ func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 		ReembedImageTask{AssetID: "a1", TenantID: "t1"},
 		AnalyzeAssetTask{TenantID: "t1", AssetID: "a1", CampaignID: &campaign, Reason: "ingested"},
 		ReanalyzeCampaignTask{TenantID: "t1", CampaignID: "c1"},
-		BillingScheduledChangeTask{ChangeID: "ch1"},
 		DistillBrandTask{TenantID: "t1", RunID: "r1"},
 		DistillAssetIdeasTask{TenantID: "t1", RunID: "r1"},
 		BuildWeeklyReportTask{TenantID: "t1", WeekStart: "2026-10-26"},
@@ -118,11 +119,16 @@ func TestEnqueueRequestKeepsFieldsMainAdded(t *testing.T) {
 
 // TestRetireRiverKnowsEveryRelayedKind keeps RetireRiver's kind table in step
 // with the contract: a jobs.v1 kind it can't decode would be dropped with
-// River at boot, so a pending billing change or distill would be lost.
+// River at boot, so a pending distill would be lost. A kind the contract
+// deprecates has no work left to hand over.
 func TestRetireRiverKnowsEveryRelayedKind(t *testing.T) {
 	oneof := (&jobsv1.EnqueueRequest{}).ProtoReflect().Descriptor().Oneofs().ByName("args")
 	for i := range oneof.Fields().Len() {
-		kind := string(oneof.Fields().Get(i).Name())
+		field := oneof.Fields().Get(i)
+		if opts, ok := field.Options().(*descriptorpb.FieldOptions); ok && opts.GetDeprecated() {
+			continue
+		}
+		kind := string(field.Name())
 		if _, ok := riverKinds[kind]; !ok && !postRiverKinds[kind] {
 			t.Errorf("RetireRiver can't move a pending %s job", kind)
 		}

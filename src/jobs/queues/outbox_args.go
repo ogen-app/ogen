@@ -60,8 +60,6 @@ func setArgs(req *jobsv1.EnqueueRequest, args JobArgs) (bool, error) {
 		req.Args = &jobsv1.EnqueueRequest_NotifyHarborReceiptReceived{NotifyHarborReceiptReceived: &jobsv1.NotifyHarborReceiptReceivedArgs{ResendEmailId: a.ResendEmailID}}
 	case BuildWeeklyReportTask:
 		req.Args = &jobsv1.EnqueueRequest_BuildWeeklyReport{BuildWeeklyReport: &jobsv1.BuildWeeklyReportArgs{TenantId: a.TenantID, WeekStart: a.WeekStart}}
-	case BillingScheduledChangeTask:
-		req.Args = &jobsv1.EnqueueRequest_BillingApplyScheduledChange{BillingApplyScheduledChange: &jobsv1.BillingApplyScheduledChangeArgs{ChangeId: a.ChangeID}}
 	default:
 		return setIngestArgs(req, args), nil
 	}

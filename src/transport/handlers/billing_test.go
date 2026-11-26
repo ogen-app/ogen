@@ -14,6 +14,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/uptrace/bun"
 
+	billingdom "github.com/ogen-app/ogen/src/domain/billing"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/transport/handlers"
@@ -28,7 +29,7 @@ type fakeBillingService struct {
 	planErr    error
 	webhookErr error
 	lastPlan   billing.PlanRequest
-	lastSig    string
+	lastHeader billingdom.WebhookHeaders
 }
 
 func (f *fakeBillingService) Enabled() bool { return f.enabled }
@@ -42,8 +43,8 @@ func (f *fakeBillingService) ChangePlan(_ context.Context, req billing.PlanReque
 	f.lastPlan = req
 	return f.planResult, f.planErr
 }
-func (f *fakeBillingService) HandleWebhook(_ context.Context, sig string, _ []byte) error {
-	f.lastSig = sig
+func (f *fakeBillingService) HandleWebhook(_ context.Context, h billingdom.WebhookHeaders, _ []byte) error {
+	f.lastHeader = h
 	return f.webhookErr
 }
 
@@ -181,6 +182,7 @@ var _ = Describe("Billing gate and billing routes (CON-322)", Ordered, func() {
 			billing.ErrPriceMismatch:          {fiber.StatusBadRequest, "price_mismatch"},
 			billing.ErrUnavailable:            {fiber.StatusServiceUnavailable, "billing_unavailable"},
 			billing.ErrTrialChangeUnavailable: {fiber.StatusConflict, "trial_upgrade_unavailable"},
+			billing.ErrPaymentFailed:          {fiber.StatusConflict, "payment_failed"},
 		} {
 			svc.planErr = err
 			code, body, _ := do("POST", "/api/workspace/plan", cookie, []byte(`{"tier_id":"max"}`), nil)
@@ -212,21 +214,27 @@ var _ = Describe("Billing gate and billing routes (CON-322)", Ordered, func() {
 	})
 
 	It("answers the webhook by outcome", func() {
-		code, _, _ := do("POST", "/api/webhooks/lemonsqueezy", nil, []byte(`{}`), map[string]string{"X-Signature": "abc"})
+		code, _, _ := do("POST", "/api/webhooks/polar", nil, []byte(`{}`), map[string]string{
+			"webhook-id": "evt_1", "webhook-timestamp": "1700000000", "webhook-signature": "v1,abc",
+		})
 		Expect(code).To(Equal(fiber.StatusOK))
-		Expect(svc.lastSig).To(Equal("abc"))
+		Expect(svc.lastHeader).To(Equal(billingdom.WebhookHeaders{ID: "evt_1", Timestamp: "1700000000", Signature: "v1,abc"}))
 
 		svc.webhookErr = billing.ErrInvalidSignature
-		code, _, _ = do("POST", "/api/webhooks/lemonsqueezy", nil, []byte(`{}`), nil)
+		code, _, _ = do("POST", "/api/webhooks/polar", nil, []byte(`{}`), nil)
 		Expect(code).To(Equal(fiber.StatusUnauthorized))
 
 		svc.webhookErr = context.DeadlineExceeded
-		code, _, _ = do("POST", "/api/webhooks/lemonsqueezy", nil, []byte(`{}`), nil)
+		code, _, _ = do("POST", "/api/webhooks/polar", nil, []byte(`{}`), nil)
 		Expect(code).To(Equal(fiber.StatusInternalServerError))
 
 		svc.enabled = false
-		code, body, _ := do("POST", "/api/webhooks/lemonsqueezy", nil, []byte(`{}`), nil)
+		code, body, _ := do("POST", "/api/webhooks/polar", nil, []byte(`{}`), nil)
 		Expect(code).To(Equal(fiber.StatusServiceUnavailable))
 		Expect(body["error"]).To(Equal("billing_unavailable"))
+
+		// The Lemon Squeezy route is gone.
+		code, _, _ = do("POST", "/api/webhooks/lemonsqueezy", nil, []byte(`{}`), nil)
+		Expect(code).To(Equal(fiber.StatusNotFound))
 	})
 })

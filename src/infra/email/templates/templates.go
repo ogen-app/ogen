@@ -307,7 +307,7 @@ var defaultSpecs = []defaultSpec{
 	{KeyGoogleLinked, models.EmailKindTransactional, "Google sign-in is now connected to your Ogen account", googleLinkedVars()},
 	{KeyTenantInvite, models.EmailKindTransactional, "You're invited to the Ogen beta", tenantInviteVars()},
 	{KeyBillingPaymentFailed, models.EmailKindTransactional, "Your Ogen payment didn't go through", transactionalVars()},
-	{KeyBillingReentryRequired, models.EmailKindTransactional, "Please re-enter your payment details for Ogen", transactionalVars()},
+	{KeyBillingReentryRequired, models.EmailKindTransactional, "Please choose your Ogen plan again", transactionalVars()},
 	{KeyAdminTenantRegistered, models.EmailKindTransactional, "New tenant registered: [[ .WorkspaceName ]]", adminTenantRegisteredVars()},
 	{KeyWeeklyReport, models.EmailKindTransactional, weeklyReportSubject, weeklyReportVars()},
 }

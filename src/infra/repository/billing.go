@@ -38,26 +38,30 @@ type BillingRepository interface {
 	// ListSubscriptionsByTenant returns every subscription of a tenant,
 	// invalidated ones included, newest first.
 	ListSubscriptionsByTenant(ctx context.Context, db bun.IDB, tenantID string) ([]models.BillingSubscription, error)
-	// TrialUsed reports whether an account has had a free trial in a mode.
-	TrialUsed(ctx context.Context, accountID string, testMode bool) (bool, error)
+	// TrialUsed reports whether an account has had a free trial of a
+	// provider in a mode.
+	TrialUsed(ctx context.Context, accountID, provider string, testMode bool) (bool, error)
 	// ListForReconcile pages non-invalidated, non-expired subscriptions of
-	// a mode by id.
-	ListForReconcile(ctx context.Context, testMode bool, afterID string, limit int) ([]models.BillingSubscription, error)
+	// a provider and mode by id.
+	ListForReconcile(ctx context.Context, provider string, testMode bool, afterID string, limit int) ([]models.BillingSubscription, error)
 	// ListByStatus lists non-invalidated subscriptions of a mode in the given
 	// statuses, optionally only those updated since a time.
 	ListByStatus(ctx context.Context, testMode bool, statuses []string, updatedSince *time.Time) ([]models.BillingSubscription, error)
-	// ListUnpaidExpired lists expired subscriptions with no payment and no
-	// teardown yet.
-	ListUnpaidExpired(ctx context.Context, testMode bool, limit int) ([]models.BillingSubscription, error)
-	// ListTestModeLive lists non-invalidated test-mode subscriptions.
-	ListTestModeLive(ctx context.Context) ([]models.BillingSubscription, error)
+	// ListUnpaidExpired lists a provider's expired subscriptions with no
+	// payment and no teardown yet.
+	ListUnpaidExpired(ctx context.Context, provider string, testMode bool, limit int) ([]models.BillingSubscription, error)
+	// ListToInvalidate lists the non-invalidated subscriptions a cutover
+	// selects, by tenant: those of another provider than exceptProvider when
+	// it is set, and only test-mode ones when testModeOnly.
+	ListToInvalidate(ctx context.Context, exceptProvider string, testModeOnly bool) ([]models.BillingSubscription, error)
 	// Invalidate marks subscriptions invalidated with a reason.
 	Invalidate(ctx context.Context, db bun.IDB, ids []string, reason string, at time.Time) error
 
 	// Webhook log.
 
-	// InsertWebhookEvent records a delivery. When the body was seen before it
-	// returns the earlier row and inserted=false.
+	// InsertWebhookEvent records a delivery. When its event id (or, for a
+	// delivery without one, its body) was seen before it returns the earlier
+	// row and inserted=false.
 	InsertWebhookEvent(ctx context.Context, e *models.BillingWebhookEvent) (existing *models.BillingWebhookEvent, inserted bool, err error)
 	FinishWebhookEvent(ctx context.Context, id, outcome, errMsg string, tenantID *string, at time.Time) error
 	ListWebhookEventsByTenant(ctx context.Context, tenantID string, limit int) ([]models.BillingWebhookEvent, error)
@@ -80,13 +84,17 @@ type BillingRepository interface {
 	// one of from; it reports whether it moved.
 	SetScheduledChangeStatus(ctx context.Context, db bun.IDB, id string, from []string, status, errMsg string, at time.Time) (bool, error)
 	ListScheduledChangesByTenant(ctx context.Context, tenantID string) ([]models.BillingScheduledChange, error)
-	// ListDueScheduledChanges lists open changes whose next step is due.
-	ListDueScheduledChanges(ctx context.Context, now time.Time, providerLead time.Duration) ([]models.BillingScheduledChange, error)
+	// ListOverdueScheduledChanges lists the changes held by the provider
+	// whose effective time passed before a cutoff without landing.
+	ListOverdueScheduledChanges(ctx context.Context, before time.Time) ([]models.BillingScheduledChange, error)
 	ListScheduledChangesByStatus(ctx context.Context, status string, since time.Time) ([]models.BillingScheduledChange, error)
 
 	// Tenants and tiers.
 
 	SetBillingRequired(ctx context.Context, tenantID string, required bool, at time.Time) (bool, error)
+	// RequireBilling puts a workspace behind the billing gate inside the
+	// caller's transaction, unless it is complimentary or deleted.
+	RequireBilling(ctx context.Context, db bun.IDB, tenantID string, at time.Time) error
 	// SetComplimentary makes a workspace complimentary (billing_required
 	// off) or ends that (billing_required on). false when the tenant is
 	// unknown or deleted.
@@ -104,35 +112,41 @@ type BillingRepository interface {
 
 	// Prices resolves price rows with their tier, keyed by price id.
 	Prices(ctx context.Context, ids []string) (map[string]billing.Price, error)
-	// MappablePrices lists the prices a variant may be mapped to (the
+	// MappablePrices lists the prices a product may be mapped to (the
 	// non-zero prices of active, purchasable versions; a free price is never
 	// sold through the provider) plus the given ids, by tier and version.
 	MappablePrices(ctx context.Context, extraIDs []string) ([]billing.Price, error)
 
-	// Variant mappings.
+	// Product mappings.
 
-	// ListVariantMappings lists one mode's mappings.
-	ListVariantMappings(ctx context.Context, testMode bool) ([]models.BillingVariantMapping, error)
-	// UpsertVariantMapping maps a price in a mode, replacing its variant.
-	// ErrVariantTaken when the variant sells another price in that mode.
-	UpsertVariantMapping(ctx context.Context, m *models.BillingVariantMapping) error
-	// DeleteVariantMapping unmaps a price in a mode; false when it was not
+	// ListProductMappings lists one mode's mappings.
+	ListProductMappings(ctx context.Context, testMode bool) ([]models.BillingProductMapping, error)
+	// UpsertProductMapping maps a price in a mode, replacing its product.
+	// ErrProductTaken when the product sells another price in that currency
+	// and mode.
+	UpsertProductMapping(ctx context.Context, m *models.BillingProductMapping) error
+	// DeleteProductMapping unmaps a price in a mode; false when it was not
 	// mapped.
-	DeleteVariantMapping(ctx context.Context, priceID string, testMode bool) (bool, error)
-	// SeedVariantMappings inserts the rows when the mode has no mapping yet,
-	// once across concurrently booting replicas. It returns how many rows it
-	// inserted and the price ids it skipped because they do not exist.
-	SeedVariantMappings(ctx context.Context, testMode bool, rows []models.BillingVariantMapping) (int, []string, error)
+	DeleteProductMapping(ctx context.Context, priceID string, testMode bool) (bool, error)
 
 	// Payments.
 
 	// UpsertPayments writes payments, keyed by provider, mode, source,
 	// provider id and kind. A row is only overwritten by a copy at least as
-	// new (provider_updated_at), and keeps its tenant when the copy has none.
+	// new (provider_updated_at), and keeps its tenant and its USD conversion
+	// when the copy has none.
 	UpsertPayments(ctx context.Context, rows []models.BillingPayment) error
 	// ListPayments lists one mode's payments that occurred in [from, to),
 	// oldest first, after the keyset cursor, with tenant and tier resolved.
 	ListPayments(ctx context.Context, q PaymentsQuery) ([]PaymentRow, error)
+
+	// Exchange rates.
+
+	// UpsertFXRates stores reference rates, replacing a day's rate.
+	UpsertFXRates(ctx context.Context, rates []billing.FXRate) error
+	// FXRates lists the rates of the given currencies, and of USD, from a
+	// day on.
+	FXRates(ctx context.Context, currencies []string, from time.Time) ([]billing.FXRate, error)
 
 	// CountConnectedAccounts counts a workspace's connected (not
 	// disconnected) social accounts: the connected_accounts entitlement.
@@ -205,16 +219,18 @@ func (r *billingRepository) ListSubscriptionsByTenant(ctx context.Context, db bu
 	return out, err
 }
 
-func (r *billingRepository) TrialUsed(ctx context.Context, accountID string, testMode bool) (bool, error) {
+func (r *billingRepository) TrialUsed(ctx context.Context, accountID, provider string, testMode bool) (bool, error) {
 	return RowsExist(ctx, r.db.NewSelect().Model((*models.BillingSubscription)(nil)).
 		Where("bs.account_id = ?", accountID).
+		Where("bs.provider = ?", provider).
 		Where("bs.test_mode = ?", testMode).
 		Where("bs.trial_ends_at IS NOT NULL"))
 }
 
-func (r *billingRepository) ListForReconcile(ctx context.Context, testMode bool, afterID string, limit int) ([]models.BillingSubscription, error) {
+func (r *billingRepository) ListForReconcile(ctx context.Context, provider string, testMode bool, afterID string, limit int) ([]models.BillingSubscription, error) {
 	var out []models.BillingSubscription
 	err := r.db.NewSelect().Model(&out).
+		Where("bs.provider = ?", provider).
 		Where("bs.test_mode = ?", testMode).
 		Where("bs.invalidated_at IS NULL").
 		Where("bs.status <> ?", models.SubscriptionStatusExpired).
@@ -238,9 +254,10 @@ func (r *billingRepository) ListByStatus(ctx context.Context, testMode bool, sta
 	return out, err
 }
 
-func (r *billingRepository) ListUnpaidExpired(ctx context.Context, testMode bool, limit int) ([]models.BillingSubscription, error) {
+func (r *billingRepository) ListUnpaidExpired(ctx context.Context, provider string, testMode bool, limit int) ([]models.BillingSubscription, error) {
 	var out []models.BillingSubscription
 	err := r.db.NewSelect().Model(&out).
+		Where("bs.provider = ?", provider).
 		Where("bs.test_mode = ?", testMode).
 		Where("bs.invalidated_at IS NULL").
 		Where("bs.status = ?", models.SubscriptionStatusExpired).
@@ -264,13 +281,16 @@ func (r *billingRepository) ListUnpaidExpired(ctx context.Context, testMode bool
 	return out, err
 }
 
-func (r *billingRepository) ListTestModeLive(ctx context.Context) ([]models.BillingSubscription, error) {
+func (r *billingRepository) ListToInvalidate(ctx context.Context, exceptProvider string, testModeOnly bool) ([]models.BillingSubscription, error) {
 	var out []models.BillingSubscription
-	err := r.db.NewSelect().Model(&out).
-		Where("bs.test_mode").
-		Where("bs.invalidated_at IS NULL").
-		OrderExpr("bs.tenant_id, bs.id").
-		Scan(ctx)
+	q := r.db.NewSelect().Model(&out).Where("bs.invalidated_at IS NULL")
+	if exceptProvider != "" {
+		q = q.Where("bs.provider <> ?", exceptProvider)
+	}
+	if testModeOnly {
+		q = q.Where("bs.test_mode")
+	}
+	err := q.OrderExpr("bs.tenant_id, bs.id").Scan(ctx)
 	return out, err
 }
 
@@ -289,7 +309,9 @@ func (r *billingRepository) Invalidate(ctx context.Context, db bun.IDB, ids []st
 }
 
 func (r *billingRepository) InsertWebhookEvent(ctx context.Context, e *models.BillingWebhookEvent) (*models.BillingWebhookEvent, bool, error) {
-	res, err := r.db.NewInsert().Model(e).On("CONFLICT (body_sha256) DO NOTHING").Exec(ctx)
+	// Either key can collide: the event id on a redelivery, the body hash on
+	// a byte-identical one.
+	res, err := r.db.NewInsert().Model(e).On("CONFLICT DO NOTHING").Exec(ctx)
 	if err != nil {
 		return nil, false, err
 	}
@@ -297,7 +319,16 @@ func (r *billingRepository) InsertWebhookEvent(ctx context.Context, e *models.Bi
 		return nil, true, nil
 	}
 	existing := new(models.BillingWebhookEvent)
-	if err := r.db.NewSelect().Model(existing).Where("bwe.body_sha256 = ?", e.BodySHA256).Scan(ctx); err != nil {
+	q := r.db.NewSelect().Model(existing)
+	if e.ProviderEventID != nil {
+		q = q.WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
+			return q.Where("bwe.provider = ? AND bwe.provider_event_id = ?", e.Provider, *e.ProviderEventID).
+				WhereOr("bwe.body_sha256 = ?", e.BodySHA256)
+		})
+	} else {
+		q = q.Where("bwe.body_sha256 = ?", e.BodySHA256)
+	}
+	if err := q.Limit(1).Scan(ctx); err != nil {
 		return nil, false, err
 	}
 	return existing, false, nil
@@ -413,18 +444,11 @@ func (r *billingRepository) ListScheduledChangesByTenant(ctx context.Context, te
 	return out, err
 }
 
-func (r *billingRepository) ListDueScheduledChanges(ctx context.Context, now time.Time, providerLead time.Duration) ([]models.BillingScheduledChange, error) {
+func (r *billingRepository) ListOverdueScheduledChanges(ctx context.Context, before time.Time) ([]models.BillingScheduledChange, error) {
 	var out []models.BillingScheduledChange
 	err := r.db.NewSelect().Model(&out).
-		WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
-			return q.
-				WhereGroup(" OR ", func(q *bun.SelectQuery) *bun.SelectQuery {
-					return q.Where("bsc.status = ?", models.ScheduledChangePending).Where("bsc.effective_at <= ?", now.Add(providerLead))
-				}).
-				WhereGroup(" OR ", func(q *bun.SelectQuery) *bun.SelectQuery {
-					return q.Where("bsc.status = ?", models.ScheduledChangeProviderApplied).Where("bsc.effective_at <= ?", now)
-				})
-		}).
+		Where("bsc.status IN (?)", bun.List([]string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied})).
+		Where("bsc.effective_at <= ?", before).
 		OrderExpr("bsc.effective_at").
 		Scan(ctx)
 	return out, err
@@ -452,6 +476,18 @@ func (r *billingRepository) SetBillingRequired(ctx context.Context, tenantID str
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+func (r *billingRepository) RequireBilling(ctx context.Context, db bun.IDB, tenantID string, at time.Time) error {
+	_, err := r.idb(db).NewUpdate().Model((*models.Tenant)(nil)).
+		Set("billing_required = true").
+		Set("updated_at = ?", at).
+		Where("id = ?", tenantID).
+		Where("deleted_at IS NULL").
+		Where("NOT complimentary").
+		Where("NOT billing_required").
+		Exec(ctx)
+	return err
 }
 
 func (r *billingRepository) SetComplimentary(ctx context.Context, tenantID string, complimentary bool, at time.Time) (bool, error) {

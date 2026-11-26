@@ -21,7 +21,9 @@ var riverLiveStates = []string{"available", "pending", "retryable", "running", "
 // enqueued, and for build_weekly_report, so a week's report built on River
 // is handed over too. Periodic sweeps are absent: river-service schedules its
 // own. So are the other jobs a sweep fans out into (the per-tenant analytics
-// jobs): the sweep's next tick in river-service queues them again.
+// jobs): the sweep's next tick in river-service queues them again. So is
+// billing_apply_scheduled_change: the provider holds a downgrade itself now,
+// so a leftover step has nothing to do.
 var riverKinds = map[string]func([]byte) (JobArgs, error){
 	SubmitPostToZernioQueue:     decodeRiverArgs[SubmitPostTask],
 	PollZernioStatusQueue:       decodeRiverArgs[PollZernioStatusTask],
@@ -42,7 +44,6 @@ var riverKinds = map[string]func([]byte) (JobArgs, error){
 	ReanalyzeCampaignKind:       decodeRiverArgs[ReanalyzeCampaignTask],
 	DistillAssetIdeasKind:       decodeRiverArgs[DistillAssetIdeasTask],
 	DistillBrandKind:            decodeRiverArgs[DistillBrandTask],
-	BillingScheduledChangeQueue: decodeRiverArgs[BillingScheduledChangeTask],
 	BuildWeeklyReportQueue:      decodeRiverArgs[BuildWeeklyReportTask],
 }
 

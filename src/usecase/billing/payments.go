@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,11 +16,16 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// Payments are Lemon Squeezy's money movements, kept for Harbor's revenue
-// view. Webhooks record each order and invoice as it happens; the payments
-// sync re-reads the whole history, which backfills what predates this table
-// and picks up refunds whose webhook was lost. Both paths upsert, so neither
-// adds a row the other wrote.
+// Payments are the provider's money movements, kept for Harbor's revenue
+// view. Webhooks record each order and refund as it happens; the payments
+// sync re-reads the whole history, which backfills what predates this table,
+// picks up refunds whose webhook was lost and converts payments whose
+// exchange rate was not known yet. Both paths upsert, so neither adds a row
+// the other wrote.
+//
+// Polar reports amounts in the payment's currency only. A non-USD payment is
+// converted at the ECB reference rate of its day (billingdom.FXTable); until
+// that rate is stored its *_usd columns stay NULL.
 
 // ErrBadPageToken: a ListPayments page token that is not one this service
 // issued (400).
@@ -28,18 +34,26 @@ var ErrBadPageToken = errors.New("invalid page token")
 const (
 	defaultPaymentsPage = 100
 	maxPaymentsPage     = 500
+	// fxLookback is how far before the oldest payment rates are read, so a
+	// payment after a long holiday still finds the business day before it.
+	fxLookback = 14 * 24 * time.Hour
 )
 
-// RecordPayments upserts payments, with the fee estimated by the configured
-// formula.
+// RecordPayments upserts payments, converted to USD where the rate is known
+// and with the fee the provider reported or the configured formula's
+// estimate.
 func (s *Service) RecordPayments(ctx context.Context, payments []billingdom.Payment) error {
 	if len(payments) == 0 {
 		return nil
 	}
+	table, err := s.fxTable(ctx, payments)
+	if err != nil {
+		return err
+	}
 	rows := make([]models.BillingPayment, 0, len(payments))
 	seen := make(map[string]int, len(payments))
 	for _, p := range payments {
-		row, err := s.paymentRow(p)
+		row, err := s.paymentRow(p, table)
 		if err != nil {
 			return err
 		}
@@ -57,34 +71,88 @@ func (s *Service) RecordPayments(ctx context.Context, payments []billingdom.Paym
 	return s.d.Repo.UpsertPayments(ctx, rows)
 }
 
-func (s *Service) paymentRow(p billingdom.Payment) (models.BillingPayment, error) {
+// fxTable reads the rates the payments' conversions need.
+func (s *Service) fxTable(ctx context.Context, payments []billingdom.Payment) (billingdom.FXTable, error) {
+	var (
+		currencies []string
+		earliest   time.Time
+	)
+	for _, p := range payments {
+		c := strings.ToUpper(p.Currency)
+		if c == "USD" {
+			continue
+		}
+		if !slices.Contains(currencies, c) {
+			currencies = append(currencies, c)
+		}
+		if earliest.IsZero() || p.OccurredAt.Before(earliest) {
+			earliest = p.OccurredAt
+		}
+	}
+	if len(currencies) == 0 {
+		return billingdom.NewFXTable(nil), nil
+	}
+	rates, err := s.d.Repo.FXRates(ctx, currencies, earliest.Add(-fxLookback))
+	if err != nil {
+		return billingdom.FXTable{}, err
+	}
+	return billingdom.NewFXTable(rates), nil
+}
+
+func (s *Service) paymentRow(p billingdom.Payment, table billingdom.FXTable) (models.BillingPayment, error) {
 	id, err := models.NewID()
 	if err != nil {
 		return models.BillingPayment{}, err
 	}
-	fee, feeUSD := s.d.Fees.Estimate(p)
 	row := models.BillingPayment{
 		ID: id, Provider: s.provider(), Source: p.Source, ProviderID: p.ProviderID, Kind: p.Kind, TestMode: p.TestMode,
-		ProviderSubscriptionID: p.SubscriptionID, ProviderVariantID: p.VariantID, BillingReason: p.BillingReason,
+		// provider_variant_id is what the previous release reads.
+		ProviderSubscriptionID: p.SubscriptionID, ProviderProductID: p.ProductID, ProviderVariantID: p.ProductID, BillingReason: p.BillingReason,
 		Currency: strings.ToUpper(p.Currency),
 		Subtotal: p.Subtotal, Discount: p.Discount, Tax: p.Tax, Total: p.Total, Refunded: p.Refunded,
-		SubtotalUSD: p.SubtotalUSD, DiscountUSD: p.DiscountUSD, TaxUSD: p.TaxUSD, TotalUSD: p.TotalUSD, RefundedUSD: p.RefundedUSD,
-		Fee: fee, FeeUSD: feeUSD, FeeIsEstimated: true,
-		Status: p.Status, OccurredAt: p.OccurredAt.UTC(), ProviderUpdatedAt: p.UpdatedAt.UTC(),
+		FeeIsEstimated: p.Fee == nil,
+		Status:         p.Status, OccurredAt: p.OccurredAt.UTC(), ProviderUpdatedAt: p.UpdatedAt.UTC(),
+	}
+	if p.Fee != nil {
+		row.Fee = *p.Fee
 	}
 	if p.TenantID != "" {
 		row.TenantID = new(p.TenantID)
 	}
+	conv, err := table.ToUSD(row.Currency, row.OccurredAt)
+	if errors.Is(err, billingdom.ErrNoRate) {
+		return row, nil // converted by a later sync, once the rate is stored
+	}
+	if err != nil {
+		return models.BillingPayment{}, err
+	}
+	row.SubtotalUSD, row.DiscountUSD, row.TaxUSD = new(conv.Cents(p.Subtotal)), new(conv.Cents(p.Discount)), new(conv.Cents(p.Tax))
+	row.TotalUSD, row.RefundedUSD = new(conv.Cents(p.Total)), new(conv.Cents(p.Refunded))
+	row.FXRate, row.FXSource = new(conv.RateString()), new(conv.Source)
+	if !conv.Date.IsZero() {
+		row.FXDate = new(conv.Date)
+	}
+	if p.Fee != nil {
+		row.FeeUSD = new(conv.Cents(*p.Fee))
+	} else {
+		fee, feeUSD := s.d.Fees.Estimate(p.Kind, p.Total, *row.TotalUSD)
+		row.Fee, row.FeeUSD = fee, new(feeUSD)
+	}
 	return row, nil
 }
 
+// RecordFXRates stores reference rates for the conversions.
+func (s *Service) RecordFXRates(ctx context.Context, rates []billingdom.FXRate) error {
+	return s.d.Repo.UpsertFXRates(ctx, rates)
+}
+
 // recordWebhookPayments keeps the payments a webhook reports, attributed to
-// the checkout's workspace when its custom data names one.
+// the workspace the customer or the checkout's metadata names.
 func (s *Service) recordWebhookPayments(ctx context.Context, ev billingdom.Event) error {
 	if len(ev.Payments) == 0 {
 		return nil
 	}
-	tenantID := ev.CustomData["tenant_id"]
+	tenantID := cmp.Or(ev.CustomerExternalID, ev.Metadata["tenant_id"])
 	payments := make([]billingdom.Payment, len(ev.Payments))
 	for i, p := range ev.Payments {
 		p.TenantID = cmp.Or(p.TenantID, tenantID)
@@ -96,13 +164,13 @@ func (s *Service) recordWebhookPayments(ctx context.Context, ev billingdom.Event
 	return nil
 }
 
-// PaymentsStore returns the store whose payments the sync reads, and false
-// while billing is off.
-func (s *Service) PaymentsStore() (string, bool) {
+// PaymentSources lists the provider's payment histories the sync reads, in
+// order; none while billing is off.
+func (s *Service) PaymentSources() []string {
 	if !s.Enabled() {
-		return "", false
+		return nil
 	}
-	return s.d.Settings.StoreID, true
+	return s.d.Provider.PaymentSources()
 }
 
 // PaymentRow is one listed payment.

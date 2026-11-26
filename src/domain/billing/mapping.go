@@ -6,58 +6,70 @@ import (
 	"strings"
 )
 
-// Variant mapping statuses: the result of checking a price row against the
-// variant that sells it.
+// Product mapping statuses: the result of checking a price row against the
+// product that sells it.
 const (
-	MappingOK               = "ok"
-	MappingUnmapped         = "unmapped"
-	MappingVariantMissing   = "variant_missing"
-	MappingPriceMismatch    = "price_mismatch"
+	MappingOK       = "ok"
+	MappingUnmapped = "unmapped"
+	// MappingProductMissing: the product is not a recurring product of the
+	// mode's organization.
+	MappingProductMissing  = "product_missing"
+	MappingProductArchived = "product_archived"
+	MappingPriceMismatch   = "price_mismatch"
+	// MappingCurrencyMismatch: the product has no fixed price in the price
+	// row's currency.
 	MappingCurrencyMismatch = "currency_mismatch"
 	MappingIntervalMismatch = "interval_mismatch"
 	MappingModeMismatch     = "mode_mismatch"
 	MappingTrialMissing     = "trial_missing"
-	// MappingUnchecked: the mode's catalog could not be read (no API key for
+	// MappingUnchecked: the mode's catalog could not be read (no token for
 	// it, or the provider is unreachable).
 	MappingUnchecked = "unchecked"
-	// MappingVariantTaken refuses a save only: the variant already sells
-	// another price in the mode.
-	MappingVariantTaken = "variant_taken"
+	// MappingProductTaken refuses a save only: the product already sells
+	// another price in that currency and mode.
+	MappingProductTaken = "product_taken"
 )
 
-// VariantPublished is the provider status of a variant that can be bought.
-const VariantPublished = "published"
-
-// CheckMapping compares a variant with the price row it sells, in the store's
-// currency and the given mode. The variant must bill the row's amount
-// excluding tax, in its currency, every one of its intervals, and in that
-// mode; a variant of the free-month tier must also carry a one-month trial.
-// It returns MappingOK and "", or a status and a message an operator can act
-// on.
-func CheckMapping(p Price, v Variant, currency string, testMode, freeTrialTier bool) (status, message string) {
+// CheckMapping compares a product with the price row it sells, in the given
+// mode. The product must be on sale, bill the row's amount excluding tax in
+// the row's currency, every one of its intervals, in that mode; a product of
+// the free-month tier must also carry a one-month trial. It returns MappingOK
+// and "", or a status and a message an operator can act on.
+func CheckMapping(p Price, prod Product, testMode, freeTrialTier bool) (status, message string) {
+	amount, priced := prod.PriceIn(p.Currency)
 	switch {
-	case v.Status != "" && v.Status != VariantPublished:
-		return MappingVariantMissing, fmt.Sprintf("Variant %s is %s in Lemon Squeezy; publish it first.", v.ID, v.Status)
-	case v.TestMode != testMode:
-		return MappingModeMismatch, fmt.Sprintf("Variant %s is a %s variant; this is the %s map.", v.ID, modeName(v.TestMode), modeName(testMode))
-	case v.Interval != p.Interval || max(v.IntervalCount, 1) != 1:
-		return MappingIntervalMismatch, fmt.Sprintf("Variant %s bills %s; the price is billed every %s.", v.ID, every(v.Interval, v.IntervalCount), p.Interval)
-	case !strings.EqualFold(currency, p.Currency):
-		return MappingCurrencyMismatch, fmt.Sprintf("The store sells in %s; the price is in %s.", strings.ToUpper(currency), strings.ToUpper(p.Currency))
-	case v.PriceMinor != p.NetMinor:
-		return MappingPriceMismatch, fmt.Sprintf("Variant %s costs %s; the price is %s excluding tax.", v.ID, FormatMinor(v.PriceMinor, currency), FormatMinor(p.NetMinor, p.Currency))
-	case freeTrialTier && !v.OneMonthTrial():
-		return MappingTrialMissing, fmt.Sprintf("%s is the free-month tier, so variant %s needs a 1-month free trial.", p.TierName, v.ID)
+	case prod.Archived:
+		return MappingProductArchived, fmt.Sprintf("Product %s is archived; unarchive it or map another product.", prod.ID)
+	case prod.TestMode != testMode:
+		return MappingModeMismatch, fmt.Sprintf("Product %s is a %s product; this is the %s map.", prod.ID, modeName(prod.TestMode), modeName(testMode))
+	case prod.Interval != p.Interval || max(prod.IntervalCount, 1) != 1:
+		return MappingIntervalMismatch, fmt.Sprintf("Product %s bills %s; the price is billed every %s.", prod.ID, every(prod.Interval, prod.IntervalCount), p.Interval)
+	case !priced:
+		return MappingCurrencyMismatch, fmt.Sprintf("Product %s has no fixed price in %s.", prod.ID, strings.ToUpper(p.Currency))
+	case amount != p.NetMinor:
+		return MappingPriceMismatch, fmt.Sprintf("Product %s costs %s; the price is %s excluding tax.", prod.ID, FormatMinor(amount, p.Currency), FormatMinor(p.NetMinor, p.Currency))
+	case freeTrialTier && !prod.OneMonthTrial():
+		return MappingTrialMissing, fmt.Sprintf("%s is the free-month tier, so product %s needs a 1-month free trial.", p.TierName, prod.ID)
 	}
 	return MappingOK, ""
+}
+
+// zeroDecimal are the currencies whose minor unit is the major unit.
+var zeroDecimal = map[string]bool{"JPY": true, "KRW": true, "VND": true, "CLP": true, "ISK": true, "UGX": true}
+
+// MinorDigits is how many decimal places a currency's minor unit has.
+func MinorDigits(currency string) int {
+	if zeroDecimal[strings.ToUpper(currency)] {
+		return 0
+	}
+	return 2
 }
 
 // FormatMinor renders an amount in minor units with its currency, e.g.
 // "50.00 EUR". Zero-decimal currencies print whole units.
 func FormatMinor(minor int64, currency string) string {
 	currency = strings.ToUpper(currency)
-	switch currency {
-	case "JPY", "KRW", "VND", "CLP", "ISK", "UGX":
+	if MinorDigits(currency) == 0 {
 		return strconv.FormatInt(minor, 10) + " " + currency
 	}
 	sign := ""
@@ -69,9 +81,9 @@ func FormatMinor(minor int64, currency string) string {
 
 func modeName(test bool) string {
 	if test {
-		return "test-mode"
+		return "sandbox"
 	}
-	return "live"
+	return "production"
 }
 
 func every(interval string, count int) string {
