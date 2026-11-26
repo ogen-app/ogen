@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"slices"
 	"testing"
 	"time"
 
@@ -210,6 +211,17 @@ func TestBillingWebhookEvents(t *testing.T) {
 	evs, err := repo.ListWebhookEventsByTenant(ctx, "t1", 20)
 	if err != nil || len(evs) != 1 || evs[0].Outcome != models.WebhookOutcomeFailed {
 		t.Fatalf("by tenant = %+v %v", evs, err)
+	}
+	// A copy that failed after another one applied the event leaves the
+	// applied outcome.
+	for _, outcome := range []string{models.WebhookOutcomeApplied, models.WebhookOutcomeFailed} {
+		if err := repo.FinishWebhookEvent(ctx, "we-3", outcome, "", &tid, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evs, err = repo.ListWebhookEventsByTenant(ctx, tid, 20)
+	if i := slices.IndexFunc(evs, func(e models.BillingWebhookEvent) bool { return e.ID == "we-3" }); err != nil || i < 0 || evs[i].Outcome != models.WebhookOutcomeApplied {
+		t.Fatalf("late failure overwrote the outcome: %+v %v", evs, err)
 	}
 	if failed, _ := repo.ListFailedWebhookEvents(ctx, time.Now().Add(-time.Hour), true); len(failed) != 0 {
 		t.Fatal("resolved failure listed as unresolved")

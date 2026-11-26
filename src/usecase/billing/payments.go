@@ -80,15 +80,17 @@ func (s *Service) fxTable(ctx context.Context, payments []billingdom.Payment) (b
 		earliest   time.Time
 	)
 	for _, p := range payments {
-		c := strings.ToUpper(p.Currency)
-		if c == "USD" {
-			continue
-		}
-		if !slices.Contains(currencies, c) {
-			currencies = append(currencies, c)
-		}
-		if earliest.IsZero() || p.OccurredAt.Before(earliest) {
-			earliest = p.OccurredAt
+		// The fee the provider reports may be in another currency.
+		for _, c := range []string{strings.ToUpper(p.Currency), strings.ToUpper(p.FeeCurrency)} {
+			if c == "" || c == "USD" {
+				continue
+			}
+			if !slices.Contains(currencies, c) {
+				currencies = append(currencies, c)
+			}
+			if earliest.IsZero() || p.OccurredAt.Before(earliest) {
+				earliest = p.OccurredAt
+			}
 		}
 	}
 	if len(currencies) == 0 {

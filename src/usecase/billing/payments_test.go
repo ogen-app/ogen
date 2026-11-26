@@ -224,6 +224,25 @@ func TestReportedFeeIsConvertedFromItsOwnCurrency(t *testing.T) {
 	}
 }
 
+func TestFeeInAnotherCurrencyLoadsItsRate(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	day := h.now.Add(-24 * time.Hour)
+	h.storeRates(day, "1.25")
+	// A USD order whose Polar fee is in EUR cents.
+	p := order("o1", "USD", 1000, day)
+	fee := int64(80)
+	p.Fee, p.FeeCurrency = &fee, "eur"
+	if err := h.svc.RecordPayments(ctx, []billingdom.Payment{p}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := h.listPayments(true, 0, "")
+	// 0.80 EUR at 1.25 = 1.00 USD.
+	if r := rows[0]; r.FeeUSD == nil || *r.FeeUSD != 100 || r.Fee != 100 || r.FeeIsEstimated {
+		t.Fatalf("fee = %+v", r)
+	}
+}
+
 func TestListPaymentsPagesAndBounds(t *testing.T) {
 	h := newHarness(t)
 	var batch []billingdom.Payment

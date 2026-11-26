@@ -752,18 +752,23 @@ func TestRepeatedDowngradeIsResentWhenTheProviderDoesNotHoldIt(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()
 	_, buyer, _ := downgradeToPro(t, h)
-	// The provider replaced the change and the local write was lost: the
-	// mirror no longer shows the pending product.
-	m := h.mirror("s1")
-	m.PendingProductID, m.PendingEffectiveAt = "", nil
-	if err := h.repo.UpdateSubscription(ctx, nil, m); err != nil {
-		t.Fatal(err)
-	}
+	// The provider replaced the change and its webhook was lost: the mirror
+	// and the open change still show Pro.
+	held := h.provider.subs["s1"]
+	held.PendingProductID = "prod_other"
+	h.provider.subs["s1"] = held
 	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: buyer, TierID: "pro"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(h.provider.changes) != 2 || h.provider.changes[1].opts.Timing != billingdom.NextPeriod || h.provider.changes[1].productID != proProduct {
 		t.Fatalf("downgrade not re-sent: %+v", h.provider.changes)
+	}
+	if got := h.provider.subs["s1"].PendingProductID; got != proProduct {
+		t.Fatalf("the provider holds %s", got)
+	}
+	// Asked again while the provider holds it: nothing is sent.
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: buyer, TierID: "pro"}); err != nil || len(h.provider.changes) != 2 {
+		t.Fatalf("held downgrade re-sent: %v %+v", err, h.provider.changes)
 	}
 }
 
@@ -966,14 +971,15 @@ func TestProviderSwitchCutover(t *testing.T) {
 	ctx := t.Context()
 	lsTenant, lsUser, _ := h.workspace("ls")
 	compTenant, _, _ := h.workspace("comp")
-	polarTenant, _, _ := h.workspace("polar")
+	polarTenant, polarUser, _ := h.workspace("polar")
 	// A grandfathered Lemon Squeezy workspace, a complimentary one, and one
-	// already on Polar.
+	// already on Polar that still has its old Lemon Squeezy row.
 	if _, err := h.repo.SetBillingRequired(ctx, lsTenant, false, h.now); err != nil {
 		t.Fatal(err)
 	}
 	h.lemonSqueezyRow("ls1", lsTenant, "", false)
 	h.lemonSqueezyRow("ls2", compTenant, "", false)
+	h.lemonSqueezyRow("ls3", polarTenant, "", false)
 	if err := h.svc.SetComplimentary(ctx, compTenant, true, "tester"); err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +991,7 @@ func TestProviderSwitchCutover(t *testing.T) {
 		t.Fatalf("no scope: %v", err)
 	}
 	ids, err := h.svc.InvalidateSubscriptions(ctx, true, ScopeProviderSwitch)
-	if err != nil || len(ids) != 2 || !strings.Contains(strings.Join(ids, ","), lsTenant) || !strings.Contains(strings.Join(ids, ","), compTenant) {
+	if err != nil || len(ids) != 3 || !strings.Contains(strings.Join(ids, ","), lsTenant) || !strings.Contains(strings.Join(ids, ","), compTenant) {
 		t.Fatalf("dry run = %v %v", ids, err)
 	}
 	if g, _ := h.svc.Gated(ctx, lsTenant); g {
@@ -1009,7 +1015,8 @@ func TestProviderSwitchCutover(t *testing.T) {
 			sent[e.userID] = true
 		}
 	}
-	if !sent[lsUser] || len(sent) != 2 {
+	// The Polar workspace keeps its access: its owner is not asked again.
+	if !sent[lsUser] || sent[polarUser] || len(sent) != 2 {
 		t.Fatalf("emails = %+v", h.jobs.emails)
 	}
 	tb, _ := h.svc.TenantBilling(ctx, lsTenant)

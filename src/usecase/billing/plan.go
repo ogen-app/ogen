@@ -338,12 +338,13 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 	if err != nil {
 		return err
 	}
+	applied := false
 	err = s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		row, err := s.d.Repo.GetSubscriptionByProviderID(ctx, tx, sub.Provider, sub.ProviderSubscriptionID, true)
 		if err != nil {
 			return err
 		}
-		if !s.takeUpgradeAnswer(row, snap, products, productID, target) {
+		if applied = s.takeUpgradeAnswer(row, snap, products, productID, target); !applied {
 			return nil
 		}
 		if err := s.cancelOpenChange(ctx, tx, row.ID, "replaced by a plan change"); err != nil {
@@ -359,7 +360,7 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 		_, err = s.d.Assignments.ReassignTx(ctx, tx, req.TenantID, target.TierID, &target.TierVersionID, reason, s.now())
 		return err
 	})
-	if err != nil {
+	if err != nil || !applied {
 		return err
 	}
 	if reason == models.AssignmentReasonDowngrade {
@@ -378,10 +379,12 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 // is kept, and so is the tier it moved, unless a mapping removed meanwhile
 // left it without the price the owner was charged for.
 func (s *Service) takeUpgradeAnswer(row *models.BillingSubscription, snap billingdom.Subscription, products billingdom.ProductMap, productID string, target billingdom.Price) bool {
+	fresh := snap.UpdatedAt.After(row.ProviderUpdatedAt)
 	switch {
-	case snap.Status == "":
+	case snap.Status == "" && fresh:
+		// A status Ogen does not know: only the product is taken.
 		row.ProviderProductID, row.ProviderVariantID, row.TierVersionPriceID = productID, productID, new(target.ID)
-	case snap.UpdatedAt.After(row.ProviderUpdatedAt):
+	case snap.Status != "" && fresh:
 		s.copySnapshot(row, snap, products)
 		// The product was resolved to target before the switch; a mapping
 		// changed since must not detach the price the tier moves to.
@@ -420,7 +423,7 @@ func (s *Service) scheduleDowngrade(ctx context.Context, req PlanRequest, sub *m
 	}
 	open, err := s.d.Repo.OpenScheduledChange(ctx, nil, sub.ID)
 	switch {
-	case err == nil && open.ToTierVersionPriceID == target.ID && sub.PendingProductID == productID:
+	case err == nil && open.ToTierVersionPriceID == target.ID && s.providerHolds(ctx, sub.ProviderSubscriptionID, productID):
 		return nil // already scheduled, and the provider holds it
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return err
@@ -429,21 +432,22 @@ func (s *Service) scheduleDowngrade(ctx context.Context, req PlanRequest, sub *m
 	if err != nil {
 		return err
 	}
-	effective := *sub.RenewsAt
-	switch {
-	case snap.PendingEffectiveAt != nil:
-		effective = *snap.PendingEffectiveAt
-	case snap.RenewsAt != nil:
-		effective = *snap.RenewsAt
-	}
+	effective := pendingEffective(sub, snap)
 	products, err := s.productMap(ctx)
 	if err != nil {
 		return err
 	}
+	applied := false
 	err = s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		row, err := s.d.Repo.GetSubscriptionByProviderID(ctx, tx, sub.Provider, sub.ProviderSubscriptionID, true)
 		if err != nil {
 			return err
+		}
+		// A newer snapshot that no longer holds this product (another
+		// downgrade, or the change cancelled) wins over this answer.
+		fresh := snap.UpdatedAt.After(row.ProviderUpdatedAt)
+		if applied = fresh || row.PendingProductID == productID; !applied {
+			return nil
 		}
 		if err := s.cancelOpenChange(ctx, tx, row.ID, "replaced by a new downgrade"); err != nil {
 			return err
@@ -460,20 +464,45 @@ func (s *Service) scheduleDowngrade(ctx context.Context, req PlanRequest, sub *m
 		}); err != nil {
 			return err
 		}
-		if !snap.UpdatedAt.After(row.ProviderUpdatedAt) || snap.Status == "" {
+		if !fresh || snap.Status == "" {
 			return nil
 		}
 		s.copySnapshot(row, snap, products)
 		row.UpdatedAt = s.now()
 		return s.d.Repo.UpdateSubscription(ctx, tx, row)
 	})
-	if err != nil {
+	if err != nil || !applied {
 		return err
 	}
 	planChangesDowngrade.Add(1)
 	s.recordPlanChange(ctx, req, "downgrade_scheduled", current, target)
 	s.publish(ctx, req.TenantID, true)
 	return nil
+}
+
+// pendingEffective is when the provider applies the pending change: the date
+// it answered, else the renewal.
+func pendingEffective(sub *models.BillingSubscription, snap billingdom.Subscription) time.Time {
+	switch {
+	case snap.PendingEffectiveAt != nil:
+		return *snap.PendingEffectiveAt
+	case snap.RenewsAt != nil:
+		return *snap.RenewsAt
+	}
+	return *sub.RenewsAt
+}
+
+// providerHolds reports whether the provider holds productID as the
+// subscription's pending change. The mirror is not trusted for it: a lost
+// webhook can leave it showing a change the provider replaced. A failed read
+// counts as not held, so the change is sent again.
+func (s *Service) providerHolds(ctx context.Context, providerSubID, productID string) bool {
+	snap, err := s.d.Provider.GetSubscription(ctx, providerSubID)
+	if err != nil {
+		slog.WarnContext(ctx, "billing: pending change read failed; sending it again", logging.AttrComponent, "billing", "subscription", providerSubID, logging.AttrError, err)
+		return false
+	}
+	return snap.PendingProductID == productID
 }
 
 // cancelPendingChange: choosing the current plan cancels a pending downgrade,
@@ -578,8 +607,9 @@ func (s *Service) failIfOverdue(ctx context.Context, providerSubID string) error
 }
 
 func (s *Service) failChange(ctx context.Context, change *models.BillingScheduledChange, why string) error {
-	if _, err := s.d.Repo.SetScheduledChangeStatus(ctx, nil, change.ID, []string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied}, models.ScheduledChangeFailed, why, s.now()); err != nil {
-		return err
+	moved, err := s.d.Repo.SetScheduledChangeStatus(ctx, nil, change.ID, []string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied}, models.ScheduledChangeFailed, why, s.now())
+	if err != nil || !moved {
+		return err // settled meanwhile (its renewal landed): nothing failed
 	}
 	slog.ErrorContext(ctx, "billing: scheduled plan change failed", logging.AttrComponent, "billing", "change_id", change.ID, "tenant_id", change.TenantID, "error", why)
 	s.emit(ctx, []notice{{tenantID: change.TenantID, subID: change.BillingSubscriptionID, typ: "plan_change_failed", episode: change.ID, level: models.NotificationLevelError,

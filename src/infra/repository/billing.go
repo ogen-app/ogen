@@ -336,7 +336,11 @@ func (r *billingRepository) FinishWebhookEvent(ctx context.Context, id, outcome,
 		Set("outcome = ?", outcome).
 		Set("error = ?", errMsg).
 		Set("processed_at = ?", at).
-		Where("id = ?", id)
+		Where("id = ?", id).
+		// A concurrent copy that already reached an outcome other than a
+		// failure keeps it: a later failure of another copy must not make
+		// the event retryable again.
+		Where("(processed_at IS NULL OR outcome = ?)", models.WebhookOutcomeFailed)
 	if tenantID != nil {
 		q = q.Set("tenant_id = ?", *tenantID)
 	}

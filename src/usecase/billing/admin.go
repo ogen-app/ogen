@@ -473,6 +473,10 @@ func (s *Service) InvalidateSubscriptions(ctx context.Context, dryRun bool, scop
 // invalidateTenant invalidates one workspace's subscriptions in one
 // transaction, then tells its owners.
 func (s *Service) invalidateTenant(ctx context.Context, tenantID string, subIDs []string, reason string) error {
+	// A workspace that also holds a live subscription of the running
+	// provider and mode keeps its access, so its owners are not asked to
+	// choose a plan again.
+	keepsAccess := false
 	err := s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := s.d.Repo.Invalidate(ctx, tx, subIDs, reason, s.now()); err != nil {
 			return err
@@ -484,6 +488,13 @@ func (s *Service) invalidateTenant(ctx context.Context, tenantID string, subIDs 
 		}
 		if err := s.d.Repo.RequireBilling(ctx, tx, tenantID, s.now()); err != nil {
 			return err
+		}
+		subs, err := s.d.Repo.ListSubscriptionsByTenant(ctx, tx, tenantID)
+		if err != nil {
+			return err
+		}
+		if keepsAccess = s.liveSubscription(subs) != nil; keepsAccess {
+			return nil
 		}
 		owners, err := s.d.Users.ListOwnersByTenant(ctx, tenantID)
 		if err != nil {
@@ -499,6 +510,10 @@ func (s *Service) invalidateTenant(ctx context.Context, tenantID string, subIDs 
 	})
 	if err != nil {
 		return err
+	}
+	if keepsAccess {
+		s.publish(ctx, tenantID, true)
+		return nil
 	}
 	body := "Our payment provider changed. Choose your plan again to keep going."
 	if reason == models.InvalidatedReasonModeCutover {
