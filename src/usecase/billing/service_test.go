@@ -679,9 +679,25 @@ func TestPricingLeavesArchivedProductsOut(t *testing.T) {
 	p.Archived = true
 	h.provider.products[maxProduct] = p
 	h.provider.mu.Unlock()
+	// Pricing never waits on the provider: the first read finds nothing
+	// cached, offers the price and reads the product in the background.
 	flags, err := h.svc.PricingFlags(t.Context())
-	if err != nil || !flags.MappedPrices[h.proPrice.ID] || flags.MappedPrices[h.maxPrice.ID] {
-		t.Fatalf("pricing flags = %+v %v", flags, err)
+	if err != nil || !flags.MappedPrices[h.proPrice.ID] || !flags.MappedPrices[h.maxPrice.ID] {
+		t.Fatalf("pricing flags before the product is known = %+v %v", flags, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		flags, err = h.svc.PricingFlags(t.Context())
+		if err == nil && !flags.MappedPrices[h.maxPrice.ID] {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("archived product still offered: %+v %v", flags, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !flags.MappedPrices[h.proPrice.ID] {
+		t.Fatalf("pricing flags = %+v", flags)
 	}
 }
 
