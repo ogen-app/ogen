@@ -10,6 +10,7 @@ import (
 	"errors"
 	"expvar"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -184,9 +185,15 @@ func (s *platformAdminService) UpdatePlatform(ctx context.Context, req *platform
 	m := platformFromProto(pb)
 	m.ID = id
 	m.CreatedAt = existing.CreatedAt
-	// The admin contract doesn't carry canvases yet, so keep the stored ones
-	// rather than wiping them on every edit.
-	m.PostTypeCanvases = existing.PostTypeCanvases
+	// A client built before post_type_canvases leaves it unset; keep the stored
+	// canvases rather than wiping them, minus any slug the edit removed.
+	if pb.GetPostTypeCanvases() == nil {
+		m.PostTypeCanvases = maps.Clone(existing.PostTypeCanvases)
+		maps.DeleteFunc(m.PostTypeCanvases, func(slug string, _ models.Canvas) bool {
+			_, ok := m.PostTypes[slug]
+			return !ok
+		})
+	}
 	// Nor the first-comment limits.
 	m.TextConstraints = m.TextConstraints.WithFirstCommentOf(existing.TextConstraints)
 	m.UpdatedAt = time.Now().UTC()
@@ -332,7 +339,7 @@ func (s *platformAdminService) internal(ctx context.Context, op string, err erro
 // validatePlatformWrite enforces the write rules: required name + zernio_id,
 // non-negative + internally consistent numeric limits, per-platform file sizes
 // within the global upload ceilings, and per-post-type char overrides keyed on a
-// known post type.
+// known post type, and canvases keyed on a post type that takes artwork.
 func validatePlatformWrite(pb *platformsv1.Platform, limits models.PlatformGlobalLimits) error {
 	if strings.TrimSpace(pb.GetName()) == "" {
 		return status.Error(codes.InvalidArgument, "name is required")
@@ -359,7 +366,28 @@ func validatePlatformWrite(pb *platformsv1.Platform, limits models.PlatformGloba
 		}
 	}
 	if txt := pb.GetTextConstraints(); txt != nil {
-		return validateTextLimits(txt, pb.GetPostTypes())
+		if err := validateTextLimits(txt, pb.GetPostTypes()); err != nil {
+			return err
+		}
+	}
+	return validateCanvases(pb.GetPostTypeCanvases().GetBySlug(), pb.GetPostTypes())
+}
+
+// validateCanvases rejects a canvas whose sides are outside 1..MaxCanvasSide,
+// or one keyed on a slug that isn't a post type of the platform or whose
+// publish rule allows no image or video.
+func validateCanvases(canvases map[string]*platformsv1.Canvas, postTypes map[string]string) error {
+	for slug, c := range canvases {
+		if _, ok := postTypes[slug]; !ok {
+			return status.Errorf(codes.InvalidArgument, "canvas %q is not one of the platform's post_types", slug)
+		}
+		if !domainplatforms.TakesArtwork(slug) {
+			return status.Errorf(codes.InvalidArgument, "canvas %q: post type takes no image or video", slug)
+		}
+		w, h := c.GetWidth(), c.GetHeight()
+		if w <= 0 || h <= 0 || w > domainplatforms.MaxCanvasSide || h > domainplatforms.MaxCanvasSide {
+			return status.Errorf(codes.InvalidArgument, "canvas %q is %d×%d; width and height must each be 1..%d", slug, w, h, domainplatforms.MaxCanvasSide)
+		}
 	}
 	return nil
 }
@@ -466,6 +494,7 @@ func platformFromProto(pb *platformsv1.Platform) models.Platform {
 		VideoConstraints:   fromVideoProto(pb.GetVideoConstraints()),
 		PDFConstraints:     fromPdfProto(pb.GetPdfConstraints()),
 		TextConstraints:    fromTextProto(pb.GetTextConstraints()),
+		PostTypeCanvases:   fromCanvasesProto(pb.GetPostTypeCanvases()),
 	}
 }
 
@@ -488,10 +517,27 @@ func toPlatformProto(p *models.Platform, usage *platformsv1.PlatformUsage) *plat
 		VideoConstraints:   toVideoProto(p.VideoConstraints),
 		PdfConstraints:     toPdfProto(p.PDFConstraints),
 		TextConstraints:    toTextProto(p.TextConstraints),
+		PostTypeCanvases:   toCanvasesProto(p.PostTypeCanvases),
 		Usage:              usage,
 		CreatedAt:          timestamppb.New(p.CreatedAt),
 		UpdatedAt:          timestamppb.New(p.UpdatedAt),
 	}
+}
+
+func fromCanvasesProto(c *platformsv1.PostTypeCanvases) models.PostTypeCanvases {
+	out := make(models.PostTypeCanvases, len(c.GetBySlug()))
+	for slug, v := range c.GetBySlug() {
+		out[slug] = models.Canvas{Width: int(v.GetWidth()), Height: int(v.GetHeight())}
+	}
+	return out
+}
+
+func toCanvasesProto(m models.PostTypeCanvases) *platformsv1.PostTypeCanvases {
+	bySlug := make(map[string]*platformsv1.Canvas, len(m))
+	for slug, c := range m {
+		bySlug[slug] = &platformsv1.Canvas{Width: int32(c.Width), Height: int32(c.Height)}
+	}
+	return &platformsv1.PostTypeCanvases{BySlug: bySlug}
 }
 
 func fromImageProto(c *platformsv1.ImageConstraints) models.ImageConstraints {
