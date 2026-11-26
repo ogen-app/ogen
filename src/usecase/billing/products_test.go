@@ -77,9 +77,21 @@ func TestProductStoreCachesAndKeepsLastGoodMap(t *testing.T) {
 		t.Fatal("not reloaded after Invalidate")
 	}
 
-	// A failed reload serves the last good map and retries soon.
+	// After an edit, a failed reload does not fall back to the map from
+	// before it.
 	lister.err = errors.New("db down")
 	store.Invalidate()
+	if _, err := store.Current(ctx); err == nil {
+		t.Fatal("served the map from before the edit")
+	}
+	lister.err = nil
+	if m, err := store.Current(ctx); err != nil || mapped(m, "p1") != "prod_3" {
+		t.Fatalf("reload after the edit: %v %v", mapped(m, "p1"), err)
+	}
+
+	// A routine refresh that fails serves the last good map and retries soon.
+	lister.err = errors.New("db down")
+	now = now.Add(productMapTTL + time.Second)
 	m, err = store.Current(ctx)
 	if err != nil || mapped(m, "p1") != "prod_3" {
 		t.Fatalf("failed reload: %v %v", mapped(m, "p1"), err)

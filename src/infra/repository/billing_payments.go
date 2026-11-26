@@ -56,10 +56,11 @@ func (r *billingRepository) UpsertPayments(ctx context.Context, rows []models.Bi
 	for _, c := range paymentUpdateColumns {
 		q = q.Set("? = EXCLUDED.?", bun.Ident(c), bun.Ident(c))
 	}
-	// An estimated fee needs the USD total: a copy that could not be
-	// converted keeps the fee already estimated.
-	q = q.Set("fee = CASE WHEN EXCLUDED.fee_is_estimated AND EXCLUDED.fee_usd IS NULL THEN bp.fee ELSE EXCLUDED.fee END").
-		Set("fee_is_estimated = EXCLUDED.fee_is_estimated")
+	// A fee needs a rate (an estimate the USD total, a reported fee in
+	// another currency its own): a copy that could not be converted keeps the
+	// fee of a copy that was.
+	q = q.Set("fee = CASE WHEN EXCLUDED.fee_usd IS NULL AND bp.fee_usd IS NOT NULL THEN bp.fee ELSE EXCLUDED.fee END").
+		Set("fee_is_estimated = CASE WHEN EXCLUDED.fee_usd IS NULL AND bp.fee_usd IS NOT NULL THEN bp.fee_is_estimated ELSE EXCLUDED.fee_is_estimated END")
 	for _, c := range paymentConversionColumns {
 		q = q.Set("? = COALESCE(EXCLUDED.?, bp.?)", bun.Ident(c), bun.Ident(c), bun.Ident(c))
 	}

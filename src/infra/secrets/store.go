@@ -38,10 +38,14 @@ const (
 	// CON-222 URL assets: Firecrawl.dev web-scrape API key.
 	NameFirecrawlAPIKey = "firecrawl_api_key"
 	// Billing on Polar: the Organization Access Token of the running mode
-	// (sandbox or production) and the webhook endpoint's signing secret,
-	// rotated here at the mode cutover.
-	NamePolarAccessToken   = "polar_access_token"
-	NamePolarWebhookSecret = "polar_webhook_secret"
+	// (sandbox or production), rotated here at the mode cutover, and each
+	// mode's webhook signing secret. The secret is per mode so a replica
+	// verifies only deliveries of the mode it runs in: while a mode switch
+	// rolls out, a replica still in the sandbox rejects a production
+	// delivery (Polar retries it) instead of recording it as a test one.
+	NamePolarAccessToken             = "polar_access_token"
+	NamePolarWebhookSecretSandbox    = "polar_webhook_secret_sandbox"
+	NamePolarWebhookSecretProduction = "polar_webhook_secret_production"
 	// The production token (products:read only) used while billing still
 	// runs in the sandbox, so the live product map can be prepared and
 	// checked before the switch. Optional.
@@ -58,6 +62,14 @@ const (
 	NameAnthropicAdminAPIKey = "anthropic_admin_api_key"
 )
 
+// PolarWebhookSecretName is the webhook signing secret of a billing mode.
+func PolarWebhookSecretName(testMode bool) string {
+	if testMode {
+		return NamePolarWebhookSecretSandbox
+	}
+	return NamePolarWebhookSecretProduction
+}
+
 // AllowedNames is the closed set of accepted secret names. Anything
 // else is rejected at the Store boundary with ErrUnknownName.
 var AllowedNames = []string{
@@ -69,7 +81,8 @@ var AllowedNames = []string{
 	NameEmailLinkSecret,
 	NameFirecrawlAPIKey,
 	NamePolarAccessToken,
-	NamePolarWebhookSecret,
+	NamePolarWebhookSecretSandbox,
+	NamePolarWebhookSecretProduction,
 	NamePolarAccessTokenLive,
 	NameLemonSqueezyAPIKey,
 	NameLemonSqueezyWebhookSecret,

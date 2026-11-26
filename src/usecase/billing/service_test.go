@@ -723,6 +723,134 @@ func TestUnknownStatusKeepsTheEndOfACancelledSubscription(t *testing.T) {
 	}
 }
 
+func TestKeepCurrentPlanAsksTheProviderWhenNothingLocalShowsAChange(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, userID, _ := h.workspace("a")
+	if err := h.webhook("subscription.created", h.sub("s1", maxProduct, models.SubscriptionStatusActive, h.now), map[string]string{"tenant_id": tenantID}); err != nil {
+		t.Fatal(err)
+	}
+	// The provider took a downgrade whose local write failed, and no webhook
+	// has shown it yet.
+	s := h.provider.subs["s1"]
+	s.PendingProductID, s.PendingEffectiveAt = proProduct, s.RenewsAt
+	h.provider.subs["s1"] = s
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: Buyer{TenantID: tenantID, UserID: userID}, TierID: "max"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.provider.cancels) != 1 || h.provider.subs["s1"].PendingProductID != "" {
+		t.Fatalf("provider still holds the downgrade: cancels %v", h.provider.cancels)
+	}
+	// With nothing pending anywhere, keeping the plan stays a no-op.
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: Buyer{TenantID: tenantID, UserID: userID}, TierID: "max"}); err != nil || len(h.provider.cancels) != 1 {
+		t.Fatalf("second keep: %v cancels %v", err, h.provider.cancels)
+	}
+}
+
+func TestRepeatedDowngradeIsResentWhenTheProviderDoesNotHoldIt(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	_, buyer, _ := downgradeToPro(t, h)
+	// The provider replaced the change and the local write was lost: the
+	// mirror no longer shows the pending product.
+	m := h.mirror("s1")
+	m.PendingProductID, m.PendingEffectiveAt = "", nil
+	if err := h.repo.UpdateSubscription(ctx, nil, m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: buyer, TierID: "pro"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.provider.changes) != 2 || h.provider.changes[1].opts.Timing != billingdom.NextPeriod || h.provider.changes[1].productID != proProduct {
+		t.Fatalf("downgrade not re-sent: %+v", h.provider.changes)
+	}
+}
+
+func TestStaleUpgradeAnswerDoesNotUndoANewerSnapshot(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, userID, _ := h.workspace("a")
+	subscribe(t, h, tenantID, models.SubscriptionStatusActive)
+	h.now = h.now.Add(time.Minute)
+	// While the upgrade is at the provider, a newer snapshot lands (a later
+	// change made in the portal): still on Pro.
+	h.provider.duringChange = func() {
+		newer := h.provider.subs["s1"]
+		newer.UpdatedAt = h.now.Add(time.Hour)
+		if err := h.webhook("subscription.updated", newer, nil); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: Buyer{TenantID: tenantID, UserID: userID}, TierID: "max"}); err != nil {
+		t.Fatal(err)
+	}
+	if m := h.mirror("s1"); m.ProviderProductID != proProduct || *m.TierVersionPriceID != h.proPrice.ID {
+		t.Fatalf("the stale answer overwrote the newer snapshot: %s %s", m.ProviderProductID, *m.TierVersionPriceID)
+	}
+	if got := h.currentVersion(tenantID); !strings.HasPrefix(got, h.proPrice.TierVersionID) {
+		t.Fatalf("tier moved on a stale answer: %s", got)
+	}
+}
+
+func TestUnknownStatusKeepsTheTrialEnd(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, _, accountID := h.workspace("a")
+	snap := h.sub("s1", proProduct, models.SubscriptionStatusOnTrial, h.now)
+	if err := h.webhook("subscription.created", snap, map[string]string{"tenant_id": tenantID, "account_id": accountID}); err != nil {
+		t.Fatal(err)
+	}
+	snap.Status, snap.ProviderStatus, snap.TrialEndsAt, snap.UpdatedAt = "", "something_new", nil, h.now.Add(time.Minute)
+	if err := h.webhook("subscription.updated", snap, nil); err != nil {
+		t.Fatal(err)
+	}
+	if m := h.mirror("s1"); m.TrialEndsAt == nil {
+		t.Fatal("trial end lost")
+	}
+	if eligible, _ := h.svc.TrialEligible(ctx, accountID); eligible {
+		t.Fatal("the account got its free month back")
+	}
+}
+
+func TestReconcileLandsADowngradeWhoseWebhookWasMissed(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, _, effective := downgradeToPro(t, h)
+	// The provider renews onto Pro; the webhook never arrives.
+	h.now = effective.Add(scheduledChangeGrace + time.Hour)
+	h.provider.renew("s1", h.now)
+	if err := h.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.currentVersion(tenantID); got != h.proPrice.TierVersionID+"/"+models.AssignmentReasonDowngrade {
+		t.Fatalf("assignment = %s", got)
+	}
+	if h.notifier.has("plan_change_failed") {
+		t.Fatal("a landed downgrade was failed")
+	}
+	tb, _ := h.svc.TenantBilling(ctx, tenantID)
+	if len(tb.ScheduledChanges) != 1 || tb.ScheduledChanges[0].Status != models.ScheduledChangeApplied {
+		t.Fatalf("changes = %+v", tb.ScheduledChanges)
+	}
+}
+
+func TestPaymentRecordingErrorsKeepTheRetryWindow(t *testing.T) {
+	h := newHarness(t)
+	// A payment the database refuses (a source outside its CHECK) fails the
+	// delivery, so the provider redelivers it...
+	bad := order("o1", "USD", 100, h.now)
+	bad.Source = "bogus"
+	ev := billingdom.Event{Name: "order.paid", Kind: billingdom.EventPayment, TestMode: true, ObjectID: "o1", Payments: []billingdom.Payment{bad}}
+	if err := h.deliverAs("evt_bad", ev); err == nil {
+		t.Fatal("a failed payment write was acknowledged at once")
+	}
+	// ...for an hour after its first delivery, then it is acknowledged.
+	h.now = h.now.Add(webhookRetryWindow + time.Minute)
+	if err := h.deliverAs("evt_bad", ev); err != nil {
+		t.Fatalf("a delivery past the retry window: %v", err)
+	}
+}
+
 func TestCancelAtPeriodEndCancelsDowngrade(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()

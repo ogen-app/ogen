@@ -30,8 +30,10 @@ func billingSettings(cfg *config.Config) (billingdom.Settings, error) {
 	})
 }
 
-// billingSecrets are the secrets billing needs to work at all.
-var billingSecrets = []string{secrets.NamePolarAccessToken, secrets.NamePolarWebhookSecret}
+// billingSecrets are the secrets billing needs to work at all in a mode.
+func billingSecrets(testMode bool) []string {
+	return []string{secrets.NamePolarAccessToken, secrets.PolarWebhookSecretName(testMode)}
+}
 
 // secretResolver reads a secret per call; an unset one reads as "" so the
 // caller degrades instead of failing.
@@ -50,7 +52,7 @@ func newBillingProvider(cfg *config.Config, store secrets.Store, settings billin
 	return polar.New(polar.Options{
 		AccessToken:        secretResolver(store, secrets.NamePolarAccessToken),
 		LiveAccessToken:    secretResolver(store, secrets.NamePolarAccessTokenLive),
-		WebhookSecret:      secretResolver(store, secrets.NamePolarWebhookSecret),
+		WebhookSecret:      secretResolver(store, secrets.PolarWebhookSecretName(settings.TestMode)),
 		OrganizationID:     settings.OrganizationID,
 		LiveOrganizationID: settings.OrganizationIDLive,
 		TestMode:           settings.TestMode,
@@ -108,7 +110,7 @@ func NewBillingService(rt BillingRuntime) (*billing.Service, error) {
 		Fees:     billingdom.FeeFormula{PercentBPS: rt.Config.BillingFeePercentBPS, FixedUSDCents: rt.Config.BillingFeeFixedCents},
 		Notifier: rt.Notifier, Jobs: rt.Jobs, Hub: rt.Hub, Activity: rt.Activity,
 		Configured: func(ctx context.Context) bool {
-			for _, name := range billingSecrets {
+			for _, name := range billingSecrets(settings.TestMode) {
 				if v, err := secretResolver(rt.Secrets, name)(ctx); err != nil || v == "" {
 					return false
 				}
@@ -152,7 +154,7 @@ func (d *deps) initBilling(ctx context.Context) error {
 // working: missing secrets, an empty product map. A dashboard edit at the
 // provider must never take the API down.
 func (d *deps) warnBillingConfig(ctx context.Context, svc *billing.Service) {
-	for _, name := range billingSecrets {
+	for _, name := range billingSecrets(svc.Settings().TestMode) {
 		if v, err := secretResolver(d.secretStore, name)(ctx); err == nil && v == "" {
 			slog.WarnContext(ctx, "billing enabled but secret not set; billing answers 503 until it is set in Harbor", logging.AttrComponent, "billing", "secret", name)
 		}

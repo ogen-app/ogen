@@ -42,13 +42,17 @@ func (p productJSON) toProduct(testMode bool) billing.Product {
 			out.TrialIntervalCount = *p.TrialIntervalCount
 		}
 	}
-	// Only fixed prices are sellable; a pay-what-you-want or free price is
-	// never mapped.
+	// Only fixed prices are sold. Any other active price (seats, usage, a
+	// custom or free amount) is billed too, so it marks the whole product
+	// rather than being left out.
 	for _, pr := range p.Prices {
-		if pr.AmountType != "fixed" || pr.IsArchived || pr.PriceAmount == nil {
-			continue
+		switch {
+		case pr.IsArchived:
+		case pr.AmountType != "fixed" || pr.PriceAmount == nil:
+			out.VariablePricing = true
+		default:
+			out.Prices = append(out.Prices, billing.ProductPrice{Currency: strings.ToUpper(pr.PriceCurrency), AmountMinor: *pr.PriceAmount})
 		}
-		out.Prices = append(out.Prices, billing.ProductPrice{Currency: strings.ToUpper(pr.PriceCurrency), AmountMinor: *pr.PriceAmount})
 	}
 	return out
 }

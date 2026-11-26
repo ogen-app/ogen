@@ -284,12 +284,6 @@ func TestBillingScheduledChanges(t *testing.T) {
 	if err := repo.InsertScheduledChange(ctx, nil, &second); err == nil {
 		t.Fatal("two open changes on one subscription accepted")
 	}
-	if overdue, err := repo.ListOverdueScheduledChanges(ctx, now); err != nil || len(overdue) != 0 {
-		t.Fatalf("overdue before effective_at = %+v %v", overdue, err)
-	}
-	if overdue, _ := repo.ListOverdueScheduledChanges(ctx, now.Add(time.Hour)); len(overdue) != 1 {
-		t.Fatal("change not overdue after effective_at")
-	}
 	if moved, _ := repo.SetScheduledChangeStatus(ctx, nil, "sc-1", []string{models.ScheduledChangePending}, models.ScheduledChangeCancelled, "", now); moved {
 		t.Fatal("status guard ignored")
 	}

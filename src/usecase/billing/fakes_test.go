@@ -38,6 +38,8 @@ type fakeProvider struct {
 	catalogErr error
 	liveKey    bool
 	clock      func() time.Time
+	// seq makes every provider-side update newer than the last.
+	seq int
 	// duringChange runs once, at the start of the next ChangePlan and outside
 	// the lock, to interleave a caller with a provider call in flight.
 	duringChange func()
@@ -100,12 +102,13 @@ func (f *fakeProvider) ChangePlan(_ context.Context, id, productID string, opts 
 	if opts.EndTrialNow {
 		s.Status, s.TrialEndsAt = models.SubscriptionStatusActive, nil
 	}
-	s.UpdatedAt = f.clock().Add(time.Duration(len(f.changes)) * time.Second)
+	f.seq++
+	s.UpdatedAt = f.clock().Add(time.Duration(f.seq) * time.Second)
 	f.subs[id] = s
 	return s, nil
 }
 
-func (f *fakeProvider) CancelScheduledChange(_ context.Context, id, currentProductID string) (billingdom.Subscription, error) {
+func (f *fakeProvider) CancelScheduledChange(_ context.Context, id string) (billingdom.Subscription, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.changeErr != nil {
@@ -113,8 +116,9 @@ func (f *fakeProvider) CancelScheduledChange(_ context.Context, id, currentProdu
 	}
 	f.cancels = append(f.cancels, id)
 	s := f.subs[id]
-	s.ProductID, s.PendingProductID, s.PendingEffectiveAt = currentProductID, "", nil
-	s.UpdatedAt = f.clock().Add(time.Duration(len(f.changes)+len(f.cancels)) * time.Second)
+	s.PendingProductID, s.PendingEffectiveAt = "", nil
+	f.seq++
+	s.UpdatedAt = f.clock().Add(time.Duration(f.seq) * time.Second)
 	f.subs[id] = s
 	return s, nil
 }

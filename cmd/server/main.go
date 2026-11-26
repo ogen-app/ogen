@@ -212,7 +212,8 @@ func initSecrets(ctx context.Context, cfg *config.Config, db *bun.DB) (secrets.S
 		{Name: secrets.NameEmailLinkSecret, EnvValue: cfg.EmailLinkSecret},
 		{Name: secrets.NameFirecrawlAPIKey, EnvValue: cfg.FirecrawlAPIKey},
 		{Name: secrets.NamePolarAccessToken, EnvValue: cfg.PolarAccessToken},
-		{Name: secrets.NamePolarWebhookSecret, EnvValue: cfg.PolarWebhookSecret},
+		// The webhook secret seeds the mode billing runs in.
+		{Name: secrets.PolarWebhookSecretName(cfg.BillingTestMode), EnvValue: cfg.PolarWebhookSecret},
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("migrate secrets from env: %w", err)

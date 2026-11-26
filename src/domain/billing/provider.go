@@ -61,9 +61,8 @@ type Provider interface {
 	// without a charge.
 	ChangePlan(ctx context.Context, providerSubID, productID string, opts ChangeOpts) (Subscription, error)
 	// CancelScheduledChange drops a change the provider holds for the next
-	// period, so the subscription renews on currentProductID, the product it
-	// is on now.
-	CancelScheduledChange(ctx context.Context, providerSubID, currentProductID string) (Subscription, error)
+	// period, so the subscription renews on the product it is on now.
+	CancelScheduledChange(ctx context.Context, providerSubID string) (Subscription, error)
 	// PortalSession opens a customer-portal session for the customer with
 	// this external id (the tenant id).
 	PortalSession(ctx context.Context, customerExternalID string) (PortalSession, error)

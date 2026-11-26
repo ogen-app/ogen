@@ -201,11 +201,13 @@ func TestClientRequestsAndErrors(t *testing.T) {
 	if last := (*seen)[len(*seen)-1]; last.body["trial_end"] != "now" {
 		t.Fatalf("end trial = %v", last.body)
 	}
-	if _, err := c.CancelScheduledChange(ctx, "sub_1", "prod_max"); err != nil {
+	if _, err := c.CancelScheduledChange(ctx, "sub_1"); err != nil {
 		t.Fatal(err)
 	}
-	if last := (*seen)[len(*seen)-1]; last.body["product_id"] != "prod_max" || last.body["proration_behavior"] != "next_period" {
+	if last := (*seen)[len(*seen)-1]; len(last.body) != 1 || last.body["pending_update"] != nil {
 		t.Fatalf("cancel scheduled change = %v", last.body)
+	} else if _, ok := last.body["pending_update"]; !ok {
+		t.Fatalf("cancel scheduled change sent no pending_update: %v", last.body)
 	}
 
 	if _, err := c.GetSubscription(ctx, "sub_nope"); !errors.Is(err, billing.ErrNotFound) {
@@ -247,8 +249,11 @@ func TestCatalogPagesAndReadsLiveWithItsToken(t *testing.T) {
 		 "prices":[{"amount_type":"fixed","price_amount":2900,"price_currency":"eur","is_archived":false},
 		           {"amount_type":"fixed","price_amount":3200,"price_currency":"usd","is_archived":false},
 		           {"amount_type":"fixed","price_amount":1,"price_currency":"gbp","is_archived":true},
-		           {"amount_type":"custom","price_currency":"eur","is_archived":false}]}
-	],"pagination":{"total_count":2,"max_page":2}}`
+		           {"amount_type":"custom","price_currency":"eur","is_archived":true}]},
+		{"id":"prod_team","name":"Team monthly","is_recurring":true,"is_archived":false,"recurring_interval":"month",
+		 "prices":[{"amount_type":"fixed","price_amount":5000,"price_currency":"eur","is_archived":false},
+		           {"amount_type":"seat_based","price_currency":"eur","is_archived":false}]}
+	],"pagination":{"total_count":3,"max_page":2}}`
 	page2 := `{"items":[{"id":"prod_old","name":"Old","is_recurring":true,"is_archived":true,"recurring_interval":"year","prices":[]}],"pagination":{"total_count":2,"max_page":2}}`
 	c, seen := server(t, map[string]func(http.ResponseWriter, *http.Request){
 		"GET /products/": func(w http.ResponseWriter, r *http.Request) {
@@ -260,14 +265,18 @@ func TestCatalogPagesAndReadsLiveWithItsToken(t *testing.T) {
 		},
 	})
 	cat, err := c.Catalog(context.Background(), true)
-	if err != nil || len(cat.Products) != 2 {
+	if err != nil || len(cat.Products) != 3 {
 		t.Fatalf("catalog = %+v %v", cat, err)
 	}
 	pro := cat.Products[0]
-	if amount, ok := pro.PriceIn("USD"); !ok || amount != 3200 || len(pro.Prices) != 2 || !pro.OneMonthTrial() || !pro.TestMode || pro.IntervalCount != 1 {
+	if amount, ok := pro.PriceIn("USD"); !ok || amount != 3200 || len(pro.Prices) != 2 || !pro.OneMonthTrial() || !pro.TestMode || pro.IntervalCount != 1 || pro.VariablePricing {
 		t.Fatalf("pro = %+v", pro)
 	}
-	if old := cat.Products[1]; !old.Archived || old.Interval != "year" {
+	// A seat price is billed too, so the product is not a fixed-price one.
+	if team := cat.Products[1]; !team.VariablePricing || len(team.Prices) != 1 {
+		t.Fatalf("team = %+v", team)
+	}
+	if old := cat.Products[2]; !old.Archived || old.Interval != "year" {
 		t.Fatalf("old = %+v", old)
 	}
 	if q := (*seen)[0].query; !strings.Contains(q, "organization_id=org_sandbox") || !strings.Contains(q, "is_recurring=true") || !strings.Contains(q, "limit=100") {

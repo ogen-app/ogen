@@ -24,7 +24,11 @@ type Product struct {
 	TrialIntervalCount int
 	// Archived products cannot be bought.
 	Archived bool
-	TestMode bool
+	// VariablePricing: the product also bills something other than a fixed
+	// price (seats, usage, an amount the customer picks). A checkout buys
+	// the whole product, so such a product cannot sell a fixed price row.
+	VariablePricing bool
+	TestMode        bool
 }
 
 // ProductPrice is a product's fixed price in one currency.

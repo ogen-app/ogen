@@ -196,11 +196,11 @@ func (c *Client) ChangePlan(ctx context.Context, id, productID string, opts bill
 	return c.patchSubscription(ctx, id, body)
 }
 
-// CancelScheduledChange implements billing.Provider: a next-period update
-// back to the current product replaces the pending one (spike: confirm that
-// this clears pending_update).
-func (c *Client) CancelScheduledChange(ctx context.Context, id, currentProductID string) (billing.Subscription, error) {
-	return c.patchSubscription(ctx, id, map[string]any{"product_id": currentProductID, "proration_behavior": "next_period"})
+// CancelScheduledChange implements billing.Provider with Polar's clearing
+// update ({"pending_update": null}), which needs nothing of the current
+// product: it works even when that product was archived since.
+func (c *Client) CancelScheduledChange(ctx context.Context, id string) (billing.Subscription, error) {
+	return c.patchSubscription(ctx, id, map[string]any{"pending_update": nil})
 }
 
 func (c *Client) patchSubscription(ctx context.Context, id string, body map[string]any) (billing.Subscription, error) {

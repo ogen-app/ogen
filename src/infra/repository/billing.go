@@ -84,9 +84,6 @@ type BillingRepository interface {
 	// one of from; it reports whether it moved.
 	SetScheduledChangeStatus(ctx context.Context, db bun.IDB, id string, from []string, status, errMsg string, at time.Time) (bool, error)
 	ListScheduledChangesByTenant(ctx context.Context, tenantID string) ([]models.BillingScheduledChange, error)
-	// ListOverdueScheduledChanges lists the changes held by the provider
-	// whose effective time passed before a cutoff without landing.
-	ListOverdueScheduledChanges(ctx context.Context, before time.Time) ([]models.BillingScheduledChange, error)
 	ListScheduledChangesByStatus(ctx context.Context, status string, since time.Time) ([]models.BillingScheduledChange, error)
 
 	// Tenants and tiers.
@@ -440,16 +437,6 @@ func (r *billingRepository) ListScheduledChangesByTenant(ctx context.Context, te
 	err := r.db.NewSelect().Model(&out).
 		Where("bsc.tenant_id = ?", tenantID).
 		OrderExpr("bsc.created_at DESC, bsc.id DESC").
-		Scan(ctx)
-	return out, err
-}
-
-func (r *billingRepository) ListOverdueScheduledChanges(ctx context.Context, before time.Time) ([]models.BillingScheduledChange, error) {
-	var out []models.BillingScheduledChange
-	err := r.db.NewSelect().Model(&out).
-		Where("bsc.status IN (?)", bun.List([]string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied})).
-		Where("bsc.effective_at <= ?", before).
-		OrderExpr("bsc.effective_at").
 		Scan(ctx)
 	return out, err
 }

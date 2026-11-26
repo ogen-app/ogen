@@ -20,6 +20,7 @@ func TestCheckMapping(t *testing.T) {
 	}{
 		{name: "match", p: good, freeTier: true, want: MappingOK},
 		{name: "archived", p: with(func(p *Product) { p.Archived = true }), want: MappingProductArchived, message: "is archived"},
+		{name: "seats or usage", p: with(func(p *Product) { p.VariablePricing = true }), want: MappingPriceMismatch, message: "bills more than a fixed price"},
 		{name: "count zero reads as one", p: with(func(p *Product) { p.IntervalCount = 0 }), want: MappingOK},
 		{name: "other mode", p: with(func(p *Product) { p.TestMode = false }), want: MappingModeMismatch, message: "production product"},
 		{name: "yearly", p: with(func(p *Product) { p.Interval = "year" }), want: MappingIntervalMismatch, message: "every year"},
