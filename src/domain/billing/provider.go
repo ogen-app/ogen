@@ -1,9 +1,9 @@
 // Package billing is the provider-neutral billing core: the Provider contract
 // a merchant-of-record adapter implements, the neutral subscription and event
-// shapes, and the pure rules (liveness, plan ranking, the variant map) the
-// billing usecase builds on. Lemon Squeezy is the only adapter today
-// (src/infra/billing/lemonsqueezy); subscription statuses keep its vocabulary
-// because the UI contract passes them through.
+// shapes, and the pure rules (liveness, plan ranking, the product map) the
+// billing usecase builds on. Polar is the adapter (src/infra/billing/polar).
+// Subscription statuses are Ogen's own words; the adapter maps the provider's
+// into them, so the UI contract never sees a provider's vocabulary.
 package billing
 
 import (
@@ -12,23 +12,33 @@ import (
 	"time"
 )
 
-// ErrNotConfigured is returned when the provider's API key or webhook secret
-// is not set. Callers answer 503 billing_unavailable.
+// ErrNotConfigured is returned when the provider's access token or webhook
+// secret is not set. Callers answer 503 billing_unavailable.
 var ErrNotConfigured = errors.New("billing: provider not configured")
 
 // ErrInvalidSignature is returned by VerifyWebhook for a body whose signature
-// does not match.
+// does not match, or whose timestamp is too far from now.
 var ErrInvalidSignature = errors.New("billing: invalid webhook signature")
 
 // ErrNotFound is returned when the provider has no such object.
 var ErrNotFound = errors.New("billing: not found at provider")
 
+// ErrPaymentFailed is returned when a change that charges now was declined or
+// needs the customer to authenticate the payment.
+var ErrPaymentFailed = errors.New("billing: payment failed at provider")
+
+// ErrAlreadyCanceled is returned when a change targets a subscription the
+// provider has already cancelled.
+var ErrAlreadyCanceled = errors.New("billing: subscription already cancelled at provider")
+
 // IsRetryable reports whether a provider error may succeed on retry. An error
 // that knows (a Retryable() bool method, like an HTTP 429/5xx) decides;
-// configuration, not-found and signature errors never retry; anything else
-// (a transport failure) does.
+// configuration, not-found, signature and refused-change errors never retry;
+// anything else (a transport failure) does.
 func IsRetryable(err error) bool {
-	if err == nil || errors.Is(err, ErrNotConfigured) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidSignature) {
+	switch {
+	case err == nil, errors.Is(err, ErrNotConfigured), errors.Is(err, ErrNotFound), errors.Is(err, ErrInvalidSignature),
+		errors.Is(err, ErrPaymentFailed), errors.Is(err, ErrAlreadyCanceled):
 		return false
 	}
 	if r, ok := errors.AsType[interface {
@@ -42,38 +52,91 @@ func IsRetryable(err error) bool {
 
 // Provider is a merchant-of-record adapter.
 type Provider interface {
-	// CreateCheckout opens a hosted checkout for one variant.
+	// CreateCheckout opens a hosted checkout for one product.
 	CreateCheckout(ctx context.Context, req CheckoutRequest) (CheckoutSession, error)
-	// GetSubscription reads one subscription, including a fresh portal URL.
+	// GetSubscription reads one subscription.
 	GetSubscription(ctx context.Context, providerSubID string) (Subscription, error)
-	// ChangePlan switches a subscription to another variant. It applies at
-	// once at the provider; scheduling is the caller's job.
-	ChangePlan(ctx context.Context, providerSubID, variantID string, opts ChangeOpts) (Subscription, error)
-	// GetVariant reads a variant's price and trial configuration in the
-	// current mode.
-	GetVariant(ctx context.Context, variantID string) (Variant, error)
-	// Catalog lists the store's subscription variants in one mode, with the
-	// store's currency. Reading the mode the server does not run in needs
-	// that mode's API key; ErrNotConfigured without it.
+	// ChangePlan switches a subscription to another product. Timing decides
+	// whether it is charged now, applied from the next period, or applied now
+	// without a charge.
+	ChangePlan(ctx context.Context, providerSubID, productID string, opts ChangeOpts) (Subscription, error)
+	// CancelScheduledChange drops a change the provider holds for the next
+	// period, so the subscription renews on currentProductID, the product it
+	// is on now.
+	CancelScheduledChange(ctx context.Context, providerSubID, currentProductID string) (Subscription, error)
+	// PortalSession opens a customer-portal session for the customer with
+	// this external id (the tenant id).
+	PortalSession(ctx context.Context, customerExternalID string) (PortalSession, error)
+	// GetProduct reads a product's prices and trial in the current mode.
+	GetProduct(ctx context.Context, productID string) (Product, error)
+	// Catalog lists the organization's recurring products in one mode.
+	// Reading the mode the server does not run in needs that mode's token;
+	// ErrNotConfigured without it.
 	Catalog(ctx context.Context, testMode bool) (Catalog, error)
-	// VerifyWebhook checks a webhook body against its signature header. It
-	// returns ErrNotConfigured without a signing secret and
-	// ErrInvalidSignature on a mismatch.
-	VerifyWebhook(ctx context.Context, signature string, body []byte) error
+	// VerifyWebhook checks a webhook body against its headers. It returns
+	// ErrNotConfigured without a signing secret and ErrInvalidSignature on a
+	// mismatch.
+	VerifyWebhook(ctx context.Context, h WebhookHeaders, body []byte) error
 	// ParseWebhook decodes a verified webhook body.
-	ParseWebhook(body []byte) (Event, error)
+	ParseWebhook(h WebhookHeaders, body []byte) (Event, error)
+	// PaymentSources lists the payment histories ListPayments reads, in
+	// order.
+	PaymentSources() []string
+	// ListPayments reads one page (from 1) of one payment history of the
+	// running mode.
+	ListPayments(ctx context.Context, source string, page int) (PaymentPage, error)
 }
 
-// CheckoutRequest is a hosted checkout for one variant.
+// Remote plans the provider calls a billing job in river-service makes with
+// its own leased token, and decodes their answers, by running the ordinary
+// Provider over a transport that captures the request or replays the answer.
+// The Polar client implements it.
+type Remote interface {
+	// Upstream names the API the call goes to, for river-service.
+	Upstream() string
+	// Plan returns the request op would send, without sending it.
+	Plan(op func(p Provider) error) (Call, error)
+	// Decode runs op as if the provider had answered its request with res.
+	Decode(res CallResult, op func(p Provider) error) error
+}
+
+// Call is one planned request, its path relative to the API base URL.
+// river-service adds the Authorization header.
+type Call struct {
+	Method  string
+	Path    string
+	Headers map[string]string
+	Body    []byte
+}
+
+// CallResult is river-service's answer to a Call: the response, or why there
+// was none.
+type CallResult struct {
+	Status int
+	Body   []byte
+	Err    string
+}
+
+// WebhookHeaders are the Standard Webhooks headers of a delivery.
+type WebhookHeaders struct {
+	// ID is the delivery's event id: the same on every redelivery.
+	ID        string
+	Timestamp string
+	Signature string
+}
+
+// CheckoutRequest is a hosted checkout for one product.
 type CheckoutRequest struct {
-	VariantID string
-	Email     string
-	// Custom is echoed back on every webhook of the resulting subscription.
-	Custom      map[string]string
-	RedirectURL string
-	ExpiresAt   time.Time
-	TestMode    bool
-	// SkipTrial removes the variant's free trial from this checkout.
+	ProductID string
+	// CustomerExternalID ties the provider customer to the workspace. It is
+	// always the tenant id: the provider never lets it change once set.
+	CustomerExternalID string
+	Email              string
+	// Metadata is copied onto the resulting subscription and its orders.
+	Metadata   map[string]string
+	SuccessURL string
+	TestMode   bool
+	// SkipTrial removes the product's free trial from this checkout.
 	SkipTrial bool
 }
 
@@ -83,90 +146,66 @@ type CheckoutSession struct {
 	ExpiresAt time.Time
 }
 
+// PortalSession is a signed, short-lived customer-portal link.
+type PortalSession struct {
+	URL       string
+	ExpiresAt time.Time
+}
+
+// ChangeTiming is when a plan change takes effect and how it is charged.
+type ChangeTiming int
+
+const (
+	// ChargeNow applies the change at once and charges the prorated
+	// difference immediately.
+	ChargeNow ChangeTiming = iota
+	// NextPeriod holds the change at the provider until the next renewal,
+	// which then charges the new price.
+	NextPeriod
+	// NoCharge applies the change at once and settles any difference on the
+	// next invoice.
+	NoCharge
+)
+
 // ChangeOpts tunes a plan change.
 type ChangeOpts struct {
-	// InvoiceNow charges the prorated difference immediately.
-	InvoiceNow bool
-	// NoProration applies the new price from the next renewal, with no
-	// proration charge. It overrides InvoiceNow at the provider.
-	NoProration bool
+	Timing ChangeTiming
 	// EndTrialNow ends a running free trial, so the new plan is charged now.
 	EndTrialNow bool
 }
 
 // Subscription is the neutral view of a provider subscription.
 type Subscription struct {
-	ID           string
-	CustomerID   string
-	OrderID      string
-	VariantID    string
-	Status       string
-	TestMode     bool
-	RenewsAt     *time.Time
-	EndsAt       *time.Time
-	TrialEndsAt  *time.Time
-	CardBrand    string
-	CardLastFour string
+	ID         string
+	CustomerID string
+	// CustomerExternalID is the provider customer's external id: the tenant.
+	CustomerExternalID string
+	ProductID          string
+	// Currency is the currency the subscription is billed in.
+	Currency string
+	// Status is an Ogen status (models.SubscriptionStatus*), or "" when the
+	// provider status has no Ogen meaning (a checkout still being paid, a
+	// status this build does not know): the mirror then keeps the status it
+	// had, and a subscription not mirrored yet is not mirrored.
+	Status string
+	// ProviderStatus is the provider's raw status, for support.
+	ProviderStatus string
+	TestMode       bool
+	RenewsAt       *time.Time
+	EndsAt         *time.Time
+	TrialEndsAt    *time.Time
+	// CancelAtPeriodEnd: the owner cancelled; live until EndsAt.
+	CancelAtPeriodEnd bool
+	// PendingProductID is the product a change held for the next period
+	// moves to at PendingEffectiveAt; "" when nothing is pending.
+	PendingProductID   string
+	PendingEffectiveAt *time.Time
+	CardBrand          string
+	CardLastFour       string
+	// Metadata is the checkout's metadata, copied by the provider.
+	Metadata map[string]string
 	// UpdatedAt is the provider's own last-change time: the staleness guard.
 	UpdatedAt time.Time
-	// PortalURL is a signed customer-portal link; it expires (24h at Lemon
-	// Squeezy) and is only present on a direct read.
-	PortalURL string
-}
-
-// Variant is a purchasable provider variant.
-type Variant struct {
-	ID         string
-	PriceMinor int64
-	// Interval is month | year for a subscription variant; IntervalCount is
-	// how many of them one billing period spans (0 reads as 1).
-	Interval      string
-	IntervalCount int
-	// HasFreeTrial and TrialInterval/TrialIntervalCount describe the trial
-	// the variant carries (e.g. month / 1).
-	HasFreeTrial       bool
-	TrialInterval      string
-	TrialIntervalCount int
-	TestMode           bool
-	// Catalog details, filled by Provider.Catalog for the mapping picker.
-	ProductID   string
-	ProductName string
-	Name        string
-	// Status is the provider's variant status, e.g. published.
-	Status string
-}
-
-// Catalog is a store's subscription variants in one mode.
-type Catalog struct {
-	TestMode bool
-	// Currency is the store's currency: every variant is priced in it.
-	Currency string
-	Variants []Variant
-}
-
-// Variant finds a variant by id.
-func (c Catalog) Variant(id string) (Variant, bool) {
-	for _, v := range c.Variants {
-		if v.ID == id {
-			return v, true
-		}
-	}
-	return Variant{}, false
-}
-
-// OneMonthTrial reports whether the variant carries exactly a one-month free
-// trial: the free-month offer's precondition.
-func (v Variant) OneMonthTrial() bool {
-	return v.HasFreeTrial && v.TrialInterval == "month" && v.TrialIntervalCount == 1
-}
-
-// TrialDays approximates the trial length in days for display.
-func (v Variant) TrialDays() int {
-	if !v.HasFreeTrial {
-		return 0
-	}
-	per := map[string]int{"day": 1, "week": 7, "month": 30, "year": 365}[v.TrialInterval]
-	return per * v.TrialIntervalCount
 }
 
 // Event kinds a webhook can carry.
@@ -178,38 +217,32 @@ const (
 
 // Event is a parsed webhook.
 type Event struct {
+	// ID is the delivery's event id: the dedupe key.
+	ID       string
 	Name     string
 	Kind     string
 	TestMode bool
 	// ObjectID is the id of the object the event is about.
 	ObjectID string
-	// CustomData is the checkout's custom data, echoed back.
-	CustomData map[string]string
-	// Subscription is set for subscription_* snapshot events.
+	// Metadata is the checkout's metadata, echoed back.
+	Metadata map[string]string
+	// CustomerExternalID is the customer's external id, when the payload
+	// carries the customer.
+	CustomerExternalID string
+	// Subscription is set for subscription snapshot events.
 	Subscription *Subscription
-	// Payment fields are set for subscription_payment_* events.
+	// PaymentSubscriptionID is the subscription a payment event belongs to.
 	PaymentSubscriptionID string
-	PaymentAmountMinor    int64
-	PaymentStatus         string
-	// Payments are the money movements an order_* or subscription_payment_*
-	// event reports: the charge and, once refunded, its refund.
+	// PaymentCharged: the event is a successful non-zero charge of the
+	// subscription, which separates a paying workspace from a trial that
+	// never converted.
+	PaymentCharged bool
+	// Payments are the money movements the event reports.
 	Payments []Payment
 }
 
-// PlanSwitch is a provider plan switch a scheduled change needs. A job
-// running in river-service has it make the call.
-type PlanSwitch struct {
-	SubscriptionID string `json:"subscription_id"`
-	VariantID      string `json:"variant_id"`
-}
-
-// Opts are the switch's options: never prorated, so the renewal charges the
-// new price.
-func (PlanSwitch) Opts() ChangeOpts { return ChangeOpts{NoProration: true} }
-
 // ReconcilePlan is the provider work one reconcile pass needs: the
-// subscriptions to re-read and the due scheduled changes to re-drive.
+// subscriptions to re-read.
 type ReconcilePlan struct {
 	Subscriptions []string
-	DueChanges    []string
 }

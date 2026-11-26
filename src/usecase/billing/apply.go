@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"github.com/uptrace/bun"
 
@@ -23,15 +25,21 @@ import (
 // recorded for Harbor and acknowledged: a retry would not find it either.
 var errUnresolvedTenant = errors.New("subscription tenant could not be resolved")
 
+// webhookRetryWindow is how long a delivery that failed to apply is answered
+// with an error, so the provider retries it. Polar disables an endpoint after
+// ten failures in a row, so a delivery that keeps failing is acknowledged
+// after this and left to the reconcile sweep and the payments sync.
+const webhookRetryWindow = time.Hour
+
 // HandleWebhook verifies, logs and applies one provider webhook. It returns
 // ErrUnavailable without a configured secret, ErrInvalidSignature on a bad
-// signature, and any other error when applying failed (the caller answers 5xx
-// so the provider retries).
-func (s *Service) HandleWebhook(ctx context.Context, signature string, body []byte) error {
+// signature, and any other error when applying failed within the retry window
+// (the caller answers 5xx so the provider retries).
+func (s *Service) HandleWebhook(ctx context.Context, h billingdom.WebhookHeaders, body []byte) error {
 	if !s.Enabled() {
 		return ErrUnavailable
 	}
-	if err := s.d.Provider.VerifyWebhook(ctx, signature, body); err != nil {
+	if err := s.d.Provider.VerifyWebhook(ctx, h, body); err != nil {
 		switch {
 		case errors.Is(err, billingdom.ErrNotConfigured):
 			return ErrUnavailable
@@ -42,7 +50,7 @@ func (s *Service) HandleWebhook(ctx context.Context, signature string, body []by
 		}
 	}
 	webhooksReceived.Add(1)
-	ev, err := s.d.Provider.ParseWebhook(body)
+	ev, err := s.d.Provider.ParseWebhook(h, body)
 	if err != nil {
 		return fmt.Errorf("billing webhook: %w", err)
 	}
@@ -62,7 +70,10 @@ func (s *Service) HandleWebhook(ctx context.Context, signature string, body []by
 		ID: id, Provider: s.provider(), EventName: ev.Name, BodySHA256: hex.EncodeToString(sum[:]),
 		ProviderObjectID: ev.ObjectID, TestMode: ev.TestMode, ReceivedAt: s.now(), Payload: json.RawMessage(body),
 	}
-	// The tenant is stamped only once applying resolved it: custom data is
+	if ev.ID != "" {
+		row.ProviderEventID = new(ev.ID)
+	}
+	// The tenant is stamped only once applying resolved it: metadata is
 	// unverified input and may name a workspace that does not exist.
 	existing, inserted, err := s.d.Repo.InsertWebhookEvent(ctx, row)
 	if err != nil {
@@ -70,6 +81,7 @@ func (s *Service) HandleWebhook(ctx context.Context, signature string, body []by
 	}
 	if !inserted {
 		if existing.ProcessedAt != nil && existing.Outcome != models.WebhookOutcomeFailed {
+			webhooksDuplicate.Add(1)
 			return nil // a redelivery of something already applied
 		}
 		row = existing
@@ -88,10 +100,15 @@ func (s *Service) HandleWebhook(ctx context.Context, signature string, body []by
 		slog.WarnContext(ctx, "billing webhook: outcome write failed", logging.AttrComponent, "billing", logging.AttrError, err)
 	}
 	countWebhookOutcome(outcome)
-	if applyErr != nil && !errors.Is(applyErr, errUnresolvedTenant) {
-		return applyErr
+	if applyErr == nil || errors.Is(applyErr, errUnresolvedTenant) {
+		return nil
 	}
-	return nil
+	if age := s.now().Sub(row.ReceivedAt); age > webhookRetryWindow {
+		slog.ErrorContext(ctx, "billing webhook still failing after the retry window; acknowledged, the reconcile sweep picks it up", logging.AttrComponent, "billing",
+			"event", ev.Name, "event_id", ev.ID, "first_received", row.ReceivedAt, logging.AttrError, applyErr)
+		return nil
+	}
+	return applyErr
 }
 
 func countWebhookOutcome(outcome string) {
@@ -115,7 +132,7 @@ func (s *Service) applyEvent(ctx context.Context, ev billingdom.Event) (string, 
 	}
 	switch ev.Kind {
 	case billingdom.EventSubscription:
-		res, err := s.applySnapshot(ctx, *ev.Subscription, ev.CustomData)
+		res, err := s.applySnapshot(ctx, *ev.Subscription)
 		return res.outcome, res.tenantID, err
 	case billingdom.EventPayment:
 		return s.applyPayment(ctx, ev)
@@ -127,7 +144,7 @@ func (s *Service) applyEvent(ctx context.Context, ev billingdom.Event) (string, 
 // applyPayment records the first successful charge, which separates a paying
 // workspace from a trial that never converted.
 func (s *Service) applyPayment(ctx context.Context, ev billingdom.Event) (string, string, error) {
-	if ev.Name != "subscription_payment_success" || ev.PaymentAmountMinor <= 0 {
+	if !ev.PaymentCharged {
 		sub, err := s.d.Repo.GetSubscriptionByProviderID(ctx, nil, s.provider(), ev.PaymentSubscriptionID, false)
 		if err == nil {
 			return models.WebhookOutcomeApplied, sub.TenantID, nil
@@ -161,8 +178,9 @@ func (s *Service) applyPayment(ctx context.Context, ev billingdom.Event) (string
 // not mirrored. When a snapshot of it was already dropped for an unresolved
 // workspace no retry can apply the payment, so it is errUnresolvedTenant and
 // acknowledged; first_paid_at is not lost, an active snapshot sets it.
-// Otherwise subscription_created may not have landed yet, and the error makes
-// the provider retry this one after it.
+// Otherwise the subscription's own webhook may not have landed yet (Polar
+// does not order deliveries), and the error makes the provider retry this one
+// after it, within the retry window.
 func (s *Service) unknownSubscriptionPayment(ctx context.Context, subID string) error {
 	dropped, err := s.d.Repo.HasUnresolvedSubscriptionEvent(ctx, s.provider(), subID, subscriptionEvents)
 	if err != nil {
@@ -182,9 +200,12 @@ type applyResult struct {
 }
 
 // applySnapshot mirrors one subscription snapshot: the shared path for
-// webhooks and the reconcile sweep. The provider's updated_at makes it
-// last-write-wins, so out-of-order and repeated snapshots are harmless.
-func (s *Service) applySnapshot(ctx context.Context, snap billingdom.Subscription, custom map[string]string) (applyResult, error) {
+// webhooks and the reconcile sweep. The provider's modified time makes it
+// last-write-wins, so out-of-order and repeated snapshots are harmless. A
+// snapshot without an Ogen status (a checkout still being paid, a status this
+// build does not know) keeps the mirror's status, and mirrors nothing for a
+// subscription not seen before.
+func (s *Service) applySnapshot(ctx context.Context, snap billingdom.Subscription) (applyResult, error) {
 	var (
 		res          applyResult
 		notices      []notice
@@ -197,14 +218,21 @@ func (s *Service) applySnapshot(ctx context.Context, snap billingdom.Subscriptio
 			return err
 		}
 		isNew := prev == nil
-		if res.tenantID, err = s.resolveTenant(ctx, prev, custom, snap.ID); err != nil {
+		if snap.Status == "" {
+			if isNew {
+				res.outcome = models.WebhookOutcomeIgnoredUnknown
+				return nil
+			}
+			snap.Status = prev.Status
+		}
+		if res.tenantID, err = s.resolveTenant(ctx, prev, snap); err != nil {
 			return err
 		}
 		if !isNew && !snap.UpdatedAt.After(prev.ProviderUpdatedAt) {
 			res.outcome = models.WebhookOutcomeStale
 			return nil
 		}
-		sub, before, err := s.saveSnapshot(ctx, tx, prev, res.tenantID, snap, custom)
+		sub, before, err := s.saveSnapshot(ctx, tx, prev, res.tenantID, snap)
 		if err != nil {
 			return err
 		}
@@ -234,13 +262,15 @@ func (s *Service) applySnapshot(ctx context.Context, snap billingdom.Subscriptio
 }
 
 // resolveTenant finds the subscription's workspace: the mirror's for a known
-// subscription, else the checkout's custom data. A missing or deleted
-// workspace is errUnresolvedTenant.
-func (s *Service) resolveTenant(ctx context.Context, prev *models.BillingSubscription, custom map[string]string, subID string) (string, error) {
-	tenantID := custom["tenant_id"]
+// subscription, else the customer's external id (always the tenant id), else
+// the checkout's metadata. A missing or deleted workspace is
+// errUnresolvedTenant.
+func (s *Service) resolveTenant(ctx context.Context, prev *models.BillingSubscription, snap billingdom.Subscription) (string, error) {
+	tenantID := cmp.Or(snap.CustomerExternalID, snap.Metadata["tenant_id"])
 	if prev != nil {
 		tenantID = prev.TenantID
 	}
+	subID := snap.ID
 	tenant, err := s.d.Tenants.GetByID(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && tenant.DeletedAt != nil) || tenantID == "" {
 		return "", fmt.Errorf("%w (tenant %q, subscription %s)", errUnresolvedTenant, tenantID, subID)
@@ -253,8 +283,8 @@ func (s *Service) resolveTenant(ctx context.Context, prev *models.BillingSubscri
 
 // saveSnapshot inserts or updates the mirror row and returns it with the state
 // it had before.
-func (s *Service) saveSnapshot(ctx context.Context, tx bun.IDB, prev *models.BillingSubscription, tenantID string, snap billingdom.Subscription, custom map[string]string) (*models.BillingSubscription, models.BillingSubscription, error) {
-	variants, err := s.variantMap(ctx)
+func (s *Service) saveSnapshot(ctx context.Context, tx bun.IDB, prev *models.BillingSubscription, tenantID string, snap billingdom.Subscription) (*models.BillingSubscription, models.BillingSubscription, error) {
+	products, err := s.productMap(ctx)
 	if err != nil {
 		return nil, models.BillingSubscription{}, err
 	}
@@ -265,12 +295,12 @@ func (s *Service) saveSnapshot(ctx context.Context, tx bun.IDB, prev *models.Bil
 			return nil, models.BillingSubscription{}, err
 		}
 		sub = &models.BillingSubscription{ID: id, TenantID: tenantID, Provider: s.provider(), ProviderSubscriptionID: snap.ID, CreatedAt: s.now()}
-		if acc := custom["account_id"]; acc != "" {
+		if acc := snap.Metadata["account_id"]; acc != "" {
 			sub.AccountID = new(acc)
 		}
 	}
 	before := *sub
-	s.copySnapshot(sub, snap, variants)
+	s.copySnapshot(sub, snap, products)
 	sub.UpdatedAt = s.now()
 	if prev == nil {
 		err = s.d.Repo.InsertSubscription(ctx, tx, sub)
@@ -281,21 +311,23 @@ func (s *Service) saveSnapshot(ctx context.Context, tx bun.IDB, prev *models.Bil
 }
 
 // copySnapshot writes the provider's view onto the mirror row.
-func (s *Service) copySnapshot(sub *models.BillingSubscription, snap billingdom.Subscription, variants billingdom.VariantMap) {
+func (s *Service) copySnapshot(sub *models.BillingSubscription, snap billingdom.Subscription, products billingdom.ProductMap) {
 	sub.ProviderCustomerID = snap.CustomerID
-	sub.ProviderOrderID = snap.OrderID
-	sub.ProviderVariantID = snap.VariantID
-	sub.Status = snap.Status
+	// provider_variant_id is what the previous release reads.
+	sub.ProviderProductID, sub.ProviderVariantID = snap.ProductID, snap.ProductID
+	sub.Status, sub.ProviderStatus = snap.Status, snap.ProviderStatus
 	sub.TestMode = snap.TestMode
 	sub.RenewsAt, sub.EndsAt, sub.TrialEndsAt = snap.RenewsAt, snap.EndsAt, snap.TrialEndsAt
+	sub.CancelAtPeriodEnd = snap.CancelAtPeriodEnd
+	sub.PendingProductID, sub.PendingEffectiveAt = snap.PendingProductID, snap.PendingEffectiveAt
 	sub.CardBrand, sub.CardLastFour = snap.CardBrand, snap.CardLastFour
 	sub.ProviderUpdatedAt = snap.UpdatedAt
 	sub.TierVersionPriceID = nil
-	if price, ok := variants.Price(snap.VariantID); ok {
+	if price, ok := products.Price(snap.ProductID, snap.Currency); ok {
 		sub.TierVersionPriceID = new(price)
 	}
 	// "active" means at least one charge went through; it also covers a lost
-	// subscription_payment_success webhook.
+	// order.paid webhook.
 	if snap.Status == models.SubscriptionStatusActive && sub.FirstPaidAt == nil {
 		sub.FirstPaidAt = new(s.now())
 	}
@@ -303,14 +335,13 @@ func (s *Service) copySnapshot(sub *models.BillingSubscription, snap billingdom.
 
 // followPlan moves the workspace onto the version the subscription pays for,
 // when the subscription is the one the workspace follows and its price
-// changed. A change that matches a pending scheduled downgrade is left to the
-// scheduled job; any other change cancels that downgrade. It reports whether
-// the tier moved.
+// changed. A change that lands a scheduled downgrade marks it applied; any
+// other change cancels that downgrade. It reports whether the tier moved.
 func (s *Service) followPlan(ctx context.Context, tx bun.IDB, sub *models.BillingSubscription, before models.BillingSubscription, isNew bool) (bool, error) {
 	if sub.TierVersionPriceID == nil {
-		if sub.ProviderVariantID != "" {
-			slog.ErrorContext(ctx, "billing: subscription variant is not mapped to a price; tier unchanged (map it in Harbor)", logging.AttrComponent, "billing",
-				"tenant_id", sub.TenantID, "variant_id", sub.ProviderVariantID)
+		if sub.ProviderProductID != "" {
+			slog.ErrorContext(ctx, "billing: subscription product is not mapped to a price; tier unchanged (map it in Harbor)", logging.AttrComponent, "billing",
+				"tenant_id", sub.TenantID, "product_id", sub.ProviderProductID)
 		}
 		return false, nil
 	}
@@ -326,8 +357,7 @@ func (s *Service) followPlan(ctx context.Context, tx bun.IDB, sub *models.Billin
 		return false, nil // an older duplicate, or no longer live
 	}
 	if !isNew {
-		scheduled, err := s.settleOpenChange(ctx, tx, sub.ID, newPrice)
-		if err != nil || scheduled {
+		if err := s.settleOpenChange(ctx, tx, sub.ID, newPrice); err != nil {
 			return false, err
 		}
 	}
@@ -347,23 +377,24 @@ func (s *Service) followPlan(ctx context.Context, tx bun.IDB, sub *models.Billin
 	return s.d.Assignments.ReassignTx(ctx, tx, sub.TenantID, target.TierID, &target.TierVersionID, reason, s.now())
 }
 
-// settleOpenChange handles a pending scheduled change when the subscription's
-// price moved: it reports true when the move is that change (its job moves the
-// tier at the boundary), and cancels it otherwise.
-func (s *Service) settleOpenChange(ctx context.Context, tx bun.IDB, subID, newPrice string) (bool, error) {
+// settleOpenChange handles an open scheduled change when the subscription's
+// price moved: the move that is the change landed it at renewal (applied);
+// any other move replaced it (cancelled). The tier then follows the price.
+func (s *Service) settleOpenChange(ctx context.Context, tx bun.IDB, subID, newPrice string) error {
 	change, err := s.d.Repo.OpenScheduledChange(ctx, tx, subID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return nil
 	}
 	if err != nil {
-		return false, err
+		return err
 	}
+	open := []string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied}
 	if change.ToTierVersionPriceID == newPrice {
-		return true, nil
+		_, err = s.d.Repo.SetScheduledChangeStatus(ctx, tx, change.ID, open, models.ScheduledChangeApplied, "", s.now())
+		return err
 	}
-	_, err = s.d.Repo.SetScheduledChangeStatus(ctx, tx, change.ID, []string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied},
-		models.ScheduledChangeCancelled, "plan changed at the provider", s.now())
-	return false, err
+	_, err = s.d.Repo.SetScheduledChangeStatus(ctx, tx, change.ID, open, models.ScheduledChangeCancelled, "plan changed at the provider", s.now())
+	return err
 }
 
 // reassignReason names a tier move: the first subscription, or an upgrade or
@@ -389,8 +420,8 @@ func (s *Service) transitions(ctx context.Context, tx bun.Tx, sub *models.Billin
 	if isNew {
 		out = append(out, n("subscription_started", models.NotificationLevelSuccess, "Your plan is active", "Thanks for subscribing. Your workspace is ready."))
 	}
-	// Only a tier that actually moved is a plan change: a price change the
-	// scheduled job or a reverted downgrade made leaves the plan as it was.
+	// Only a tier that actually moved is a plan change: a price change that
+	// left the tier where it was (an in-app change already moved it) is not.
 	if !isNew && moved {
 		out = append(out, n("plan_changed", models.NotificationLevelInfo, "Your plan changed", "Your workspace's plan was updated."))
 	}

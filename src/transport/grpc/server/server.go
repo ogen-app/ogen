@@ -127,7 +127,7 @@ func New(d Deps) (*grpc.Server, error) {
 	registerModelConfigAdmin(srv, d.FlowModelConfigs, modelprobe.New(d.Secrets))
 	var afterPublish func(context.Context)
 	if d.Billing != nil {
-		afterPublish = checkVariantsAfterPublish(d.Billing)
+		afterPublish = checkProductsAfterPublish(d.Billing)
 	}
 	registerPlanAdmin(srv, d.TierVersions, d.TierAssignments, catalog, resolver, d.Hub, afterPublish)
 	registerEmailAdmin(srv, d.EmailLogs, d.EmailEvents, d.EmailBodies, d.LiveEmailBodies, d.Tenants, d.Users, d.AdminEmailEnqueuer, d.HarborBaseURL)

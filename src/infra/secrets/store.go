@@ -37,14 +37,21 @@ const (
 	NameEmailLinkSecret     = "email_link_secret"
 	// CON-222 URL assets: Firecrawl.dev web-scrape API key.
 	NameFirecrawlAPIKey = "firecrawl_api_key"
-	// CON-322 billing: Lemon Squeezy API key and webhook signing secret. Test
-	// and live mode have separate values, rotated here at cutover.
+	// Billing on Polar: the Organization Access Token of the running mode
+	// (sandbox or production) and the webhook endpoint's signing secret,
+	// rotated here at the mode cutover.
+	NamePolarAccessToken   = "polar_access_token"
+	NamePolarWebhookSecret = "polar_webhook_secret"
+	// The production token (products:read only) used while billing still
+	// runs in the sandbox, so the live product map can be prepared and
+	// checked before the switch. Optional.
+	NamePolarAccessTokenLive = "polar_access_token_live"
+	// The Lemon Squeezy secrets of the provider before Polar. Still accepted
+	// so a rolled-back release finds them; removed with the rest of the
+	// Lemon Squeezy schema.
 	NameLemonSqueezyAPIKey        = "lemonsqueezy_api_key"
 	NameLemonSqueezyWebhookSecret = "lemonsqueezy_webhook_secret"
-	// CON-404: the live-mode API key, read-only use while billing still runs
-	// in test mode, so the live variant map can be prepared and checked
-	// before the switch. Optional.
-	NameLemonSqueezyAPIKeyLive = "lemonsqueezy_api_key_live"
+	NameLemonSqueezyAPIKeyLive    = "lemonsqueezy_api_key_live"
 	// Anthropic Admin key (sk-ant-admin…), distinct from the API key: it reads
 	// the organization's cost report for Harbor's credit reconciliation.
 	// Optional; never leased to river-service.
@@ -61,6 +68,9 @@ var AllowedNames = []string{
 	NameResendWebhookSecret,
 	NameEmailLinkSecret,
 	NameFirecrawlAPIKey,
+	NamePolarAccessToken,
+	NamePolarWebhookSecret,
+	NamePolarAccessTokenLive,
 	NameLemonSqueezyAPIKey,
 	NameLemonSqueezyWebhookSecret,
 	NameLemonSqueezyAPIKeyLive,

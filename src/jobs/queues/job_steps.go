@@ -20,13 +20,13 @@ import (
 // Zernio, zernio.Plan / zernio.Decode). The loop keeps no durable state, so a
 // job cut short retries from the start; every flow converges on a repeat.
 
-// Upstreams river-service holds a leased key for.
+// Upstreams river-service holds a leased key for. The billing provider names
+// its own (billingdom.Remote.Upstream: polar, polar_sandbox), leased the
+// token of the billing mode ogen runs in.
 const (
 	UpstreamZernio    = "zernio"
 	UpstreamGemini    = "gemini"
 	UpstreamFirecrawl = "firecrawl"
-	// UpstreamLemonSqueezy is leased the key of the billing mode ogen runs in.
-	UpstreamLemonSqueezy = "lemonsqueezy"
 )
 
 // StepInput is one Step request.

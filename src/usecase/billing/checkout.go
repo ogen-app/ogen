@@ -15,10 +15,9 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-const (
-	checkoutTTL = time.Hour
-	portalTTL   = 24 * time.Hour
-)
+// sessionTTL stands in for a checkout's or portal session's expiry when the
+// provider's answer has none.
+const sessionTTL = time.Hour
 
 // Buyer is the owner starting a checkout.
 type Buyer struct {
@@ -37,12 +36,13 @@ type Checkout struct {
 }
 
 // TrialEligible reports whether an account may still get the free month in
-// the current mode.
+// the current mode. Only trials of the running provider count: a free month
+// taken with the previous provider does not use up this one.
 func (s *Service) TrialEligible(ctx context.Context, accountID string) (bool, error) {
 	if accountID == "" {
 		return false, nil
 	}
-	used, err := s.d.Repo.TrialUsed(ctx, accountID, s.d.Settings.TestMode)
+	used, err := s.d.Repo.TrialUsed(ctx, accountID, s.provider(), s.d.Settings.TestMode)
 	return !used, err
 }
 
@@ -56,30 +56,34 @@ func (s *Service) Gated(ctx context.Context, tenantID string) (bool, error) {
 
 // startCheckout opens a hosted checkout for a price. The free month applies
 // only to the Harbor-marked tier, for an eligible account, and only when the
-// variant really carries a one-month trial; otherwise the trial is skipped and
-// the first invoice is charged at checkout.
-func (s *Service) startCheckout(ctx context.Context, buyer Buyer, price billingdom.Price, variantID string) (Checkout, error) {
-	trial, err := s.trialApplies(ctx, buyer.AccountID, price.TierID, variantID)
+// product really carries a one-month trial; otherwise the trial is skipped and
+// the first period is charged at checkout. The provider customer is the
+// workspace: its external id is the tenant id, for good.
+func (s *Service) startCheckout(ctx context.Context, buyer Buyer, price billingdom.Price, productID string) (Checkout, error) {
+	trial, err := s.trialApplies(ctx, buyer.AccountID, price.TierID, productID)
 	if err != nil {
 		return Checkout{}, err
 	}
-	redirect := s.d.Settings.AppBaseURL + "/plans?billing=return&workspace=" + url.QueryEscape(buyer.TenantID)
+	success := s.d.Settings.AppBaseURL + "/plans?billing=return&workspace=" + url.QueryEscape(buyer.TenantID)
 	session, err := s.d.Provider.CreateCheckout(ctx, billingdom.CheckoutRequest{
-		VariantID: variantID,
-		Email:     buyer.Email,
-		Custom: map[string]string{
+		ProductID:          productID,
+		CustomerExternalID: buyer.TenantID,
+		Email:              buyer.Email,
+		Metadata: map[string]string{
 			"tenant_id":  buyer.TenantID,
 			"price_id":   price.ID,
 			"user_id":    buyer.UserID,
 			"account_id": buyer.AccountID,
 		},
-		RedirectURL: redirect,
-		ExpiresAt:   s.now().Add(checkoutTTL),
-		TestMode:    s.d.Settings.TestMode,
-		SkipTrial:   !trial,
+		SuccessURL: success,
+		TestMode:   s.d.Settings.TestMode,
+		SkipTrial:  !trial,
 	})
 	if err != nil {
 		return Checkout{}, providerErr(err)
+	}
+	if session.ExpiresAt.IsZero() {
+		session.ExpiresAt = s.now().Add(sessionTTL)
 	}
 	checkoutsCreated.Add(1)
 	if trial {
@@ -93,7 +97,7 @@ func (s *Service) startCheckout(ctx context.Context, buyer Buyer, price billingd
 	return Checkout{URL: session.URL, ExpiresAt: session.ExpiresAt, Trial: trial}, nil
 }
 
-func (s *Service) trialApplies(ctx context.Context, accountID, tierID, variantID string) (bool, error) {
+func (s *Service) trialApplies(ctx context.Context, accountID, tierID, productID string) (bool, error) {
 	marked, err := s.d.Repo.FreeTrialTier(ctx)
 	if err != nil || marked == nil || marked.ID != tierID {
 		return false, err
@@ -102,20 +106,20 @@ func (s *Service) trialApplies(ctx context.Context, accountID, tierID, variantID
 	if err != nil || !eligible {
 		return false, err
 	}
-	v, err := s.variant(ctx, variantID)
+	p, err := s.product(ctx, productID)
 	if err != nil {
 		return false, providerErr(err)
 	}
-	if !v.OneMonthTrial() {
+	if !p.OneMonthTrial() {
 		freeTrialMisconfigued.Add(1)
-		slog.ErrorContext(ctx, "billing: the free-month tier's variant has no one-month trial; charging at checkout", logging.AttrComponent, "billing", "tier_id", tierID, "variant_id", variantID)
+		slog.ErrorContext(ctx, "billing: the free-month tier's product has no one-month trial; charging at checkout", logging.AttrComponent, "billing", "tier_id", tierID, "product_id", productID)
 		return false, nil
 	}
 	return true, nil
 }
 
-// SubscriptionView is the owner's billing card. Status is the provider's own
-// vocabulary.
+// SubscriptionView is the owner's billing card. Status is an Ogen
+// subscription status.
 type SubscriptionView struct {
 	Status   string     `json:"status"`
 	RenewsAt *time.Time `json:"renews_at" extensions:"x-nullable"`
@@ -160,7 +164,7 @@ func (s *Service) Billing(ctx context.Context, tenantID string) (BillingView, er
 	if sub == nil {
 		return view, nil
 	}
-	view.Portal = true
+	view.Portal = sub.ProviderCustomerID != ""
 	sv := &SubscriptionView{Status: sub.Status, RenewsAt: sub.RenewsAt, EndsAt: sub.EndsAt}
 	if sub.Status == models.SubscriptionStatusCancelled || sub.Status == models.SubscriptionStatusExpired {
 		sv.RenewsAt = nil
@@ -181,8 +185,8 @@ func (s *Service) Billing(ctx context.Context, tenantID string) (BillingView, er
 	return view, nil
 }
 
-// Portal returns a fresh customer-portal link for the workspace's
-// subscription. The link is signed and short-lived; never log or cache it.
+// Portal opens a fresh customer-portal session for the workspace's provider
+// customer. The link is signed and short-lived; never log or cache it.
 func (s *Service) Portal(ctx context.Context, tenantID string) (string, time.Time, error) {
 	if !s.Enabled() {
 		return "", time.Time{}, ErrUnavailable
@@ -195,17 +199,17 @@ func (s *Service) Portal(ctx context.Context, tenantID string) (string, time.Tim
 	if sub == nil {
 		return "", time.Time{}, ErrNoSubscription
 	}
-	snap, err := s.d.Provider.GetSubscription(ctx, sub.ProviderSubscriptionID)
+	session, err := s.d.Provider.PortalSession(ctx, sub.TenantID)
 	if errors.Is(err, billingdom.ErrNotFound) {
 		return "", time.Time{}, ErrNoSubscription
 	}
 	if err != nil {
 		return "", time.Time{}, providerErr(err)
 	}
-	if snap.PortalURL == "" {
-		return "", time.Time{}, ErrNoSubscription
+	if session.ExpiresAt.IsZero() {
+		session.ExpiresAt = s.now().Add(sessionTTL)
 	}
-	return snap.PortalURL, s.now().Add(portalTTL), nil
+	return session.URL, session.ExpiresAt, nil
 }
 
 // tenantExists checks a live workspace.

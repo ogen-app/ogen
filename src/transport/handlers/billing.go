@@ -10,12 +10,13 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	billingdom "github.com/ogen-app/ogen/src/domain/billing"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/billing"
 )
 
-// maxBillingWebhookBytes bounds a webhook body; Lemon Squeezy's are a few KB.
+// maxBillingWebhookBytes bounds a webhook body; Polar's are a few KB.
 const maxBillingWebhookBytes = 1 << 20
 
 // BillingService is the billing usecase surface the HTTP handlers use.
@@ -24,7 +25,7 @@ type BillingService interface {
 	Billing(ctx context.Context, tenantID string) (billing.BillingView, error)
 	Portal(ctx context.Context, tenantID string) (string, time.Time, error)
 	ChangePlan(ctx context.Context, req billing.PlanRequest) (billing.PlanResult, error)
-	HandleWebhook(ctx context.Context, signature string, body []byte) error
+	HandleWebhook(ctx context.Context, h billingdom.WebhookHeaders, body []byte) error
 }
 
 // EntitlementsReader renders the entitlements read a 200 plan change answers
@@ -53,7 +54,7 @@ func (h *BillingHandler) Register(app *fiber.App) {
 	app.Get("/api/billing", h.auth, h.Get)
 	app.Post("/api/billing/portal", h.auth, h.Portal)
 	app.Post("/api/workspace/plan", h.auth, h.ChangePlan)
-	app.Post("/api/webhooks/lemonsqueezy", h.Webhook)
+	app.Post("/api/webhooks/polar", h.Webhook)
 }
 
 // billingError maps usecase errors to the contract's error codes.
@@ -71,6 +72,8 @@ func billingError(err error) error {
 		return fiber.NewError(fiber.StatusConflict, "subscription_not_changeable")
 	case errors.Is(err, billing.ErrTrialChangeUnavailable):
 		return fiber.NewError(fiber.StatusConflict, "trial_upgrade_unavailable")
+	case errors.Is(err, billing.ErrPaymentFailed):
+		return fiber.NewError(fiber.StatusConflict, "payment_failed")
 	case errors.Is(err, billing.ErrNoSubscription):
 		return fiber.NewError(fiber.StatusNotFound, "no_subscription")
 	case errors.Is(err, billing.ErrTenantNotFound):
@@ -145,7 +148,7 @@ type checkoutResponse struct {
 
 // ChangePlan godoc
 // @Summary      Choose the workspace plan
-// @Description  A complimentary workspace (a tester's, complimentary=true on /api/me/entitlements) without a live subscription switches at once: 200 with the entitlements read, no checkout, no charge; it may pick any purchasable tier, and this works while billing is off. Otherwise, without a live subscription: 202 with a hosted checkout to redirect to (checkout.trial says whether the free month applies). With one: 200 with the entitlements read after the change. An upgrade lands now with proration; a downgrade is scheduled for the renewal (scheduled_change); choosing the current plan cancels a pending downgrade; a tier change during the free month ends it and charges now. tier_id is a tier or tier version id; price_id defaults to the monthly price.
+// @Description  A complimentary workspace (a tester's, complimentary=true on /api/me/entitlements) without a live subscription switches at once: 200 with the entitlements read, no checkout, no charge; it may pick any purchasable tier, and this works while billing is off. Otherwise, without a live subscription: 202 with a hosted checkout to redirect to (checkout.trial says whether the free month applies). With one: 200 with the entitlements read after the change. An upgrade lands now with proration; a downgrade is scheduled for the renewal (scheduled_change); choosing the current plan cancels a pending downgrade; a tier change during the free month ends it and charges now. 409 payment_failed: a change that charges now was declined or needs the owner to authenticate the payment (in the billing portal); nothing changed. tier_id is a tier or tier version id; price_id defaults to the monthly price.
 // @Tags         billing
 // @Accept       json
 // @Produce      json
@@ -191,17 +194,19 @@ func (h *BillingHandler) ChangePlan(c *fiber.Ctx) error {
 }
 
 // Webhook godoc
-// @Summary      Lemon Squeezy webhook
-// @Description  Signature-verified (X-Signature, HMAC-SHA256 of the raw body) ingest of subscription and payment events. Redeliveries are recognised by body hash; snapshots older than the mirror are ignored; events from the other store mode are acknowledged and ignored. A failure answers 500 so the provider retries.
+// @Summary      Polar webhook
+// @Description  Standard Webhooks ingest of subscription, order and refund events: webhook-signature is the HMAC-SHA256 of "<webhook-id>.<webhook-timestamp>.<body>", and a timestamp more than 5 minutes off is refused. Redeliveries are recognised by webhook-id; snapshots older than the mirror are ignored. A failure answers 500 so the provider retries, for at most an hour per delivery; after that it is acknowledged and left to the reconcile sweep.
 // @Tags         billing
 // @Accept       json
-// @Param        X-Signature  header  string  true  "HMAC-SHA256 hex of the body"
+// @Param        webhook-id         header  string  true  "Event id, the same on every redelivery"
+// @Param        webhook-timestamp  header  string  true  "Unix seconds"
+// @Param        webhook-signature  header  string  true  "One or more space-separated v1,<base64 signature>"
 // @Success      200  "Acknowledged"
 // @Failure      401  {object}  map[string]string
 // @Failure      413  {object}  map[string]string
 // @Failure      500  {object}  map[string]string  "processing failed; the provider retries"
 // @Failure      503  {object}  map[string]string
-// @Router       /api/webhooks/lemonsqueezy [post]
+// @Router       /api/webhooks/polar [post]
 func (h *BillingHandler) Webhook(c *fiber.Ctx) error {
 	if !h.svc.Enabled() {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "billing_unavailable")
@@ -213,7 +218,13 @@ func (h *BillingHandler) Webhook(c *fiber.Ctx) error {
 	// fasthttp reuses the body buffer after the handler returns; the usecase
 	// keeps the payload, so it gets its own copy.
 	body := bytes.Clone(raw)
-	err := h.svc.HandleWebhook(reqCtx(c), c.Get("X-Signature"), body)
+	// The headers are fasthttp-owned too, and the event id is stored.
+	headers := billingdom.WebhookHeaders{
+		ID:        strings.Clone(c.Get("webhook-id")),
+		Timestamp: strings.Clone(c.Get("webhook-timestamp")),
+		Signature: strings.Clone(c.Get("webhook-signature")),
+	}
+	err := h.svc.HandleWebhook(reqCtx(c), headers, body)
 	switch {
 	case err == nil:
 		return c.SendStatus(fiber.StatusOK)

@@ -19,19 +19,19 @@ func registerBillingAdmin(srv *grpc.Server, svc BillingAdmin) {
 	billingv1.RegisterBillingAdminServiceServer(srv, newBillingAdminService(svc))
 }
 
-// checkVariantsAfterPublish checks the variant map once a tier version is
-// published, off the request: a new sellable price usually has no variant
+// checkProductsAfterPublish checks the product map once a tier version is
+// published, off the request: a new sellable price usually has no product
 // yet, which the check logs and ListBillingAttention reports. It never blocks
 // or fails the publish.
-func checkVariantsAfterPublish(svc BillingAdmin) func(context.Context) {
+func checkProductsAfterPublish(svc BillingAdmin) func(context.Context) {
 	return func(ctx context.Context) {
 		if !svc.Enabled() {
 			return
 		}
 		go func() {
 			ctx := context.WithoutCancel(ctx)
-			if _, err := svc.CheckVariants(ctx); err != nil {
-				slog.WarnContext(ctx, "billing variant check after publish failed", logging.AttrComponent, "grpcserver", logging.AttrError, err)
+			if _, err := svc.CheckProducts(ctx); err != nil {
+				slog.WarnContext(ctx, "billing product check after publish failed", logging.AttrComponent, "grpcserver", logging.AttrError, err)
 			}
 		}()
 	}

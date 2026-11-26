@@ -48,6 +48,9 @@ var (
 	// ErrTrialChangeUnavailable: the provider refused to end a free trial
 	// early (409).
 	ErrTrialChangeUnavailable = errors.New("trial change unavailable")
+	// ErrPaymentFailed: a change that charges now was declined or needs the
+	// customer to authenticate; nothing changed (409).
+	ErrPaymentFailed = errors.New("payment failed")
 	// ErrNoSubscription: the workspace has no subscription (404).
 	ErrNoSubscription = errors.New("no subscription")
 	// ErrProvider: the provider failed; nothing local changed (502).
@@ -71,8 +74,11 @@ var (
 	reconcileCorrections  = expvar.NewInt("billing_reconcile_corrections")
 	trialTeardownsDryRun  = expvar.NewInt("billing_trial_teardowns_dry_run")
 	trialTeardownsQueued  = expvar.NewInt("billing_trial_teardowns_enqueued")
-	variantPriceMismatch  = expvar.NewInt("billing_variant_price_mismatch")
+	webhooksDuplicate     = expvar.NewInt("billing_webhook_duplicate_total")
+	productPriceMismatch  = expvar.NewInt("billing_product_price_mismatch")
 	freeTrialMisconfigued = expvar.NewInt("billing_free_trial_tier_misconfigured")
+	// providerErrors counts provider API failures by HTTP status.
+	providerErrors = expvar.NewMap("billing_provider_errors_total")
 )
 
 // Notifier drops in-app notifications. *notify.Service satisfies it.
@@ -85,7 +91,6 @@ type Notifier interface {
 type Jobs interface {
 	EnqueueBillingEmailTx(ctx context.Context, tx *sql.Tx, userID, tenantID, templateKey, idempotencyKey string) error
 	EnqueueTrialTeardownTx(ctx context.Context, tx *sql.Tx, tenantID string) error
-	EnqueueScheduledChangeStepTx(ctx context.Context, tx *sql.Tx, changeID string, at time.Time) error
 }
 
 // Deps wires a Service.
@@ -102,15 +107,15 @@ type Deps struct {
 	Settings billingdom.Settings
 	// Fees estimates the provider's fee on each recorded payment.
 	Fees billingdom.FeeFormula
-	// Variants serves the current mode's variant map; New builds one over
+	// Products serves the current mode's product map; New builds one over
 	// Repo when nil. Share one across the services of a process.
-	Variants *VariantStore
+	Products *ProductStore
 	Notifier Notifier
 	Jobs     Jobs
 	Hub      eventhub.Hub
 	Activity *activity.Recorder
-	// Configured reports whether the provider's API key and webhook secret
-	// are set; nil reads as configured.
+	// Configured reports whether the provider's access token and webhook
+	// secret are set; nil reads as configured.
 	Configured func(ctx context.Context) bool
 	// Now defaults to time.Now.
 	Now func() time.Time
@@ -120,33 +125,29 @@ type Deps struct {
 type Service struct {
 	d Deps
 
-	variantsMu sync.Mutex
-	variants   map[string]cachedVariant
+	productsMu sync.Mutex
+	products   map[string]cachedProduct
 }
 
-type cachedVariant struct {
-	v       billingdom.Variant
+type cachedProduct struct {
+	p       billingdom.Product
 	err     error
 	expires time.Time
 }
 
-// variantTTL bounds how stale a cached variant (price, trial) may be after an
-// edit in the provider dashboard.
-const variantTTL = 10 * time.Minute
-
-// scheduledChangeLead is how long before the billing boundary a downgrade is
-// pushed to the provider, so the renewal charges the new price.
-const scheduledChangeLead = time.Hour
+// productTTL bounds how stale a cached product (prices, trial) may be after
+// an edit in the provider dashboard.
+const productTTL = 10 * time.Minute
 
 // New builds a Service.
 func New(d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	if d.Variants == nil {
-		d.Variants = NewVariantStore(d.Repo, d.Settings.TestMode)
+	if d.Products == nil {
+		d.Products = NewProductStore(d.Repo, d.Settings.TestMode)
 	}
-	return &Service{d: d, variants: map[string]cachedVariant{}}
+	return &Service{d: d, products: map[string]cachedProduct{}}
 }
 
 // Settings returns the billing settings.
@@ -165,26 +166,37 @@ func (s *Service) Enabled() bool { return s != nil && s.d.Settings.Enabled() && 
 
 func (s *Service) now() time.Time { return s.d.Now().UTC() }
 
-func (s *Service) provider() string { return models.BillingProviderLemonSqueezy }
+// provider is the provider billing runs on, which every new row names.
+func (s *Service) provider() string { return s.d.Settings.Provider }
 
-// variant reads a provider variant through a short-lived cache.
-func (s *Service) variant(ctx context.Context, id string) (billingdom.Variant, error) {
-	now := s.now()
-	s.variantsMu.Lock()
-	c, ok := s.variants[id]
-	s.variantsMu.Unlock()
-	if ok && now.Before(c.expires) {
-		return c.v, c.err
+// Remote is the provider's planner for the calls river-service makes, or nil
+// while billing is off.
+func (s *Service) Remote() billingdom.Remote {
+	if !s.Enabled() {
+		return nil
 	}
-	v, err := s.d.Provider.GetVariant(ctx, id)
+	r, _ := s.d.Provider.(billingdom.Remote)
+	return r
+}
+
+// product reads a provider product through a short-lived cache.
+func (s *Service) product(ctx context.Context, id string) (billingdom.Product, error) {
+	now := s.now()
+	s.productsMu.Lock()
+	c, ok := s.products[id]
+	s.productsMu.Unlock()
+	if ok && now.Before(c.expires) {
+		return c.p, c.err
+	}
+	p, err := s.d.Provider.GetProduct(ctx, id)
 	if err != nil && !errors.Is(err, billingdom.ErrNotFound) {
 		// Transient failures are not cached.
-		return billingdom.Variant{}, err
+		return billingdom.Product{}, err
 	}
-	s.variantsMu.Lock()
-	s.variants[id] = cachedVariant{v: v, err: err, expires: now.Add(variantTTL)}
-	s.variantsMu.Unlock()
-	return v, err
+	s.productsMu.Lock()
+	s.products[id] = cachedProduct{p: p, err: err, expires: now.Add(productTTL)}
+	s.productsMu.Unlock()
+	return p, err
 }
 
 // publish tells the tenant's open tabs to refetch entitlements and billing.
@@ -257,29 +269,37 @@ func (s *Service) ownerIDs(ctx context.Context, tenantID string) ([]string, erro
 	return ids, nil
 }
 
+// ours reports whether a subscription belongs to the provider and mode
+// billing runs on and still counts. A previous provider's subscription is
+// history until the cutover invalidates it: it cannot be changed or read
+// here.
+func (s *Service) ours(sub *models.BillingSubscription) bool {
+	return sub.InvalidatedAt == nil && sub.TestMode == s.d.Settings.TestMode && sub.Provider == s.provider()
+}
+
 // liveSubscription returns the subscription a tenant follows: the most
-// recently created one that is neither invalidated nor in the other mode, or
-// nil. Older live ones are duplicates.
+// recently created one of the running provider and mode that is not
+// invalidated, or nil. Older live ones are duplicates.
 func (s *Service) liveSubscription(subs []models.BillingSubscription) *models.BillingSubscription {
 	now := s.now()
 	for i := range subs {
 		sub := &subs[i]
-		if sub.InvalidatedAt == nil && sub.TestMode == s.d.Settings.TestMode && billingdom.Live(sub.Status, sub.EndsAt, now) {
+		if s.ours(sub) && billingdom.Live(sub.Status, sub.EndsAt, now) {
 			return sub
 		}
 	}
 	return nil
 }
 
-// currentSubscription is the tenant's latest subscription in the current
-// mode, live or not (an expired one still shows on the billing card).
+// currentSubscription is the tenant's latest subscription of the running
+// provider and mode, live or not (an expired one still shows on the billing
+// card).
 func (s *Service) currentSubscription(subs []models.BillingSubscription) *models.BillingSubscription {
 	if live := s.liveSubscription(subs); live != nil {
 		return live
 	}
 	for i := range subs {
-		sub := &subs[i]
-		if sub.InvalidatedAt == nil && sub.TestMode == s.d.Settings.TestMode {
+		if sub := &subs[i]; s.ours(sub) {
 			return sub
 		}
 	}

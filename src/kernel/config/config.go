@@ -374,30 +374,35 @@ type Config struct {
 
 	// Billing. BillingProvider "none" (the default) turns billing off: the
 	// billing routes answer 503, new workspaces are not gated, and nothing is
-	// called upstream. "lemonsqueezy" enables Lemon Squeezy as merchant of
-	// record. The API key and webhook secret live in the encrypted secret
-	// store (LemonSqueezyAPIKey / LemonSqueezyWebhookSecret are first-boot
-	// seeds only); everything here is non-secret.
+	// called upstream. "polar" enables Polar as merchant of record;
+	// "lemonsqueezy", the provider before it, also turns billing off (and
+	// boot says so). The access token and webhook secret live in the
+	// encrypted secret store (PolarAccessToken / PolarWebhookSecret are
+	// first-boot seeds only); everything here is non-secret.
 	BillingProvider string `envconfig:"BILLING_PROVIDER" default:"none"`
-	// LemonSqueezyTestMode declares the store mode. Checkouts are created in
-	// it, and webhooks or subscriptions from the other mode are ignored.
-	LemonSqueezyTestMode bool   `envconfig:"LEMONSQUEEZY_TEST_MODE" default:"true"`
-	LemonSqueezyStoreID  string `envconfig:"LEMONSQUEEZY_STORE_ID"  default:""`
-	// LemonSqueezyVariants is deprecated: the variant map lives in
-	// billing_variant_mappings and is edited in Harbor. This JSON
-	// ({"<price_id>":"<variant_id>"}) only seeds the current mode's map on
-	// boot while that map is empty, and is ignored afterwards.
-	LemonSqueezyVariants      string        `envconfig:"LEMONSQUEEZY_VARIANTS"     default:""`
-	LemonSqueezyBaseURL       string        `envconfig:"LEMONSQUEEZY_BASE_URL"     default:"https://api.lemonsqueezy.com/v1"`
-	LemonSqueezyHTTPTimeout   time.Duration `envconfig:"LEMONSQUEEZY_HTTP_TIMEOUT" default:"15s"`
-	LemonSqueezyAPIKey        string        `envconfig:"LEMONSQUEEZY_API_KEY"        default:""`
-	LemonSqueezyWebhookSecret string        `envconfig:"LEMONSQUEEZY_WEBHOOK_SECRET" default:""`
+	// BillingTestMode runs against the provider's sandbox. Checkouts are
+	// created in it, and subscriptions of the other mode are ignored.
+	BillingTestMode bool `envconfig:"BILLING_TEST_MODE" default:"true"`
+	// PolarOrganizationID is the organization of the running mode;
+	// PolarOrganizationIDLive the production one, read (with the
+	// polar_access_token_live secret) while still in the sandbox so its
+	// product map can be prepared.
+	PolarOrganizationID     string `envconfig:"POLAR_ORGANIZATION_ID"      default:""`
+	PolarOrganizationIDLive string `envconfig:"POLAR_ORGANIZATION_ID_LIVE" default:""`
+	// PolarAPIVersion pins every request; the webhook endpoint is pinned to
+	// the same version in the Polar dashboard.
+	PolarAPIVersion string `envconfig:"POLAR_API_VERSION" default:"2026-10"`
+	// PolarBaseURL replaces both Polar hosts (tests only).
+	PolarBaseURL       string        `envconfig:"POLAR_BASE_URL"       default:""`
+	PolarHTTPTimeout   time.Duration `envconfig:"POLAR_HTTP_TIMEOUT"   default:"15s"`
+	PolarAccessToken   string        `envconfig:"POLAR_ACCESS_TOKEN"   default:""`
+	PolarWebhookSecret string        `envconfig:"POLAR_WEBHOOK_SECRET" default:""`
 	// BillingTrialTeardownLive tears down the Zernio profile of a workspace
 	// whose free month ended without a payment. False only reports it.
 	BillingTrialTeardownLive bool `envconfig:"BILLING_TRIAL_TEARDOWN_LIVE" default:"false"`
-	// The Lemon Squeezy fee estimate stored on each payment: the provider's
-	// payloads do not report it. Basis points of the USD total plus a fixed
-	// USD amount in cents per charge (5% + 50¢ is the standard rate).
+	// The provider fee estimate stored on a payment whose payload does not
+	// report the fee. Basis points of the USD total plus a fixed USD amount
+	// in cents per charge (Polar Starter: 5% + 50¢).
 	BillingFeePercentBPS int64 `envconfig:"BILLING_FEE_PERCENT_BPS"  default:"500"`
 	BillingFeeFixedCents int64 `envconfig:"BILLING_FEE_FIXED_CENTS"  default:"50"`
 

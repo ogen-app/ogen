@@ -2,8 +2,8 @@ package billing
 
 import "time"
 
-// Payment kinds: what a money movement is. A refund or chargeback carries the
-// id of the order or invoice it reverses.
+// Payment kinds: what a money movement is. Lemon Squeezy history also has
+// subscription invoices and chargebacks.
 const (
 	PaymentKindOrder               = "order"
 	PaymentKindSubscriptionInvoice = "subscription_invoice"
@@ -11,32 +11,35 @@ const (
 	PaymentKindChargeback          = "chargeback"
 )
 
-// Payment sources: the provider object a payment was read from. Order and
-// invoice ids are separate id spaces, so the source is part of a payment's
-// identity.
+// Payment sources: the provider object a payment was read from. Each source
+// is its own id space, so the source is part of a payment's identity.
 const (
-	PaymentSourceOrder               = "order"
+	PaymentSourceOrder = "order"
+	// PaymentSourceSubscriptionInvoice is Lemon Squeezy history only.
 	PaymentSourceSubscriptionInvoice = "subscription_invoice"
+	PaymentSourceRefund              = "refund"
 )
 
 // Payment is one money movement at the provider. Amounts are in minor units
-// of Currency and positive for every kind; the *USD fields are the provider's
-// conversion to US cents at the time of the payment.
+// of Currency and positive for every kind.
 type Payment struct {
 	Source     string
 	ProviderID string
 	Kind       string
 	TestMode   bool
-	// TenantID is the checkout's custom data, when the payload carried it.
+	// TenantID is the customer's external id or the checkout's metadata,
+	// when the payload carried either.
 	TenantID       string
 	SubscriptionID string
-	VariantID      string
-	// BillingReason is initial | renewal | updated for an invoice.
+	ProductID      string
+	// BillingReason is initial | renewal | updated for a subscription charge.
 	BillingReason string
 	Currency      string
 
-	Subtotal, Discount, Tax, Total, Refunded                int64
-	SubtotalUSD, DiscountUSD, TaxUSD, TotalUSD, RefundedUSD int64
+	Subtotal, Discount, Tax, Total, Refunded int64
+	// Fee is the provider's own fee in Currency, when the payload reports
+	// it; nil means it is estimated.
+	Fee *int64
 
 	Status     string
 	OccurredAt time.Time
@@ -52,8 +55,8 @@ type PaymentPage struct {
 	LastPage int
 }
 
-// FeeFormula estimates the provider's fee, which its payloads do not report:
-// a percentage of the USD total plus a fixed USD amount per charge.
+// FeeFormula estimates the provider's fee when its payloads do not report
+// it: a percentage of the USD total plus a fixed USD amount per charge.
 type FeeFormula struct {
 	// PercentBPS is the percentage in basis points (500 = 5%).
 	PercentBPS int64
@@ -61,16 +64,16 @@ type FeeFormula struct {
 	FixedUSDCents int64
 }
 
-// Estimate returns the fee for a payment in its currency and in US cents. A
-// refund or chargeback, and a charge of nothing (a free trial), carry no fee:
-// the provider keeps the fee of a refunded charge.
-func (f FeeFormula) Estimate(p Payment) (fee, feeUSD int64) {
-	if p.TotalUSD <= 0 || (p.Kind != PaymentKindOrder && p.Kind != PaymentKindSubscriptionInvoice) {
+// Estimate returns the fee for a payment in its currency and in US cents,
+// from its total in both. A refund or chargeback, and a charge of nothing (a
+// free trial), carry no fee: the provider keeps the fee of a refunded charge.
+func (f FeeFormula) Estimate(kind string, total, totalUSD int64) (fee, feeUSD int64) {
+	if totalUSD <= 0 || (kind != PaymentKindOrder && kind != PaymentKindSubscriptionInvoice) {
 		return 0, 0
 	}
-	feeUSD = roundDiv(p.TotalUSD*f.PercentBPS, 10_000) + f.FixedUSDCents
+	feeUSD = roundDiv(totalUSD*f.PercentBPS, 10_000) + f.FixedUSDCents
 	// The fee in the payment's currency, at the payment's own rate.
-	return roundDiv(feeUSD*p.Total, p.TotalUSD), feeUSD
+	return roundDiv(feeUSD*total, totalUSD), feeUSD
 }
 
 // Share is part of whole in proportion to of/total, rounded half away from

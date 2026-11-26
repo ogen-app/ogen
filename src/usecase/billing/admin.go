@@ -22,12 +22,14 @@ import (
 
 // Operator errors.
 var (
-	// ErrStillTestMode: the cutover runs only once the server is live.
+	// ErrStillTestMode: the mode cutover runs only once the server is live.
 	ErrStillTestMode = errors.New("billing still runs in test mode")
-	// ErrTrialVariantMissing: the tier cannot carry the free month.
-	ErrTrialVariantMissing = errors.New("tier has no one-month trial variant for every mapped price")
+	// ErrTrialProductMissing: the tier cannot carry the free month.
+	ErrTrialProductMissing = errors.New("tier has no one-month trial product for every mapped price")
 	// ErrReasonRequired: operator actions must say why.
 	ErrReasonRequired = errors.New("reason is required")
+	// ErrBadScope: a cutover without a known scope.
+	ErrBadScope = errors.New("unknown invalidation scope")
 )
 
 const (
@@ -45,8 +47,8 @@ const (
 	AttentionDuplicate             = "duplicate"
 	AttentionUnresolvedWebhook     = "unresolved_webhook"
 	AttentionScheduledChangeFailed = "scheduled_change_failed"
-	// AttentionUnmappedPrice: a sellable price has no variant, so it cannot
-	// be bought. It names a price, not a workspace.
+	// AttentionUnmappedPrice: a sellable price has no product (or an archived
+	// one), so it cannot be bought. It names a price, not a workspace.
 	AttentionUnmappedPrice = "unmapped_price"
 )
 
@@ -90,8 +92,9 @@ func (s *Service) TenantBilling(ctx context.Context, tenantID string) (TenantBil
 	}
 	followed := s.liveSubscription(out.Subscriptions)
 	var priceIDs []string
-	for _, sub := range out.Subscriptions {
-		if followed != nil && sub.ID != followed.ID && sub.InvalidatedAt == nil && billingdom.Live(sub.Status, sub.EndsAt, s.now()) {
+	for i := range out.Subscriptions {
+		sub := &out.Subscriptions[i]
+		if followed != nil && sub.ID != followed.ID && s.ours(sub) && billingdom.Live(sub.Status, sub.EndsAt, s.now()) {
 			out.Duplicates[sub.ID] = true
 		}
 		priceIDs = append(priceIDs, deref(sub.TierVersionPriceID))
@@ -325,7 +328,8 @@ func (s *Service) FreeTrialOffer(ctx context.Context) (FreeTrialOffer, error) {
 }
 
 // tierTrialDays returns the free-month length when every mapped price of the
-// tier's current purchasable version has a one-month trial variant, else 0.
+// tier's current purchasable version is sold by a product with a one-month
+// trial, else 0.
 func (s *Service) tierTrialDays(ctx context.Context, tierID string) (int, error) {
 	version, err := s.d.TierVersions.LatestActiveByTier(ctx, tierID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -338,28 +342,28 @@ func (s *Service) tierTrialDays(ctx context.Context, tierID string) (int, error)
 	if err != nil {
 		return 0, err
 	}
-	variants, err := s.variantMap(ctx)
+	products, err := s.productMap(ctx)
 	if err != nil {
 		return 0, err
 	}
 	days, mapped := 0, 0
 	for _, r := range rows {
-		variantID, ok := variants.Variant(r.ID)
+		productID, ok := products.Product(r.ID)
 		if !ok {
 			continue
 		}
 		mapped++
-		v, err := s.variant(ctx, variantID)
+		p, err := s.product(ctx, productID)
 		if errors.Is(err, billingdom.ErrNotFound) {
 			return 0, nil
 		}
 		if err != nil {
 			return 0, err
 		}
-		if !v.OneMonthTrial() {
+		if !p.OneMonthTrial() {
 			return 0, nil
 		}
-		days = v.TrialDays()
+		days = p.TrialDays()
 	}
 	if mapped == 0 {
 		return 0, nil
@@ -387,7 +391,7 @@ func (s *Service) SetFreeTrialTier(ctx context.Context, tierID, reason string) (
 			return FreeTrialOffer{}, providerErr(err)
 		}
 		if days == 0 {
-			return FreeTrialOffer{}, ErrTrialVariantMissing
+			return FreeTrialOffer{}, ErrTrialProductMissing
 		}
 	}
 	ok, err := s.d.Repo.SetFreeTrialTier(ctx, tierID, s.now())
@@ -403,17 +407,45 @@ func (s *Service) SetFreeTrialTier(ctx context.Context, tierID, reason string) (
 	return s.FreeTrialOffer(ctx)
 }
 
-// InvalidateTestSubscriptions is the sandbox-to-live cutover: every test-mode
-// subscription is invalidated, its workspace re-gated (when billing_required),
-// and its owners asked to check out again. Refused while still in test mode.
-func (s *Service) InvalidateTestSubscriptions(ctx context.Context, dryRun bool) ([]string, error) {
+// InvalidationScope selects the subscriptions a cutover invalidates.
+type InvalidationScope int
+
+const (
+	// ScopeProviderSwitch: every subscription of a provider other than the
+	// one billing runs on (Lemon Squeezy, after the move to Polar).
+	ScopeProviderSwitch InvalidationScope = iota + 1
+	// ScopeModeCutover: every test-mode subscription, once billing runs live.
+	ScopeModeCutover
+)
+
+// InvalidateSubscriptions is the cutover: the subscriptions the scope
+// selects are invalidated, their open scheduled changes cancelled, their
+// workspaces put back behind the billing gate (a complimentary one never is)
+// and their owners asked to check out again. The mode cutover is refused
+// while still in test mode. A dry run only lists the workspaces; a second
+// run finds nothing left to do.
+func (s *Service) InvalidateSubscriptions(ctx context.Context, dryRun bool, scope InvalidationScope) ([]string, error) {
 	if !s.Enabled() {
 		return nil, ErrUnavailable
 	}
-	if s.d.Settings.TestMode {
-		return nil, ErrStillTestMode
+	var (
+		subs   []models.BillingSubscription
+		reason string
+		err    error
+	)
+	switch scope {
+	case ScopeProviderSwitch:
+		reason = models.InvalidatedReasonProviderSwitch
+		subs, err = s.d.Repo.ListToInvalidate(ctx, s.provider(), false)
+	case ScopeModeCutover:
+		if s.d.Settings.TestMode {
+			return nil, ErrStillTestMode
+		}
+		reason = models.InvalidatedReasonModeCutover
+		subs, err = s.d.Repo.ListToInvalidate(ctx, "", true)
+	default:
+		return nil, ErrBadScope
 	}
-	subs, err := s.d.Repo.ListTestModeLive(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -429,35 +461,58 @@ func (s *Service) InvalidateTestSubscriptions(ctx context.Context, dryRun bool) 
 		return tenants, nil
 	}
 	for _, tenantID := range tenants {
-		err := s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-			if err := s.d.Repo.Invalidate(ctx, tx, byTenant[tenantID], models.InvalidatedReasonModeCutover, s.now()); err != nil {
-				return err
-			}
-			owners, err := s.d.Users.ListOwnersByTenant(ctx, tenantID)
-			if err != nil {
-				return err
-			}
-			for _, o := range owners {
-				key := templates.KeyBillingReentryRequired + ":" + tenantID + ":" + o.ID
-				if err := s.d.Jobs.EnqueueBillingEmailTx(ctx, tx.Tx, o.ID, tenantID, templates.KeyBillingReentryRequired, key); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
+		if err := s.invalidateTenant(ctx, tenantID, byTenant[tenantID], reason); err != nil {
 			return nil, err
 		}
-		s.emit(ctx, []notice{{tenantID: tenantID, subID: byTenant[tenantID][0], typ: "reentry_required", episode: models.InvalidatedReasonModeCutover, level: models.NotificationLevelWarning,
-			title: "Please re-enter your payment details", body: "Billing moved from its test period to live payments. Choose your plan again to keep going."}})
-		s.publish(ctx, tenantID, true)
 	}
+	slog.InfoContext(ctx, "billing: subscriptions invalidated", logging.AttrComponent, "billing",
+		"event", "subscriptions_invalidated", "reason", reason, "tenants", len(tenants), "subscriptions", len(subs))
 	return tenants, nil
+}
+
+// invalidateTenant invalidates one workspace's subscriptions in one
+// transaction, then tells its owners.
+func (s *Service) invalidateTenant(ctx context.Context, tenantID string, subIDs []string, reason string) error {
+	err := s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := s.d.Repo.Invalidate(ctx, tx, subIDs, reason, s.now()); err != nil {
+			return err
+		}
+		for _, id := range subIDs {
+			if err := s.cancelOpenChange(ctx, tx, id, "subscription invalidated ("+reason+")"); err != nil {
+				return err
+			}
+		}
+		if err := s.d.Repo.RequireBilling(ctx, tx, tenantID, s.now()); err != nil {
+			return err
+		}
+		owners, err := s.d.Users.ListOwnersByTenant(ctx, tenantID)
+		if err != nil {
+			return err
+		}
+		for _, o := range owners {
+			key := templates.KeyBillingReentryRequired + ":" + reason + ":" + tenantID + ":" + o.ID
+			if err := s.d.Jobs.EnqueueBillingEmailTx(ctx, tx.Tx, o.ID, tenantID, templates.KeyBillingReentryRequired, key); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	body := "Our payment provider changed. Choose your plan again to keep going."
+	if reason == models.InvalidatedReasonModeCutover {
+		body = "Billing moved from its test period to live payments. Choose your plan again to keep going."
+	}
+	s.emit(ctx, []notice{{tenantID: tenantID, subID: subIDs[0], typ: "reentry_required", episode: reason, level: models.NotificationLevelWarning,
+		title: "Please choose your plan again", body: body}})
+	s.publish(ctx, tenantID, true)
+	return nil
 }
 
 // BillingStatus summarises a workspace for the operator tenant list:
 // complimentary for a tester's workspace (billing on or off); otherwise empty
-// when billing is off; not_required; awaiting_checkout; or the provider status
+// when billing is off; not_required; awaiting_checkout; or the Ogen status
 // of its current subscription.
 func (s *Service) BillingStatus(ctx context.Context, t *models.Tenant) (string, error) {
 	if t.Complimentary {
@@ -485,7 +540,7 @@ const BillingStatusComplimentary = "complimentary"
 // PricingFlags is what the public pricing read adds per tier and price.
 type PricingFlags struct {
 	Enabled bool
-	// MappedPrices are prices with a provider variant.
+	// MappedPrices are prices with a provider product.
 	MappedPrices map[string]bool
 	// FreeTrialTierID is the marked tier when it can carry the free month.
 	FreeTrialTierID string
@@ -499,11 +554,11 @@ func (s *Service) PricingFlags(ctx context.Context) (PricingFlags, error) {
 		return out, nil
 	}
 	out.Enabled = true
-	variants, err := s.variantMap(ctx)
+	products, err := s.productMap(ctx)
 	if err != nil {
 		return out, err
 	}
-	for _, id := range variants.PriceIDs() {
+	for _, id := range products.PriceIDs() {
 		out.MappedPrices[id] = true
 	}
 	marked, err := s.d.Repo.FreeTrialTier(ctx)

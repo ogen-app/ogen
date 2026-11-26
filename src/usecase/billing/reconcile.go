@@ -23,8 +23,8 @@ const (
 
 // Reconcile is the periodic safety net behind the webhooks: it re-reads every
 // live subscription (and every one a failed webhook touched recently), applies
-// it through the webhook path, re-drives due scheduled changes whose jobs were
-// lost, and catches unpaid trial expiries the webhook missed. Each part is
+// it through the webhook path, fails downgrades the provider did not apply at
+// renewal, and catches unpaid trial expiries the webhook missed. Each part is
 // idempotent, so a partial run is simply finished by the next tick.
 func (s *Service) Reconcile(ctx context.Context) error {
 	plan, err := s.PlanReconcile(ctx)
@@ -38,11 +38,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	for _, id := range plan.DueChanges {
-		if err := s.RunScheduledChange(ctx, id); err != nil {
-			errs = append(errs, err)
-		}
-	}
 	if len(errs) > 0 {
 		slog.WarnContext(ctx, "billing reconcile finished with errors", logging.AttrComponent, "billing", "errors", len(errs), logging.AttrError, errors.Join(errs...))
 	}
@@ -50,9 +45,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 }
 
 // PlanReconcile does the part of a reconcile pass that needs no provider
-// call (catching unpaid trial expiries) and lists the rest. Only a failure to
-// list the live subscriptions is returned; the other failures are logged and
-// left to the next tick.
+// call (failing overdue downgrades, catching unpaid trial expiries) and lists
+// the subscriptions to re-read. Only a failure to list the live subscriptions
+// is returned; the other failures are logged and left to the next tick.
 func (s *Service) PlanReconcile(ctx context.Context) (billingdom.ReconcilePlan, error) {
 	var plan billingdom.ReconcilePlan
 	if !s.Enabled() {
@@ -63,7 +58,7 @@ func (s *Service) PlanReconcile(ctx context.Context) (billingdom.ReconcilePlan, 
 	seen := map[string]bool{}
 	after := ""
 	for {
-		page, err := s.d.Repo.ListForReconcile(ctx, s.d.Settings.TestMode, after, reconcilePage)
+		page, err := s.d.Repo.ListForReconcile(ctx, s.provider(), s.d.Settings.TestMode, after, reconcilePage)
 		if err != nil {
 			return billingdom.ReconcilePlan{}, err
 		}
@@ -86,19 +81,15 @@ func (s *Service) PlanReconcile(ctx context.Context) (billingdom.ReconcilePlan, 
 	}
 	for _, ev := range failed {
 		subID := ev.ProviderObjectID
-		if ev.EventName == "" || seen[subID] || subID == "" || !isSubscriptionEvent(ev.EventName) {
+		if ev.Provider != s.provider() || seen[subID] || subID == "" || !isSubscriptionEvent(ev.EventName) {
 			continue
 		}
 		seen[subID] = true
 		plan.Subscriptions = append(plan.Subscriptions, subID)
 	}
 
-	due, err := s.d.Repo.ListDueScheduledChanges(ctx, s.now(), scheduledChangeLead)
-	if err != nil {
+	if err := s.failOverdueChanges(ctx); err != nil {
 		errs = append(errs, err)
-	}
-	for _, c := range due {
-		plan.DueChanges = append(plan.DueChanges, c.ID)
 	}
 	if err := s.sweepUnpaidExpired(ctx); err != nil {
 		errs = append(errs, err)
@@ -112,8 +103,8 @@ func (s *Service) PlanReconcile(ctx context.Context) (billingdom.ReconcilePlan, 
 // subscriptionEvents are the webhooks that carry a subscription snapshot; their
 // object id is the subscription id.
 var subscriptionEvents = []string{
-	"subscription_created", "subscription_updated", "subscription_cancelled", "subscription_resumed",
-	"subscription_expired", "subscription_paused", "subscription_unpaused",
+	"subscription.created", "subscription.active", "subscription.updated", "subscription.canceled", "subscription.uncanceled",
+	"subscription.revoked", "subscription.past_due", "subscription.paused", "subscription.resumed",
 }
 
 func isSubscriptionEvent(name string) bool {
@@ -133,7 +124,7 @@ func (s *Service) ApplyResync(ctx context.Context, providerSubID string, snap bi
 	if snap.TestMode != s.d.Settings.TestMode {
 		return nil
 	}
-	res, err := s.applySnapshot(ctx, snap, nil)
+	res, err := s.applySnapshot(ctx, snap)
 	if err != nil {
 		return err
 	}
@@ -154,8 +145,9 @@ func (s *Service) ResyncTenant(ctx context.Context, tenantID string) (int, error
 		return 0, err
 	}
 	corrected := 0
-	for _, sub := range subs {
-		if sub.InvalidatedAt != nil || sub.TestMode != s.d.Settings.TestMode {
+	for i := range subs {
+		sub := &subs[i]
+		if !s.ours(sub) {
 			continue
 		}
 		snap, err := s.d.Provider.GetSubscription(ctx, sub.ProviderSubscriptionID)
@@ -165,7 +157,7 @@ func (s *Service) ResyncTenant(ctx context.Context, tenantID string) (int, error
 		if err != nil {
 			return corrected, providerErr(err)
 		}
-		res, err := s.applySnapshot(ctx, snap, nil)
+		res, err := s.applySnapshot(ctx, snap)
 		if err != nil {
 			return corrected, err
 		}
@@ -182,7 +174,7 @@ func (s *Service) sweepUnpaidExpired(ctx context.Context) error {
 	if !s.d.Settings.TrialTeardownLive {
 		return nil
 	}
-	subs, err := s.d.Repo.ListUnpaidExpired(ctx, s.d.Settings.TestMode, unpaidExpiredPageLimit)
+	subs, err := s.d.Repo.ListUnpaidExpired(ctx, s.provider(), s.d.Settings.TestMode, unpaidExpiredPageLimit)
 	if err != nil {
 		return err
 	}

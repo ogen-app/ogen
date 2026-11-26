@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strings"
@@ -28,13 +29,13 @@ type BillingAdmin interface {
 	ResyncTenant(ctx context.Context, tenantID string) (int, error)
 	FreeTrialOffer(ctx context.Context) (billing.FreeTrialOffer, error)
 	SetFreeTrialTier(ctx context.Context, tierID, reason string) (billing.FreeTrialOffer, error)
-	InvalidateTestSubscriptions(ctx context.Context, dryRun bool) ([]string, error)
+	InvalidateSubscriptions(ctx context.Context, dryRun bool, scope billing.InvalidationScope) ([]string, error)
 	BillingStatus(ctx context.Context, t *models.Tenant) (string, error)
-	ProviderVariants(ctx context.Context, testMode bool) ([]billing.ProviderVariant, error)
-	VariantMappingList(ctx context.Context, testMode bool) (billing.VariantMappings, error)
-	SetVariantMapping(ctx context.Context, priceID string, testMode bool, variantID, reason string) (billing.VariantMapping, error)
-	SuggestVariantMappings(ctx context.Context, testMode bool) ([]billing.VariantSuggestion, error)
-	CheckVariants(ctx context.Context) (int, error)
+	ProviderProducts(ctx context.Context, testMode bool) ([]billing.ProviderProduct, error)
+	ProductMappingList(ctx context.Context, testMode bool) (billing.ProductMappings, error)
+	SetProductMapping(ctx context.Context, priceID string, testMode bool, productID, reason string) (billing.ProductMappingView, error)
+	SuggestProductMappings(ctx context.Context, testMode bool) ([]billing.ProductSuggestion, error)
+	CheckProducts(ctx context.Context) (int, error)
 	ListPayments(ctx context.Context, testMode bool, from, to *time.Time, pageSize int, pageToken string) ([]billing.PaymentRow, string, error)
 }
 
@@ -68,11 +69,13 @@ func billingStatusErr(err error) error {
 	case errors.Is(err, billing.ErrReasonRequired):
 		return status.Error(codes.InvalidArgument, "reason is required")
 	case errors.Is(err, billing.ErrStillTestMode):
-		return status.Error(codes.FailedPrecondition, "billing still runs in test mode; switch LEMONSQUEEZY_TEST_MODE off first")
+		return status.Error(codes.FailedPrecondition, "billing still runs in the sandbox; set BILLING_TEST_MODE=false first")
+	case errors.Is(err, billing.ErrBadScope):
+		return status.Error(codes.InvalidArgument, "scope is required: provider_switch or mode_cutover")
 	case errors.Is(err, billing.ErrComplimentary):
 		return status.Error(codes.FailedPrecondition, "the workspace is complimentary; end that with SetComplimentary")
-	case errors.Is(err, billing.ErrTrialVariantMissing):
-		return status.Error(codes.FailedPrecondition, "the tier's Lemon Squeezy variants do not all carry a one-month free trial")
+	case errors.Is(err, billing.ErrTrialProductMissing):
+		return status.Error(codes.FailedPrecondition, "the tier's Polar products do not all carry a one-month free trial")
 	case errors.Is(err, billing.ErrProvider):
 		return status.Error(codes.Unavailable, "billing provider error")
 	case errors.Is(err, billing.ErrUnknownPrice):
@@ -90,8 +93,9 @@ func (s *billingAdminService) GetBillingSettings(ctx context.Context, _ *billing
 		Provider:          st.Provider,
 		TestMode:          st.TestMode,
 		Configured:        s.svc.Configured(ctx),
-		StoreId:           st.StoreID,
+		OrganizationId:    st.OrganizationID,
 		TrialTeardownLive: st.TrialTeardownLive,
+		ApiVersion:        st.APIVersion,
 	}, nil
 }
 
@@ -216,12 +220,19 @@ func (s *billingAdminService) SetFreeTrialTier(ctx context.Context, req *billing
 	return &billingv1.SetFreeTrialTierResponse{Offer: toOfferProto(offer)}, nil
 }
 
-func (s *billingAdminService) InvalidateTestSubscriptions(ctx context.Context, req *billingv1.InvalidateTestSubscriptionsRequest) (*billingv1.InvalidateTestSubscriptionsResponse, error) {
-	ids, err := s.svc.InvalidateTestSubscriptions(ctx, req.GetDryRun())
+// invalidationScopes maps the wire scope to the usecase's; an unspecified one
+// is refused there.
+var invalidationScopes = map[billingv1.InvalidationScope]billing.InvalidationScope{
+	billingv1.InvalidationScope_INVALIDATION_SCOPE_PROVIDER_SWITCH: billing.ScopeProviderSwitch,
+	billingv1.InvalidationScope_INVALIDATION_SCOPE_MODE_CUTOVER:    billing.ScopeModeCutover,
+}
+
+func (s *billingAdminService) InvalidateSubscriptions(ctx context.Context, req *billingv1.InvalidateSubscriptionsRequest) (*billingv1.InvalidateSubscriptionsResponse, error) {
+	ids, err := s.svc.InvalidateSubscriptions(ctx, req.GetDryRun(), invalidationScopes[req.GetScope()])
 	if err != nil {
 		return nil, billingStatusErr(err)
 	}
-	return &billingv1.InvalidateTestSubscriptionsResponse{DryRun: req.GetDryRun(), Count: int32(len(ids)), TenantIds: ids}, nil
+	return &billingv1.InvalidateSubscriptionsResponse{DryRun: req.GetDryRun(), Count: int32(len(ids)), TenantIds: ids}, nil
 }
 
 func toOfferProto(o billing.FreeTrialOffer) *billingv1.FreeTrialTier {
@@ -238,8 +249,10 @@ func ts(t *time.Time) *timestamppb.Timestamp {
 func toSubscriptionProto(s *models.BillingSubscription, prices map[string]billingdom.Price, duplicate bool) *billingv1.Subscription {
 	p := &billingv1.Subscription{
 		Id: s.ID, Provider: s.Provider, ProviderSubscriptionId: s.ProviderSubscriptionID, ProviderCustomerId: s.ProviderCustomerID,
-		ProviderVariantId: s.ProviderVariantID, Status: s.Status, TestMode: s.TestMode,
-		RenewsAt: ts(s.RenewsAt), EndsAt: ts(s.EndsAt), TrialEndsAt: ts(s.TrialEndsAt), FirstPaidAt: ts(s.FirstPaidAt),
+		ProviderProductId: cmp.Or(s.ProviderProductID, s.ProviderVariantID), Status: s.Status, TestMode: s.TestMode,
+		ProviderStatus: s.ProviderStatus, PendingProductId: s.PendingProductID, PendingEffectiveAt: ts(s.PendingEffectiveAt),
+		CancelAtPeriodEnd: s.CancelAtPeriodEnd,
+		RenewsAt:          ts(s.RenewsAt), EndsAt: ts(s.EndsAt), TrialEndsAt: ts(s.TrialEndsAt), FirstPaidAt: ts(s.FirstPaidAt),
 		CardBrand: s.CardBrand, CardLastFour: s.CardLastFour, InvalidatedAt: ts(s.InvalidatedAt), InvalidatedReason: s.InvalidatedReason,
 		TeardownAt: ts(s.TeardownAt), Duplicate: duplicate, CreatedAt: timestamppb.New(s.CreatedAt), UpdatedAt: timestamppb.New(s.UpdatedAt),
 	}
@@ -285,12 +298,22 @@ func (s *billingAdminService) ListPayments(ctx context.Context, req *billingv1.L
 }
 
 func toPaymentProto(r billing.PaymentRow) *billingv1.Payment {
-	return &billingv1.Payment{
+	p := &billingv1.Payment{
 		Id: r.ID, Provider: r.Provider, ProviderId: r.ProviderID, Kind: r.Kind,
-		TenantId: r.ResolvedTenantID, TierId: r.TierID, ProviderVariantId: r.ProviderVariantID, Currency: r.Currency,
+		TenantId: r.ResolvedTenantID, TierId: r.TierID, ProviderProductId: cmp.Or(r.ProviderProductID, r.ProviderVariantID), Currency: r.Currency,
 		Subtotal: r.Subtotal, Discount: r.Discount, Tax: r.Tax, Total: r.Total, Refunded: r.Refunded,
 		SubtotalUsd: r.SubtotalUSD, DiscountUsd: r.DiscountUSD, TaxUsd: r.TaxUSD, TotalUsd: r.TotalUSD, RefundedUsd: r.RefundedUSD,
 		Fee: r.Fee, FeeUsd: r.FeeUSD, FeeIsEstimated: r.FeeIsEstimated,
 		Status: r.Status, OccurredAt: timestamppb.New(r.OccurredAt), TestMode: r.TestMode,
 	}
+	if r.FXRate != nil {
+		p.FxRate = *r.FXRate
+	}
+	if r.FXSource != nil {
+		p.FxSource = *r.FXSource
+	}
+	if r.FXDate != nil {
+		p.FxDate = r.FXDate.Format(time.DateOnly)
+	}
+	return p
 }
