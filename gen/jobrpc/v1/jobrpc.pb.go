@@ -82,8 +82,9 @@ func (EmailOutcome) EnumDescriptor() ([]byte, []int) {
 type LeaseRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// One of "zernio_api_key", "gemini_api_key", "resend_api_key",
-	// "firecrawl_api_key", "lemonsqueezy_api_key" (the key for the billing
-	// mode Harbor has selected, test or live), or "harbor_webhook_secret" (the
+	// "firecrawl_api_key", "polar_access_token" (the token of the billing mode
+	// ogen runs in, sandbox or production), "lemonsqueezy_api_key" (deprecated,
+	// until the Lemon Squeezy code is removed), or "harbor_webhook_secret" (the
 	// key river-service signs Harbor's new-tenant webhook with).
 	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -918,8 +919,10 @@ func (*StepResponse_Wait) isStepResponse_Next() {}
 // HttpCall is one HTTP request to an outside API.
 type HttpCall struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The API: "zernio", "gemini", "firecrawl" or "lemonsqueezy". river-service
-	// sends the call to that API's base URL with its key leased from ogen.
+	// The API: "zernio", "gemini", "firecrawl", "polar" (Polar production),
+	// "polar_sandbox" (the Polar sandbox; both send polar_access_token) or
+	// "lemonsqueezy" (deprecated). river-service sends the call to that API's
+	// base URL with its key leased from ogen.
 	// Empty means fetch url as is, with no credentials (e.g. an image on a
 	// scraped page).
 	Upstream string `protobuf:"bytes,1,opt,name=upstream,proto3" json:"upstream,omitempty"`

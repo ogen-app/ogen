@@ -19,20 +19,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BillingAdminService_GetBillingSettings_FullMethodName          = "/billing.v1.BillingAdminService/GetBillingSettings"
-	BillingAdminService_GetTenantBilling_FullMethodName            = "/billing.v1.BillingAdminService/GetTenantBilling"
-	BillingAdminService_ListBillingAttention_FullMethodName        = "/billing.v1.BillingAdminService/ListBillingAttention"
-	BillingAdminService_SetBillingRequired_FullMethodName          = "/billing.v1.BillingAdminService/SetBillingRequired"
-	BillingAdminService_SetComplimentary_FullMethodName            = "/billing.v1.BillingAdminService/SetComplimentary"
-	BillingAdminService_ResyncSubscription_FullMethodName          = "/billing.v1.BillingAdminService/ResyncSubscription"
-	BillingAdminService_GetFreeTrialTier_FullMethodName            = "/billing.v1.BillingAdminService/GetFreeTrialTier"
-	BillingAdminService_SetFreeTrialTier_FullMethodName            = "/billing.v1.BillingAdminService/SetFreeTrialTier"
-	BillingAdminService_InvalidateTestSubscriptions_FullMethodName = "/billing.v1.BillingAdminService/InvalidateTestSubscriptions"
-	BillingAdminService_ListProviderVariants_FullMethodName        = "/billing.v1.BillingAdminService/ListProviderVariants"
-	BillingAdminService_ListVariantMappings_FullMethodName         = "/billing.v1.BillingAdminService/ListVariantMappings"
-	BillingAdminService_SetVariantMapping_FullMethodName           = "/billing.v1.BillingAdminService/SetVariantMapping"
-	BillingAdminService_SuggestVariantMappings_FullMethodName      = "/billing.v1.BillingAdminService/SuggestVariantMappings"
-	BillingAdminService_ListPayments_FullMethodName                = "/billing.v1.BillingAdminService/ListPayments"
+	BillingAdminService_GetBillingSettings_FullMethodName      = "/billing.v1.BillingAdminService/GetBillingSettings"
+	BillingAdminService_GetTenantBilling_FullMethodName        = "/billing.v1.BillingAdminService/GetTenantBilling"
+	BillingAdminService_ListBillingAttention_FullMethodName    = "/billing.v1.BillingAdminService/ListBillingAttention"
+	BillingAdminService_SetBillingRequired_FullMethodName      = "/billing.v1.BillingAdminService/SetBillingRequired"
+	BillingAdminService_SetComplimentary_FullMethodName        = "/billing.v1.BillingAdminService/SetComplimentary"
+	BillingAdminService_ResyncSubscription_FullMethodName      = "/billing.v1.BillingAdminService/ResyncSubscription"
+	BillingAdminService_GetFreeTrialTier_FullMethodName        = "/billing.v1.BillingAdminService/GetFreeTrialTier"
+	BillingAdminService_SetFreeTrialTier_FullMethodName        = "/billing.v1.BillingAdminService/SetFreeTrialTier"
+	BillingAdminService_InvalidateSubscriptions_FullMethodName = "/billing.v1.BillingAdminService/InvalidateSubscriptions"
+	BillingAdminService_ListProviderProducts_FullMethodName    = "/billing.v1.BillingAdminService/ListProviderProducts"
+	BillingAdminService_ListProductMappings_FullMethodName     = "/billing.v1.BillingAdminService/ListProductMappings"
+	BillingAdminService_SetProductMapping_FullMethodName       = "/billing.v1.BillingAdminService/SetProductMapping"
+	BillingAdminService_SuggestProductMappings_FullMethodName  = "/billing.v1.BillingAdminService/SuggestProductMappings"
+	BillingAdminService_ListPayments_FullMethodName            = "/billing.v1.BillingAdminService/ListPayments"
 )
 
 // BillingAdminServiceClient is the client API for BillingAdminService service.
@@ -44,17 +44,19 @@ const (
 // shared-bearer-token gate with the other admin services (implemented in the
 // ogen repo, src/transport/grpc/server).
 //
-// Lemon Squeezy is the merchant of record. Ogen mirrors each subscription and
-// never changes a workspace's tier or status on its own when a payment fails
-// ("operator decides"); this service is where the operator sees that state and
-// acts on it. The one automatic consequence is the never-paid trial teardown,
-// which is reported here as teardown_status.
+// Polar is the merchant of record (CON-523; Lemon Squeezy before it). Ogen
+// mirrors each subscription and never changes a workspace's tier or status on
+// its own when a payment fails ("operator decides"); this service is where
+// the operator sees that state and acts on it. The one automatic consequence
+// is the never-paid trial teardown, which is reported here as
+// teardown_status.
 //
-// Status strings are Lemon Squeezy's own vocabulary, passed through unchanged:
-// on_trial | active | paused | past_due | unpaid | cancelled | expired.
+// Status strings are Ogen's own subscription statuses, whatever the provider:
+// on_trial | active | paused | past_due | unpaid | cancelled | expired. The
+// provider's raw status is reported separately as provider_status.
 type BillingAdminServiceClient interface {
 	// GetBillingSettings reports the provider configuration the console needs to
-	// decide what it may offer (e.g. the cutover is refused in test mode).
+	// decide what it may offer (e.g. the mode cutover is refused in test mode).
 	GetBillingSettings(ctx context.Context, in *GetBillingSettingsRequest, opts ...grpc.CallOption) (*GetBillingSettingsResponse, error)
 	// GetTenantBilling returns one workspace's billing picture: subscriptions,
 	// scheduled plan changes, the billing gate and the latest webhook events.
@@ -78,40 +80,49 @@ type BillingAdminServiceClient interface {
 	// and applies them through the same path as a webhook.
 	ResyncSubscription(ctx context.Context, in *ResyncSubscriptionRequest, opts ...grpc.CallOption) (*ResyncSubscriptionResponse, error)
 	// GetFreeTrialTier returns the tier currently marked as the free-month tier
-	// (card in Lemon Squeezy, $0 today, one month, then the tier's normal price)
-	// and the tiers that may be marked.
+	// (card at checkout, nothing charged today, one month, then the tier's
+	// normal price) and the tiers that may be marked.
 	GetFreeTrialTier(ctx context.Context, in *GetFreeTrialTierRequest, opts ...grpc.CallOption) (*GetFreeTrialTierResponse, error)
 	// SetFreeTrialTier marks exactly one tier as the free-month tier, clearing the
 	// previous one, or turns the offer off (tier_id = ""). FailedPrecondition when
-	// the tier lacks a one-month trial variant for any of its mapped prices.
+	// a mapped price of the tier is sold by a product without a one-month trial.
 	// Applies to new checkouts only.
 	SetFreeTrialTier(ctx context.Context, in *SetFreeTrialTierRequest, opts ...grpc.CallOption) (*SetFreeTrialTierResponse, error)
-	// InvalidateTestSubscriptions is the sandbox-to-live cutover: it invalidates
-	// every test-mode subscription, re-gates those workspaces and asks their
-	// owners to check out again. Refused (FailedPrecondition) while the server
-	// still runs in test mode. dry_run lists the affected workspaces only.
-	InvalidateTestSubscriptions(ctx context.Context, in *InvalidateTestSubscriptionsRequest, opts ...grpc.CallOption) (*InvalidateTestSubscriptionsResponse, error)
-	// ListProviderVariants lists the store's subscription variants in one mode,
-	// for the mapping picker. Unavailable when that mode's API key is not set.
-	ListProviderVariants(ctx context.Context, in *ListProviderVariantsRequest, opts ...grpc.CallOption) (*ListProviderVariantsResponse, error)
-	// ListVariantMappings lists every sellable price row with its mapped variant
+	// InvalidateSubscriptions is the cutover tool (CON-523). It invalidates the
+	// live subscriptions the scope selects, re-gates those workspaces (unless
+	// complimentary), cancels their open scheduled changes and asks their owners
+	// to check out again:
+	//
+	//	PROVIDER_SWITCH: every subscription of a provider other than the one
+	//	  the server runs (Lemon Squeezy → Polar). Allowed in either mode.
+	//	MODE_CUTOVER: every test-mode subscription, at the sandbox-to-live
+	//	  switch. Refused (FailedPrecondition) while the server runs in test mode.
+	//
+	// dry_run lists the affected workspaces only. Idempotent: subscriptions
+	// already invalidated are skipped. InvalidArgument for an unspecified scope.
+	InvalidateSubscriptions(ctx context.Context, in *InvalidateSubscriptionsRequest, opts ...grpc.CallOption) (*InvalidateSubscriptionsResponse, error)
+	// ListProviderProducts lists the organization's recurring products in one
+	// mode, for the mapping picker. Unavailable when that mode's token is not
+	// set.
+	ListProviderProducts(ctx context.Context, in *ListProviderProductsRequest, opts ...grpc.CallOption) (*ListProviderProductsResponse, error)
+	// ListProductMappings lists every sellable price row with its mapped product
 	// in one mode and the result of checking the pair against the provider.
-	ListVariantMappings(ctx context.Context, in *ListVariantMappingsRequest, opts ...grpc.CallOption) (*ListVariantMappingsResponse, error)
-	// SetVariantMapping maps a price row to a variant, or unmaps it
-	// (variant_id = ""). FailedPrecondition, with a readable message, when the
-	// variant does not match the price row (amount excluding tax, currency,
-	// interval, mode, the one-month trial on the free-month tier) or already
-	// sells another price. A draft or retired price cannot be mapped. The
-	// reason is kept on the mapping and logged.
-	SetVariantMapping(ctx context.Context, in *SetVariantMappingRequest, opts ...grpc.CallOption) (*SetVariantMappingResponse, error)
-	// SuggestVariantMappings proposes a variant for every unmapped price row
-	// that exactly one free variant matches. Nothing is saved: the operator
-	// confirms each suggestion with SetVariantMapping.
-	SuggestVariantMappings(ctx context.Context, in *SuggestVariantMappingsRequest, opts ...grpc.CallOption) (*SuggestVariantMappingsResponse, error)
+	ListProductMappings(ctx context.Context, in *ListProductMappingsRequest, opts ...grpc.CallOption) (*ListProductMappingsResponse, error)
+	// SetProductMapping maps a price row to a product, or unmaps it
+	// (product_id = ""). FailedPrecondition, with a readable message, when the
+	// product does not match the price row (amount excluding tax in the row's
+	// currency, interval, mode, archived, the one-month trial on the free-month
+	// tier) or already sells another price in that currency. A draft or retired
+	// price cannot be mapped. The reason is kept on the mapping and logged.
+	SetProductMapping(ctx context.Context, in *SetProductMappingRequest, opts ...grpc.CallOption) (*SetProductMappingResponse, error)
+	// SuggestProductMappings proposes a product for every unmapped price row
+	// that exactly one free product matches. Nothing is saved: the operator
+	// confirms each suggestion with SetProductMapping.
+	SuggestProductMappings(ctx context.Context, in *SuggestProductMappingsRequest, opts ...grpc.CallOption) (*SuggestProductMappingsResponse, error)
 	// ListPayments lists payments that occurred in [from, to) in one mode,
 	// oldest first, keyset-paginated (occurred_at, then id). A payment whose
-	// amounts change later (a partial refund) is listed again by a sync that
-	// covers its occurred_at, so the caller upserts on id.
+	// amounts change later (a refund, or its USD conversion landing) is listed
+	// again by a sync that covers its occurred_at, so the caller upserts on id.
 	ListPayments(ctx context.Context, in *ListPaymentsRequest, opts ...grpc.CallOption) (*ListPaymentsResponse, error)
 }
 
@@ -203,50 +214,50 @@ func (c *billingAdminServiceClient) SetFreeTrialTier(ctx context.Context, in *Se
 	return out, nil
 }
 
-func (c *billingAdminServiceClient) InvalidateTestSubscriptions(ctx context.Context, in *InvalidateTestSubscriptionsRequest, opts ...grpc.CallOption) (*InvalidateTestSubscriptionsResponse, error) {
+func (c *billingAdminServiceClient) InvalidateSubscriptions(ctx context.Context, in *InvalidateSubscriptionsRequest, opts ...grpc.CallOption) (*InvalidateSubscriptionsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(InvalidateTestSubscriptionsResponse)
-	err := c.cc.Invoke(ctx, BillingAdminService_InvalidateTestSubscriptions_FullMethodName, in, out, cOpts...)
+	out := new(InvalidateSubscriptionsResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_InvalidateSubscriptions_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *billingAdminServiceClient) ListProviderVariants(ctx context.Context, in *ListProviderVariantsRequest, opts ...grpc.CallOption) (*ListProviderVariantsResponse, error) {
+func (c *billingAdminServiceClient) ListProviderProducts(ctx context.Context, in *ListProviderProductsRequest, opts ...grpc.CallOption) (*ListProviderProductsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListProviderVariantsResponse)
-	err := c.cc.Invoke(ctx, BillingAdminService_ListProviderVariants_FullMethodName, in, out, cOpts...)
+	out := new(ListProviderProductsResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_ListProviderProducts_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *billingAdminServiceClient) ListVariantMappings(ctx context.Context, in *ListVariantMappingsRequest, opts ...grpc.CallOption) (*ListVariantMappingsResponse, error) {
+func (c *billingAdminServiceClient) ListProductMappings(ctx context.Context, in *ListProductMappingsRequest, opts ...grpc.CallOption) (*ListProductMappingsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListVariantMappingsResponse)
-	err := c.cc.Invoke(ctx, BillingAdminService_ListVariantMappings_FullMethodName, in, out, cOpts...)
+	out := new(ListProductMappingsResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_ListProductMappings_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *billingAdminServiceClient) SetVariantMapping(ctx context.Context, in *SetVariantMappingRequest, opts ...grpc.CallOption) (*SetVariantMappingResponse, error) {
+func (c *billingAdminServiceClient) SetProductMapping(ctx context.Context, in *SetProductMappingRequest, opts ...grpc.CallOption) (*SetProductMappingResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetVariantMappingResponse)
-	err := c.cc.Invoke(ctx, BillingAdminService_SetVariantMapping_FullMethodName, in, out, cOpts...)
+	out := new(SetProductMappingResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_SetProductMapping_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *billingAdminServiceClient) SuggestVariantMappings(ctx context.Context, in *SuggestVariantMappingsRequest, opts ...grpc.CallOption) (*SuggestVariantMappingsResponse, error) {
+func (c *billingAdminServiceClient) SuggestProductMappings(ctx context.Context, in *SuggestProductMappingsRequest, opts ...grpc.CallOption) (*SuggestProductMappingsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SuggestVariantMappingsResponse)
-	err := c.cc.Invoke(ctx, BillingAdminService_SuggestVariantMappings_FullMethodName, in, out, cOpts...)
+	out := new(SuggestProductMappingsResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_SuggestProductMappings_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -272,17 +283,19 @@ func (c *billingAdminServiceClient) ListPayments(ctx context.Context, in *ListPa
 // shared-bearer-token gate with the other admin services (implemented in the
 // ogen repo, src/transport/grpc/server).
 //
-// Lemon Squeezy is the merchant of record. Ogen mirrors each subscription and
-// never changes a workspace's tier or status on its own when a payment fails
-// ("operator decides"); this service is where the operator sees that state and
-// acts on it. The one automatic consequence is the never-paid trial teardown,
-// which is reported here as teardown_status.
+// Polar is the merchant of record (CON-523; Lemon Squeezy before it). Ogen
+// mirrors each subscription and never changes a workspace's tier or status on
+// its own when a payment fails ("operator decides"); this service is where
+// the operator sees that state and acts on it. The one automatic consequence
+// is the never-paid trial teardown, which is reported here as
+// teardown_status.
 //
-// Status strings are Lemon Squeezy's own vocabulary, passed through unchanged:
-// on_trial | active | paused | past_due | unpaid | cancelled | expired.
+// Status strings are Ogen's own subscription statuses, whatever the provider:
+// on_trial | active | paused | past_due | unpaid | cancelled | expired. The
+// provider's raw status is reported separately as provider_status.
 type BillingAdminServiceServer interface {
 	// GetBillingSettings reports the provider configuration the console needs to
-	// decide what it may offer (e.g. the cutover is refused in test mode).
+	// decide what it may offer (e.g. the mode cutover is refused in test mode).
 	GetBillingSettings(context.Context, *GetBillingSettingsRequest) (*GetBillingSettingsResponse, error)
 	// GetTenantBilling returns one workspace's billing picture: subscriptions,
 	// scheduled plan changes, the billing gate and the latest webhook events.
@@ -306,40 +319,49 @@ type BillingAdminServiceServer interface {
 	// and applies them through the same path as a webhook.
 	ResyncSubscription(context.Context, *ResyncSubscriptionRequest) (*ResyncSubscriptionResponse, error)
 	// GetFreeTrialTier returns the tier currently marked as the free-month tier
-	// (card in Lemon Squeezy, $0 today, one month, then the tier's normal price)
-	// and the tiers that may be marked.
+	// (card at checkout, nothing charged today, one month, then the tier's
+	// normal price) and the tiers that may be marked.
 	GetFreeTrialTier(context.Context, *GetFreeTrialTierRequest) (*GetFreeTrialTierResponse, error)
 	// SetFreeTrialTier marks exactly one tier as the free-month tier, clearing the
 	// previous one, or turns the offer off (tier_id = ""). FailedPrecondition when
-	// the tier lacks a one-month trial variant for any of its mapped prices.
+	// a mapped price of the tier is sold by a product without a one-month trial.
 	// Applies to new checkouts only.
 	SetFreeTrialTier(context.Context, *SetFreeTrialTierRequest) (*SetFreeTrialTierResponse, error)
-	// InvalidateTestSubscriptions is the sandbox-to-live cutover: it invalidates
-	// every test-mode subscription, re-gates those workspaces and asks their
-	// owners to check out again. Refused (FailedPrecondition) while the server
-	// still runs in test mode. dry_run lists the affected workspaces only.
-	InvalidateTestSubscriptions(context.Context, *InvalidateTestSubscriptionsRequest) (*InvalidateTestSubscriptionsResponse, error)
-	// ListProviderVariants lists the store's subscription variants in one mode,
-	// for the mapping picker. Unavailable when that mode's API key is not set.
-	ListProviderVariants(context.Context, *ListProviderVariantsRequest) (*ListProviderVariantsResponse, error)
-	// ListVariantMappings lists every sellable price row with its mapped variant
+	// InvalidateSubscriptions is the cutover tool (CON-523). It invalidates the
+	// live subscriptions the scope selects, re-gates those workspaces (unless
+	// complimentary), cancels their open scheduled changes and asks their owners
+	// to check out again:
+	//
+	//	PROVIDER_SWITCH: every subscription of a provider other than the one
+	//	  the server runs (Lemon Squeezy → Polar). Allowed in either mode.
+	//	MODE_CUTOVER: every test-mode subscription, at the sandbox-to-live
+	//	  switch. Refused (FailedPrecondition) while the server runs in test mode.
+	//
+	// dry_run lists the affected workspaces only. Idempotent: subscriptions
+	// already invalidated are skipped. InvalidArgument for an unspecified scope.
+	InvalidateSubscriptions(context.Context, *InvalidateSubscriptionsRequest) (*InvalidateSubscriptionsResponse, error)
+	// ListProviderProducts lists the organization's recurring products in one
+	// mode, for the mapping picker. Unavailable when that mode's token is not
+	// set.
+	ListProviderProducts(context.Context, *ListProviderProductsRequest) (*ListProviderProductsResponse, error)
+	// ListProductMappings lists every sellable price row with its mapped product
 	// in one mode and the result of checking the pair against the provider.
-	ListVariantMappings(context.Context, *ListVariantMappingsRequest) (*ListVariantMappingsResponse, error)
-	// SetVariantMapping maps a price row to a variant, or unmaps it
-	// (variant_id = ""). FailedPrecondition, with a readable message, when the
-	// variant does not match the price row (amount excluding tax, currency,
-	// interval, mode, the one-month trial on the free-month tier) or already
-	// sells another price. A draft or retired price cannot be mapped. The
-	// reason is kept on the mapping and logged.
-	SetVariantMapping(context.Context, *SetVariantMappingRequest) (*SetVariantMappingResponse, error)
-	// SuggestVariantMappings proposes a variant for every unmapped price row
-	// that exactly one free variant matches. Nothing is saved: the operator
-	// confirms each suggestion with SetVariantMapping.
-	SuggestVariantMappings(context.Context, *SuggestVariantMappingsRequest) (*SuggestVariantMappingsResponse, error)
+	ListProductMappings(context.Context, *ListProductMappingsRequest) (*ListProductMappingsResponse, error)
+	// SetProductMapping maps a price row to a product, or unmaps it
+	// (product_id = ""). FailedPrecondition, with a readable message, when the
+	// product does not match the price row (amount excluding tax in the row's
+	// currency, interval, mode, archived, the one-month trial on the free-month
+	// tier) or already sells another price in that currency. A draft or retired
+	// price cannot be mapped. The reason is kept on the mapping and logged.
+	SetProductMapping(context.Context, *SetProductMappingRequest) (*SetProductMappingResponse, error)
+	// SuggestProductMappings proposes a product for every unmapped price row
+	// that exactly one free product matches. Nothing is saved: the operator
+	// confirms each suggestion with SetProductMapping.
+	SuggestProductMappings(context.Context, *SuggestProductMappingsRequest) (*SuggestProductMappingsResponse, error)
 	// ListPayments lists payments that occurred in [from, to) in one mode,
 	// oldest first, keyset-paginated (occurred_at, then id). A payment whose
-	// amounts change later (a partial refund) is listed again by a sync that
-	// covers its occurred_at, so the caller upserts on id.
+	// amounts change later (a refund, or its USD conversion landing) is listed
+	// again by a sync that covers its occurred_at, so the caller upserts on id.
 	ListPayments(context.Context, *ListPaymentsRequest) (*ListPaymentsResponse, error)
 	mustEmbedUnimplementedBillingAdminServiceServer()
 }
@@ -375,20 +397,20 @@ func (UnimplementedBillingAdminServiceServer) GetFreeTrialTier(context.Context, 
 func (UnimplementedBillingAdminServiceServer) SetFreeTrialTier(context.Context, *SetFreeTrialTierRequest) (*SetFreeTrialTierResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetFreeTrialTier not implemented")
 }
-func (UnimplementedBillingAdminServiceServer) InvalidateTestSubscriptions(context.Context, *InvalidateTestSubscriptionsRequest) (*InvalidateTestSubscriptionsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method InvalidateTestSubscriptions not implemented")
+func (UnimplementedBillingAdminServiceServer) InvalidateSubscriptions(context.Context, *InvalidateSubscriptionsRequest) (*InvalidateSubscriptionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InvalidateSubscriptions not implemented")
 }
-func (UnimplementedBillingAdminServiceServer) ListProviderVariants(context.Context, *ListProviderVariantsRequest) (*ListProviderVariantsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListProviderVariants not implemented")
+func (UnimplementedBillingAdminServiceServer) ListProviderProducts(context.Context, *ListProviderProductsRequest) (*ListProviderProductsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListProviderProducts not implemented")
 }
-func (UnimplementedBillingAdminServiceServer) ListVariantMappings(context.Context, *ListVariantMappingsRequest) (*ListVariantMappingsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListVariantMappings not implemented")
+func (UnimplementedBillingAdminServiceServer) ListProductMappings(context.Context, *ListProductMappingsRequest) (*ListProductMappingsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListProductMappings not implemented")
 }
-func (UnimplementedBillingAdminServiceServer) SetVariantMapping(context.Context, *SetVariantMappingRequest) (*SetVariantMappingResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetVariantMapping not implemented")
+func (UnimplementedBillingAdminServiceServer) SetProductMapping(context.Context, *SetProductMappingRequest) (*SetProductMappingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetProductMapping not implemented")
 }
-func (UnimplementedBillingAdminServiceServer) SuggestVariantMappings(context.Context, *SuggestVariantMappingsRequest) (*SuggestVariantMappingsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SuggestVariantMappings not implemented")
+func (UnimplementedBillingAdminServiceServer) SuggestProductMappings(context.Context, *SuggestProductMappingsRequest) (*SuggestProductMappingsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SuggestProductMappings not implemented")
 }
 func (UnimplementedBillingAdminServiceServer) ListPayments(context.Context, *ListPaymentsRequest) (*ListPaymentsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListPayments not implemented")
@@ -558,92 +580,92 @@ func _BillingAdminService_SetFreeTrialTier_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BillingAdminService_InvalidateTestSubscriptions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(InvalidateTestSubscriptionsRequest)
+func _BillingAdminService_InvalidateSubscriptions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InvalidateSubscriptionsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BillingAdminServiceServer).InvalidateTestSubscriptions(ctx, in)
+		return srv.(BillingAdminServiceServer).InvalidateSubscriptions(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BillingAdminService_InvalidateTestSubscriptions_FullMethodName,
+		FullMethod: BillingAdminService_InvalidateSubscriptions_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BillingAdminServiceServer).InvalidateTestSubscriptions(ctx, req.(*InvalidateTestSubscriptionsRequest))
+		return srv.(BillingAdminServiceServer).InvalidateSubscriptions(ctx, req.(*InvalidateSubscriptionsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BillingAdminService_ListProviderVariants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListProviderVariantsRequest)
+func _BillingAdminService_ListProviderProducts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListProviderProductsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BillingAdminServiceServer).ListProviderVariants(ctx, in)
+		return srv.(BillingAdminServiceServer).ListProviderProducts(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BillingAdminService_ListProviderVariants_FullMethodName,
+		FullMethod: BillingAdminService_ListProviderProducts_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BillingAdminServiceServer).ListProviderVariants(ctx, req.(*ListProviderVariantsRequest))
+		return srv.(BillingAdminServiceServer).ListProviderProducts(ctx, req.(*ListProviderProductsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BillingAdminService_ListVariantMappings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListVariantMappingsRequest)
+func _BillingAdminService_ListProductMappings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListProductMappingsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BillingAdminServiceServer).ListVariantMappings(ctx, in)
+		return srv.(BillingAdminServiceServer).ListProductMappings(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BillingAdminService_ListVariantMappings_FullMethodName,
+		FullMethod: BillingAdminService_ListProductMappings_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BillingAdminServiceServer).ListVariantMappings(ctx, req.(*ListVariantMappingsRequest))
+		return srv.(BillingAdminServiceServer).ListProductMappings(ctx, req.(*ListProductMappingsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BillingAdminService_SetVariantMapping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetVariantMappingRequest)
+func _BillingAdminService_SetProductMapping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetProductMappingRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BillingAdminServiceServer).SetVariantMapping(ctx, in)
+		return srv.(BillingAdminServiceServer).SetProductMapping(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BillingAdminService_SetVariantMapping_FullMethodName,
+		FullMethod: BillingAdminService_SetProductMapping_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BillingAdminServiceServer).SetVariantMapping(ctx, req.(*SetVariantMappingRequest))
+		return srv.(BillingAdminServiceServer).SetProductMapping(ctx, req.(*SetProductMappingRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BillingAdminService_SuggestVariantMappings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SuggestVariantMappingsRequest)
+func _BillingAdminService_SuggestProductMappings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SuggestProductMappingsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BillingAdminServiceServer).SuggestVariantMappings(ctx, in)
+		return srv.(BillingAdminServiceServer).SuggestProductMappings(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BillingAdminService_SuggestVariantMappings_FullMethodName,
+		FullMethod: BillingAdminService_SuggestProductMappings_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BillingAdminServiceServer).SuggestVariantMappings(ctx, req.(*SuggestVariantMappingsRequest))
+		return srv.(BillingAdminServiceServer).SuggestProductMappings(ctx, req.(*SuggestProductMappingsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -706,24 +728,24 @@ var BillingAdminService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BillingAdminService_SetFreeTrialTier_Handler,
 		},
 		{
-			MethodName: "InvalidateTestSubscriptions",
-			Handler:    _BillingAdminService_InvalidateTestSubscriptions_Handler,
+			MethodName: "InvalidateSubscriptions",
+			Handler:    _BillingAdminService_InvalidateSubscriptions_Handler,
 		},
 		{
-			MethodName: "ListProviderVariants",
-			Handler:    _BillingAdminService_ListProviderVariants_Handler,
+			MethodName: "ListProviderProducts",
+			Handler:    _BillingAdminService_ListProviderProducts_Handler,
 		},
 		{
-			MethodName: "ListVariantMappings",
-			Handler:    _BillingAdminService_ListVariantMappings_Handler,
+			MethodName: "ListProductMappings",
+			Handler:    _BillingAdminService_ListProductMappings_Handler,
 		},
 		{
-			MethodName: "SetVariantMapping",
-			Handler:    _BillingAdminService_SetVariantMapping_Handler,
+			MethodName: "SetProductMapping",
+			Handler:    _BillingAdminService_SetProductMapping_Handler,
 		},
 		{
-			MethodName: "SuggestVariantMappings",
-			Handler:    _BillingAdminService_SuggestVariantMappings_Handler,
+			MethodName: "SuggestProductMappings",
+			Handler:    _BillingAdminService_SuggestProductMappings_Handler,
 		},
 		{
 			MethodName: "ListPayments",
