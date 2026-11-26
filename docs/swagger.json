@@ -15227,21 +15227,35 @@
                 }
             }
         },
-        "/api/webhooks/lemonsqueezy": {
+        "/api/webhooks/polar": {
             "post": {
-                "description": "Signature-verified (X-Signature, HMAC-SHA256 of the raw body) ingest of subscription and payment events. Redeliveries are recognised by body hash; snapshots older than the mirror are ignored; events from the other store mode are acknowledged and ignored. A failure answers 500 so the provider retries.",
+                "description": "Standard Webhooks ingest of subscription, order and refund events: webhook-signature is the HMAC-SHA256 of \"\u003cwebhook-id\u003e.\u003cwebhook-timestamp\u003e.\u003cbody\u003e\", and a timestamp more than 5 minutes off is refused. Redeliveries are recognised by webhook-id; snapshots older than the mirror are ignored. A failure answers 500 so the provider retries, for at most an hour per delivery; after that it is acknowledged and left to the reconcile sweep.",
                 "consumes": [
                     "application/json"
                 ],
                 "tags": [
                     "billing"
                 ],
-                "summary": "Lemon Squeezy webhook",
+                "summary": "Polar webhook",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "HMAC-SHA256 hex of the body",
-                        "name": "X-Signature",
+                        "description": "Event id, the same on every redelivery",
+                        "name": "webhook-id",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Unix seconds",
+                        "name": "webhook-timestamp",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "One or more space-separated v1,\u003cbase64 signature\u003e",
+                        "name": "webhook-signature",
                         "in": "header",
                         "required": true
                     }
@@ -15354,7 +15368,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "A complimentary workspace (a tester's, complimentary=true on /api/me/entitlements) without a live subscription switches at once: 200 with the entitlements read, no checkout, no charge; it may pick any purchasable tier, and this works while billing is off. Otherwise, without a live subscription: 202 with a hosted checkout to redirect to (checkout.trial says whether the free month applies). With one: 200 with the entitlements read after the change. An upgrade lands now with proration; a downgrade is scheduled for the renewal (scheduled_change); choosing the current plan cancels a pending downgrade; a tier change during the free month ends it and charges now. tier_id is a tier or tier version id; price_id defaults to the monthly price.",
+                "description": "A complimentary workspace (a tester's, complimentary=true on /api/me/entitlements) without a live subscription switches at once: 200 with the entitlements read, no checkout, no charge; it may pick any purchasable tier, and this works while billing is off. Otherwise, without a live subscription: 202 with a hosted checkout to redirect to (checkout.trial says whether the free month applies). With one: 200 with the entitlements read after the change. An upgrade lands now with proration; a downgrade is scheduled for the renewal (scheduled_change); choosing the current plan cancels a pending downgrade; a tier change during the free month ends it and charges now. 409 payment_failed: a change that charges now was declined or needs the owner to authenticate the payment (in the billing portal); nothing changed. tier_id is a tier or tier version id; price_id defaults to the monthly price.",
                 "consumes": [
                     "application/json"
                 ],
