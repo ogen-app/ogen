@@ -23,17 +23,21 @@ func TestPostRepository_Query(t *testing.T) {
 		id, campaign, platform, postType string
 		status                           models.PostStatus
 		scheduled                        *time.Time
+		title, content                   string
+		segments                         models.ThreadSegments
 	}{
-		{"p1", "c1", "linkedin", "text", models.PostStatusDraft, nil},
-		{"p2", "c1", "linkedin", "image", models.PostStatusScheduled, new(t0.Add(24 * time.Hour))},
-		{"p3", "c1", "x", "thread", models.PostStatusFailed, new(t0.Add(72 * time.Hour))},
-		{"p4", "c2", "x", "text", models.PostStatusPublished, new(t0.Add(48 * time.Hour))},
-		{"p5", "c1", "", "", models.PostStatusPlanned, nil},
+		{"p1", "c1", "linkedin", "text", models.PostStatusDraft, nil, "Our PRICING page", "Body", nil},
+		{"p2", "c1", "linkedin", "image", models.PostStatusScheduled, new(t0.Add(24 * time.Hour)), "", "New pricing tiers", nil},
+		{"p3", "c1", "x", "thread", models.PostStatusFailed, new(t0.Add(72 * time.Hour)), "", "Body",
+			models.ThreadSegments{{Content: "Intro"}, {Content: "Then the pricing"}}},
+		{"p4", "c2", "x", "text", models.PostStatusPublished, new(t0.Add(48 * time.Hour)), "", "100% off_season", nil},
+		{"p5", "c1", "", "", models.PostStatusPlanned, nil, "", "100 percent offseason", nil},
 	}
 	for i, s := range seed {
 		post := &models.Post{
 			ID: s.id, CampaignID: s.campaign, PlatformID: s.platform, PlatformPostType: s.postType,
-			Content: "Body", MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
+			Title: s.title, Content: s.content, ThreadSegments: s.segments,
+			MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
 			Status: s.status, ScheduledAt: s.scheduled, CTAType: models.CTATypeNone, CreatedBy: "user-1",
 			CreatedAt: t0.Add(time.Duration(i) * time.Minute), UpdatedAt: t0,
 		}
@@ -58,6 +62,13 @@ func TestPostRepository_Query(t *testing.T) {
 		"from a day onward": {models.PostQuery{ScheduledAfter: new(t0.Add(48 * time.Hour))}, []string{"p3", "p4"}},
 		"these ids":         {models.PostQuery{IDs: []string{"p2", "p3", "gone"}, Scheduled: models.PostScheduledYes, ScopeCampaign: "c1"}, []string{"p2", "p3"}},
 		"no ids":            {models.PostQuery{IDs: []string{}}, nil},
+		// Title, content and thread segments, ignoring case.
+		"text":            {models.PostQuery{Text: "pricing"}, []string{"p1", "p2", "p3"}},
+		"text and status": {models.PostQuery{Text: "Pricing", Status: models.AssetValueFilter{Any: []string{"failed"}}}, []string{"p3"}},
+		// A segment's JSON key is not its text.
+		"text not a key": {models.PostQuery{Text: "content"}, nil},
+		// % and _ match themselves.
+		"text wildcards": {models.PostQuery{Text: "0% off_"}, []string{"p4"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

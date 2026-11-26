@@ -30,6 +30,9 @@ type PostQuery struct {
 	// leaves out the posts without a date.
 	ScheduledAfter  *time.Time
 	ScheduledBefore *time.Time
+	// Text, when set, keeps the posts whose title, content or a thread
+	// segment contains it, ignoring case.
+	Text string
 	// Location is the time zone a YYYY-MM-DD bound is read in.
 	Location *time.Location
 	// ScopeCampaign confines the read to one campaign's posts: the campaign

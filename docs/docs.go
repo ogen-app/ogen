@@ -3713,6 +3713,12 @@ const docTemplate = `{
                         "description": "IANA time zone of YYYY-MM-DD bounds (default UTC)",
                         "name": "tz",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Text the title, content or a thread segment contains, ignoring case; at most 200 characters",
+                        "name": "text",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -11236,6 +11242,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "IANA time zone of YYYY-MM-DD bounds (default UTC)",
                         "name": "tz",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Text the title, content or a thread segment contains, ignoring case; at most 200 characters",
+                        "name": "text",
                         "in": "query"
                     }
                 ],

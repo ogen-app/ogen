@@ -1050,6 +1050,7 @@ func (h *PostsHandler) validateForCreate(c *fiber.Ctx, post *models.Post) (done 
 // @Param        scheduled_after   query     string  false  "RFC 3339 or YYYY-MM-DD, inclusive"
 // @Param        scheduled_before  query     string  false  "RFC 3339 or YYYY-MM-DD, exclusive"
 // @Param        tz                query     string  false  "IANA time zone of YYYY-MM-DD bounds (default UTC)"
+// @Param        text              query     string  false  "Text the title, content or a thread segment contains, ignoring case; at most 200 characters"
 // @Success      200  {array}   models.Post
 // @Failure      400  {object}  map[string]string  "code: invalid_filter"
 // @Failure      401  {object}  map[string]string
@@ -1086,6 +1087,7 @@ func (h *PostsHandler) List(c *fiber.Ctx) error {
 // @Param        scheduled_after   query     string  false  "RFC 3339 or YYYY-MM-DD, inclusive"
 // @Param        scheduled_before  query     string  false  "RFC 3339 or YYYY-MM-DD, exclusive"
 // @Param        tz                query     string  false  "IANA time zone of YYYY-MM-DD bounds (default UTC)"
+// @Param        text              query     string  false  "Text the title, content or a thread segment contains, ignoring case; at most 200 characters"
 // @Success      200          {array}   models.Post
 // @Failure      400          {object}  map[string]string  "code: invalid_filter"
 // @Failure      401          {object}  map[string]string

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,8 @@ import (
 
 func TestParseQuery(t *testing.T) {
 	v, _ := url.ParseQuery("status=draft,failed&status_not=published&platform=linkedin&post_type_not=thread" +
-		"&campaign_id=c1&scheduled=yes&scheduled_after=2026-11-01&scheduled_before=2026-11-08T12:00:00Z&tz=Europe/Kyiv&unknown=1")
+		"&campaign_id=c1&scheduled=yes&scheduled_after=2026-11-01&scheduled_before=2026-11-08T12:00:00Z&tz=Europe/Kyiv&unknown=1" +
+		"&text=%20pricing%20")
 	q, err := ParseQuery(v)
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +23,7 @@ func TestParseQuery(t *testing.T) {
 	kyiv, _ := time.LoadLocation("Europe/Kyiv")
 	if !slices.Equal(q.Status.Any, []string{"draft", "failed"}) || !slices.Equal(q.Status.Not, []string{"published"}) ||
 		!slices.Equal(q.Platform.Any, []string{"linkedin"}) || !slices.Equal(q.PostType.Not, []string{"thread"}) ||
-		!slices.Equal(q.Campaign.Any, []string{"c1"}) || q.Scheduled != models.PostScheduledYes {
+		!slices.Equal(q.Campaign.Any, []string{"c1"}) || q.Scheduled != models.PostScheduledYes || q.Text != "pricing" {
 		t.Fatalf("filters = %+v", q)
 	}
 	if !q.ScheduledAfter.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, kyiv)) ||
@@ -30,7 +32,7 @@ func TestParseQuery(t *testing.T) {
 	}
 
 	empty, err := ParseQuery(url.Values{})
-	if err != nil || empty.Status.Active() || empty.Scheduled != "" || empty.ScheduledAfter != nil || empty.Location != time.UTC {
+	if err != nil || empty.Status.Active() || empty.Scheduled != "" || empty.ScheduledAfter != nil || empty.Text != "" || empty.Location != time.UTC {
 		t.Fatalf("empty = %+v, %v", empty, err)
 	}
 }
@@ -43,6 +45,7 @@ func TestParseQuery_Rejects(t *testing.T) {
 		{"scheduled_after=yesterday", "scheduled_after"},
 		{"tz=Mars/Base", "tz"},
 		{"scheduled=no&scheduled_before=2026-11-01", "scheduled"},
+		{"text=" + strings.Repeat("é", maxTextLen+1), "text"},
 	} {
 		raw, param := tc.raw, tc.param
 		v, _ := url.ParseQuery(raw)
